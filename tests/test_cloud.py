@@ -8,32 +8,23 @@ from http.server import HTTPServer
 from unittest.mock import patch
 
 from api.webhook import handler
-from cloud_store import save_update
-
-
-class FakeConnection:
-    def __init__(self):
-        self.statements = []
-
-    def execute(self, sql, params):
-        self.statements.append((sql, params))
+from cloud_store import allowed_chat_ids, save_update
 
 
 class CloudStorageTests(unittest.TestCase):
-    def test_saves_only_allowlisted_group_messages(self):
-        db = FakeConnection()
-        message = {
-            "message_id": 12,
-            "date": 1780000000,
-            "chat": {"id": -100123, "type": "supergroup", "title": "Ops"},
-            "from": {"id": 7, "first_name": "Alex"},
-            "text": "New update",
-        }
-        self.assertFalse(save_update(db, {"message": message}, {-100456}))
-        self.assertEqual(db.statements, [])
-        self.assertTrue(save_update(db, {"message": message}, {-100123}))
-        self.assertEqual(len(db.statements), 2)
-        self.assertEqual(db.statements[1][1][5], "Alex")
+    def test_passes_allowlist_to_supabase_rpc(self):
+        update = {"update_id": 1, "message": {"message_id": 12}}
+        with patch("cloud_store.request", return_value=True) as request:
+            self.assertTrue(save_update(update, {-100456, -100123}))
+            request.assert_called_once_with(
+                "rpc/insights_ingest_update",
+                {"p_update": update, "p_allowed_ids": [-100456, -100123]},
+            )
+
+    def test_rejects_bad_allowlist_configuration(self):
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "invalid"}):
+            with self.assertRaises(RuntimeError):
+                allowed_chat_ids()
 
 
 class WebhookTests(unittest.TestCase):
@@ -59,19 +50,12 @@ class WebhookTests(unittest.TestCase):
                 return error.code
 
     def test_rejects_wrong_secret_before_storage(self):
-        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123"}), patch("api.webhook.connect") as connect:
+        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123"}), patch("api.webhook.save_update") as save:
             self.assertEqual(self.post("wrong"), 401)
-            connect.assert_not_called()
+            save.assert_not_called()
 
     def test_accepts_valid_secret(self):
-        class Context:
-            def __enter__(self):
-                return object()
-
-            def __exit__(self, *_):
-                return False
-
-        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123"}), patch("api.webhook.connect", return_value=Context()), patch("api.webhook.ensure_schema"), patch("api.webhook.save_update") as save:
+        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123"}), patch("api.webhook.save_update") as save:
             self.assertEqual(self.post("correct"), 200)
             save.assert_called_once()
 

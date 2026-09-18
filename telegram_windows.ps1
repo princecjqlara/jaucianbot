@@ -18,16 +18,7 @@ try {
     $env:TELEGRAM_BOT_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
     if ($Command -eq 'set-webhook') {
         if (-not $Url) { throw 'Provide the production URL ending in /api/webhook.' }
-        $secureSecret = Read-Host 'Paste TELEGRAM_WEBHOOK_SECRET from Vercel (input is hidden)' -AsSecureString
-        $secretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSecret)
-        try {
-            $env:TELEGRAM_WEBHOOK_SECRET = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretPointer)
-            & py (Join-Path $PSScriptRoot 'manage_webhook.py') set $Url
-        }
-        finally {
-            Remove-Item Env:TELEGRAM_WEBHOOK_SECRET -ErrorAction SilentlyContinue
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretPointer)
-        }
+        & py (Join-Path $PSScriptRoot 'manage_webhook.py') set $Url
     }
     elseif ($Command -eq 'webhook-info') {
         & py (Join-Path $PSScriptRoot 'manage_webhook.py') info

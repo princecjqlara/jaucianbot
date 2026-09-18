@@ -2,6 +2,7 @@
 .insights-api-key.dpapi
 .insights-base-url
 .env*
+!.env.example
 .venv/
 .vercel/
 veo messages files/

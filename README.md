@@ -1,26 +1,28 @@
 # Telegram group insights
 
-This bot archives new messages from Telegram groups you approve. Telegram Desktop HTML exports can also be imported for earlier messages. Ask the assistant in this workspace for summaries, decisions, issues, trends, or a search; it can query the local archive. Message text and captions are stored in `telegram_insights.sqlite3` on this machine. Attachments are recorded by type but are not downloaded or transcribed.
+This bot archives new messages from Telegram groups you approve. Telegram Desktop HTML exports can also be imported for earlier messages. Ask the assistant in this workspace for summaries, decisions, issues, trends, or a search. The local archive is `telegram_insights.sqlite3`; the cloud archive uses Supabase. Attachments are recorded by type but are not downloaded or transcribed.
 
 ## Deploy on Vercel
 
-Vercel receives Telegram updates at `/api/webhook`. A hosted Postgres database stores the messages; Vercel's function filesystem is not used for persistence. The read-only `/api/status` and `/api/messages` endpoints require an API key. The local SQLite archive and exported chat files are excluded from Git.
+Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase through its server-side Data API. The read-only `/api/status` and `/api/messages` endpoints require an API key. The local `.env.local`, SQLite archive, and exported chat files are excluded from Git. `.env.example` lists the variable names without values.
 
-1. Import this GitHub repository into Vercel. Add a Postgres database through Vercel Marketplace (for example Neon). Ensure it supplies `DATABASE_URL` or `POSTGRES_URL` to the Production environment.
-2. Add these Production environment variables, then redeploy:
+1. Open this Supabase project's SQL Editor and run [`supabase/schema.sql`](supabase/schema.sql). It creates the archive tables and functions, enables row-level security, and grants access only to the server-side service role. Run `py verify_supabase.py` afterward; it should report that the archive is ready.
+2. Import this GitHub repository into Vercel. Add these **Production** environment variables from the local `.env.local`, then deploy or redeploy:
 
    | Name | Value |
    | --- | --- |
-   | `TELEGRAM_WEBHOOK_SECRET` | A random URL-safe secret, at least 32 characters. |
-   | `INSIGHTS_API_KEY` | A different random URL-safe secret, at least 32 characters. |
-   | `ALLOWED_CHAT_IDS` | Comma-separated numeric IDs of groups to archive. Get them with `py telegram_insights.py groups`. |
+   | `SUPABASE_URL` | This project's HTTPS Supabase URL. |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, for server-side use only. |
+   | `ALLOWED_CHAT_IDS` | Comma-separated numeric IDs of the approved groups. |
+   | `TELEGRAM_WEBHOOK_SECRET` | Random secret generated in `.env.local`. |
+   | `INSIGHTS_API_KEY` | Separate random secret generated in `.env.local`. |
 
-   Generate a secret locally with `py -c "import secrets; print(secrets.token_urlsafe(32))"`. Store each value in Vercel, never in Git. The bot token is only needed locally to register the webhook; do not put it in the repository.
-3. Install the Python dependency locally with `py -m pip install -r requirements.txt`. Run `./migrate_to_vercel.ps1` and paste the Postgres connection string at the hidden prompt. This copies the local archive, including imported history, without uploading the export files to Git. Rerunning is safe.
-4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. Paste the same webhook secret at the hidden prompt. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
-5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN` and paste `INSIGHTS_API_KEY` at the hidden prompt. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
+   The `SUPABASE_ANON_KEY` is not needed by this server. The bot token is only needed locally to register the webhook. Never put the service role key or bot token in Git or a browser-facing variable.
+3. Run `./migrate_to_supabase.ps1` in this workspace. It copies the local archive, including imported history, to Supabase. Rerunning skips duplicates.
+4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. It reads the same webhook secret from `.env.local`. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
+5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN`. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
 
-Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and database URL private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
+Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and service role key private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
 
 The webhook handles new messages as they arrive. Cron is not needed for message collection. Vercel Hobby cron runs at most once daily, so scheduled reports or checks can be added later without making ingestion depend on cron. See [Vercel's cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) and [Telegram's webhook documentation](https://core.telegram.org/bots/api#setwebhook).
 

@@ -8,7 +8,7 @@ import os
 from http.server import BaseHTTPRequestHandler
 
 from cloud_http import send_json
-from cloud_store import allowed_chat_ids, connect, ensure_schema, save_update
+from cloud_store import allowed_chat_ids, save_update
 
 
 MAX_BODY_BYTES = 1_000_000
@@ -46,9 +46,7 @@ class handler(BaseHTTPRequestHandler):
             send_json(self, 503, {"ok": False, "error": "invalid configuration"})
             return
         try:
-            with connect() as db:
-                ensure_schema(db)
-                save_update(db, update, allowed)
+            save_update(update, allowed)
         except Exception as error:
             print(f"Webhook storage failed: {type(error).__name__}")
             send_json(self, 500, {"ok": False})

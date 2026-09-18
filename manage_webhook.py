@@ -7,10 +7,12 @@ import json
 import os
 from urllib.parse import urlsplit
 
+from local_env import load_local_env
 from telegram_insights import api_request, require_token
 
 
 def main() -> None:
+    load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("info")

@@ -6,7 +6,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $BaseUrl = $BaseUrl.TrimEnd('/')
 if (-not $BaseUrl.StartsWith('https://')) { throw 'Use the production HTTPS URL for the Vercel deployment.' }
-$secureKey = Read-Host 'Paste INSIGHTS_API_KEY from Vercel (input is hidden)' -AsSecureString
+$envPath = Join-Path $PSScriptRoot '.env.local'
+$keyLine = Get-Content -LiteralPath $envPath -ErrorAction SilentlyContinue | Where-Object { $_.StartsWith('INSIGHTS_API_KEY=') } | Select-Object -First 1
+if ($keyLine) {
+    $secureKey = ConvertTo-SecureString $keyLine.Substring('INSIGHTS_API_KEY='.Length) -AsPlainText -Force
+}
+else {
+    $secureKey = Read-Host 'Paste INSIGHTS_API_KEY from Vercel (input is hidden)' -AsSecureString
+}
 if ($secureKey.Length -eq 0) { throw 'No API key entered.' }
 ConvertFrom-SecureString $secureKey | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.insights-api-key.dpapi') -NoNewline
 $BaseUrl | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.insights-base-url') -NoNewline
