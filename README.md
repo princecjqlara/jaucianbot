@@ -11,17 +11,19 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
 
    | Name | Value |
    | --- | --- |
+   | `TELEGRAM_BOT_TOKEN` | Bot token used by the outbound scheduler. |
    | `SUPABASE_URL` | This project's HTTPS Supabase URL. |
    | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, for server-side use only. |
    | `ALLOWED_CHAT_IDS` | Comma-separated numeric IDs of the approved groups. |
    | `TELEGRAM_WEBHOOK_SECRET` | Random secret generated in `.env.local`. |
    | `INSIGHTS_API_KEY` | Separate random secret generated in `.env.local`. |
 
-   The `SUPABASE_ANON_KEY` is not needed by this server. The bot token is only needed locally to register the webhook. Never put the service role key or bot token in Git or a browser-facing variable.
+   The `SUPABASE_ANON_KEY` is not needed by this server. Never put the service role key or bot token in Git or a browser-facing variable.
 3. Run `./migrate_to_supabase.ps1` in this workspace. It copies the local archive, including imported history, to Supabase. Rerunning skips duplicates.
 4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. It reads the same webhook secret from `.env.local`. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
 5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN`. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
 6. In the cron-job.org Console, create a GET job for `https://YOUR-PRODUCTION-DOMAIN/api/health` every 15 minutes. The endpoint checks Vercel and Supabase and returns only `{"ok": true}`. Dashboard setup does not need an API key or request headers. The optional `configure_cronjob.py` script uses a cron-job.org API key only when creating the job through its REST API.
+7. Create a second GET job for `https://YOUR-PRODUCTION-DOMAIN/api/cron/dispatch` every minute. It atomically claims due scheduled actions and sends them. It accepts no user content, needs no cron-job.org API key or headers, and returns only delivery counts.
 
 Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and service role key private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
 
@@ -60,3 +62,16 @@ py telegram_insights.py search "deadline" --days 30 --limit 100
 ```
 
 Outputs are JSON. The local archive remains available in this folder. Once Vercel is configured, use `./remote_windows.ps1 messages --group CHAT_ID --days 7 --limit 200` for current cloud data.
+
+## Schedule announcements and polls
+
+Schedule controls use the private `INSIGHTS_API_KEY` stored for this Windows account. The public cron endpoint can only dispatch actions that were already created through the authenticated schedule endpoint, and it only sends to approved groups.
+
+```powershell
+./remote_windows.ps1 schedule-message --group CHAT_ID --at '2026-09-20T09:30:00+08:00' --text 'Team update'
+./remote_windows.ps1 schedule-poll --group CHAT_ID --at '2026-09-20T10:00:00+08:00' --question 'Lunch?' --option 'Pizza' --option 'Rice'
+./remote_windows.ps1 schedules --status pending
+./remote_windows.ps1 cancel-schedule SCHEDULE_ID
+```
+
+Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notifications, or `--thread TOPIC_ID` for a forum topic. Polls also accept `--multiple` and `--public`. Failed deliveries retry after five minutes up to five attempts. A cron run sends up to ten due actions, so the one-minute job catches newly due work promptly.

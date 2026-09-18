@@ -77,6 +77,88 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         save.assert_called_once_with({"update_id": 1}, {-100123})
 
+    def test_schedules_require_authorization(self):
+        with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct"}):
+            status, payload = call_app("/api/schedules")
+        self.assertEqual(status, 401)
+        self.assertFalse(payload["ok"])
+
+    def test_creates_scheduled_message_for_approved_group(self):
+        request_body = json.dumps({
+            "chat_id": -100123,
+            "action_type": "message",
+            "scheduled_for": "2026-09-20T09:30:00+08:00",
+            "payload": {"text": "Team update", "disable_notification": True},
+        }).encode()
+        created = {"id": 7, "chat_id": -100123, "status": "pending"}
+        with patch.dict(
+            os.environ,
+            {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-100123"},
+        ), patch("app.create_scheduled_action", return_value=created) as create:
+            status, payload = call_app(
+                "/api/schedules",
+                method="POST",
+                headers={"Authorization": "Bearer correct"},
+                body=request_body,
+            )
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["schedule"], created)
+        create.assert_called_once()
+        called = create.call_args.kwargs
+        self.assertEqual(called["chat_id"], -100123)
+        self.assertEqual(called["action_type"], "message")
+        self.assertEqual(called["payload"]["text"], "Team update")
+        self.assertEqual(called["scheduled_for"].isoformat(), "2026-09-20T01:30:00+00:00")
+
+    def test_rejects_schedule_for_unapproved_group(self):
+        request_body = json.dumps({
+            "chat_id": -100999,
+            "action_type": "message",
+            "scheduled_for": "2026-09-20T09:30:00+08:00",
+            "payload": {"text": "Team update"},
+        }).encode()
+        with patch.dict(
+            os.environ,
+            {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-100123"},
+        ), patch("app.create_scheduled_action") as create:
+            status, _ = call_app(
+                "/api/schedules",
+                method="POST",
+                headers={"Authorization": "Bearer correct"},
+                body=request_body,
+            )
+        self.assertEqual(status, 403)
+        create.assert_not_called()
+
+    def test_dispatches_due_action_and_archives_sent_message(self):
+        action = {
+            "id": 7,
+            "chat_id": -100123,
+            "action_type": "message",
+            "payload": {"text": "Team update"},
+        }
+        sent_message = {"message_id": 51, "chat": {"id": -100123, "type": "supergroup"}, "date": 1}
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.claim_scheduled_actions", return_value=[action]
+        ) as claim, patch("app.send_scheduled_action", return_value=sent_message) as send, patch(
+            "app.finish_scheduled_action", return_value=True
+        ) as finish, patch("app.save_update") as save:
+            status, payload = call_app("/api/cron/dispatch")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"ok": True, "processed": 1, "sent": 1, "failed": 0})
+        claim.assert_called_once_with({-100123}, limit=10)
+        send.assert_called_once_with(action)
+        finish.assert_called_once_with(7, success=True, telegram_message_id=51)
+        save.assert_called_once_with({"message": sent_message}, {-100123})
+
+    def test_dispatch_with_no_due_actions_is_safe(self):
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.claim_scheduled_actions", return_value=[]
+        ):
+            status, payload = call_app("/api/cron/dispatch")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["processed"], 0)
+
     def test_unknown_route_returns_not_found(self):
         status, _ = call_app("/missing")
         self.assertEqual(status, 404)

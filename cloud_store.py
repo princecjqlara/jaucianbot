@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -29,7 +30,13 @@ def credentials() -> tuple[str, str]:
     return url, key
 
 
-def request(path: str, payload: object | None = None, *, prefer: str | None = None):
+def request(
+    path: str,
+    payload: object | None = None,
+    *,
+    prefer: str | None = None,
+    method: str | None = None,
+):
     url, key = credentials()
     headers = {"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"}
     body = None
@@ -39,7 +46,12 @@ def request(path: str, payload: object | None = None, *, prefer: str | None = No
     if prefer:
         headers["Prefer"] = prefer
     target = url + "/rest/v1/" + path
-    http_request = urllib.request.Request(target, data=body, headers=headers, method="POST" if body is not None else "GET")
+    http_request = urllib.request.Request(
+        target,
+        data=body,
+        headers=headers,
+        method=method or ("POST" if body is not None else "GET"),
+    )
     try:
         with urllib.request.urlopen(http_request, timeout=30) as response:
             content = response.read()
@@ -85,3 +97,88 @@ def upsert_chats(chats: list[dict]) -> None:
 def import_messages(messages: list[dict]) -> None:
     if messages:
         request("messages?on_conflict=chat_id,message_id", messages, prefer="resolution=ignore-duplicates,return=minimal")
+
+
+def create_scheduled_action(
+    *,
+    chat_id: int,
+    action_type: str,
+    payload: dict,
+    scheduled_for: dt.datetime,
+    repeat_interval_minutes: int | None,
+) -> dict:
+    rows = request(
+        "scheduled_actions",
+        {
+            "chat_id": chat_id,
+            "action_type": action_type,
+            "payload": payload,
+            "scheduled_for": scheduled_for.isoformat(),
+            "repeat_interval_minutes": repeat_interval_minutes,
+        },
+        prefer="return=representation",
+    ) or []
+    if not rows:
+        raise SupabaseError("Supabase did not return the created schedule")
+    return rows[0]
+
+
+def list_scheduled_actions(
+    allowed: set[int], *, status: str | None = None, limit: int = 100
+) -> list[dict]:
+    if not allowed:
+        return []
+    filters = [
+        "select=id,chat_id,action_type,payload,scheduled_for,repeat_interval_minutes,status,attempts,telegram_message_id,last_error,created_at,updated_at,sent_at",
+        "chat_id=in.(" + ",".join(str(value) for value in sorted(allowed)) + ")",
+        "order=scheduled_for.asc,id.asc",
+        "limit=" + str(limit),
+    ]
+    if status:
+        filters.append("status=eq." + urllib.parse.quote(status, safe=""))
+    return request("scheduled_actions?" + "&".join(filters)) or []
+
+
+def cancel_scheduled_action(allowed: set[int], schedule_id: int) -> dict | None:
+    if not allowed:
+        return None
+    filters = [
+        "id=eq." + str(schedule_id),
+        "chat_id=in.(" + ",".join(str(value) for value in sorted(allowed)) + ")",
+        "status=in.(pending,failed)",
+    ]
+    rows = request(
+        "scheduled_actions?" + "&".join(filters),
+        {"status": "cancelled", "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        method="PATCH",
+        prefer="return=representation",
+    ) or []
+    return rows[0] if rows else None
+
+
+def claim_scheduled_actions(allowed: set[int], *, limit: int = 10) -> list[dict]:
+    if not allowed:
+        return []
+    return request(
+        "rpc/insights_claim_scheduled_actions",
+        {"p_allowed_ids": sorted(allowed), "p_limit": limit},
+    ) or []
+
+
+def finish_scheduled_action(
+    schedule_id: int,
+    *,
+    success: bool,
+    telegram_message_id: int | None = None,
+    error: str | None = None,
+) -> bool:
+    result = request(
+        "rpc/insights_finish_scheduled_action",
+        {
+            "p_id": schedule_id,
+            "p_success": success,
+            "p_telegram_message_id": telegram_message_id,
+            "p_error": error,
+        },
+    )
+    return bool(result)
