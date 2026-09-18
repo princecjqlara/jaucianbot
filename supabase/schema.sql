@@ -78,7 +78,7 @@ begin
         return false;
     end if;
     v_chat_id := (v_chat->>'id')::bigint;
-    if v_chat_id is null or not (v_chat_id = any(p_allowed_ids)) then
+    if v_chat_id is null then
         return false;
     end if;
 
@@ -95,6 +95,10 @@ begin
         chat_type = excluded.chat_type,
         membership = coalesce(excluded.membership, public.chats.membership),
         last_seen_utc = excluded.last_seen_utc;
+
+    if not (v_chat_id = any(p_allowed_ids)) then
+        return false;
+    end if;
 
     if v_message is null then
         return true;

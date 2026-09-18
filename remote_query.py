@@ -5,14 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    commands.add_parser("groups")
     messages = commands.add_parser("messages")
     messages.add_argument("--group", type=int)
     messages.add_argument("--days", type=float, default=7)
@@ -48,7 +52,9 @@ def main() -> None:
     path = "/api/status"
     method = "GET"
     body = None
-    if args.command == "messages":
+    if args.command == "groups":
+        path = "/api/groups"
+    elif args.command == "messages":
         params = {"days": args.days, "limit": args.limit}
         if args.group is not None:
             params["group"] = args.group

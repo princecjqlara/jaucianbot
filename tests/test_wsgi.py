@@ -61,6 +61,19 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["groups"], [{"chat_id": -100123}])
 
+    def test_groups_show_discovered_and_approved_state(self):
+        discovered = [{"chat_id": -100999, "title": "Daily Reports", "approved": False}]
+        with patch.dict(
+            os.environ,
+            {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-100123"},
+        ), patch("app.known_chats", return_value=discovered) as query:
+            status, payload = call_app(
+                "/api/groups", headers={"Authorization": "Bearer correct"}
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["groups"], discovered)
+        query.assert_called_once_with({-100123})
+
     def test_webhook_stores_valid_update(self):
         body = json.dumps({"update_id": 1}).encode()
         with patch.dict(

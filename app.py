@@ -18,6 +18,7 @@ from cloud_store import (
     claim_scheduled_actions,
     create_scheduled_action,
     finish_scheduled_action,
+    known_chats,
     list_scheduled_actions,
     save_update,
 )
@@ -63,6 +64,17 @@ def health_route(environ, start_response):
         print(f"Health query failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True})
+
+
+def groups_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        groups = known_chats(allowed_chat_ids())
+    except Exception as error:
+        print(f"Group discovery query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, "groups": groups})
 
 
 def messages_route(environ, start_response):
@@ -290,12 +302,14 @@ def app(environ, start_response):
         return health_route(environ, start_response)
     if path == "/api/messages" and method == "GET":
         return messages_route(environ, start_response)
+    if path == "/api/groups" and method == "GET":
+        return groups_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/groups", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

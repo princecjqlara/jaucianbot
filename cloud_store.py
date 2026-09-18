@@ -76,6 +76,15 @@ def archive_status(allowed: set[int]) -> list[dict]:
     return request("rpc/insights_status", {"p_allowed_ids": sorted(allowed)}) or []
 
 
+def known_chats(allowed: set[int]) -> list[dict]:
+    rows = request(
+        "chats?select=chat_id,title,chat_type,membership,last_seen_utc&order=last_seen_utc.desc"
+    ) or []
+    for row in rows:
+        row["approved"] = row.get("chat_id") in allowed
+    return rows
+
+
 def archive_messages(
     allowed: set[int], *, since: dt.datetime, limit: int,
     group: int | None = None, query: str | None = None,
