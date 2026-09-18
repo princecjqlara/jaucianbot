@@ -2,8 +2,7 @@ alter table public.scheduled_actions
     add column if not exists dedupe_key text;
 
 create unique index if not exists scheduled_actions_dedupe
-    on public.scheduled_actions(dedupe_key)
-    where dedupe_key is not null;
+    on public.scheduled_actions(dedupe_key);
 
 create table if not exists public.daily_polls (
     poll_id text primary key,
