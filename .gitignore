@@ -1,0 +1,11 @@
+.telegram-token.dpapi
+.insights-api-key.dpapi
+.insights-base-url
+.env*
+.venv/
+.vercel/
+veo messages files/
+telegram_insights.sqlite3
+telegram_insights.sqlite3-*
+*.log
+__pycache__/
