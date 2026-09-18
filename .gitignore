@@ -12,3 +12,4 @@ telegram_insights.sqlite3-*
 __pycache__/
 
 .vercel
+.env*.local
