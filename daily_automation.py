@@ -187,42 +187,53 @@ def build_group_report(
     salary_total = sum(salaries.values(), Decimal("0"))
     profit = gross - salary_total
 
-    date_label = work_date.strftime("%B %d, %Y")
+    date_label = work_date.strftime("%A, %B %d, %Y")
+    dd_status = "✅" if has_poll and dd_total >= quota else ("❌" if has_poll else "—")
+    cd_status = "✅" if has_poll and cd_total >= quota else ("❌" if has_poll else "—")
     lines = [
-        f"📊 {'HISTORICAL SAMPLE — ' if historical else 'DAILY REPORT — '}{date_label}",
-        f"🏢 {config['name']}",
+        f"📊 {'HISTORICAL SAMPLE' if historical else 'DAILY REPORT'}",
+        f"📅 {date_label}",
+        f"🏢 {config['name'].upper()}",
         "",
+        "🎯 QUOTA & RESULT",
     ]
     if has_poll:
         lines.extend([
-            f"👥 Active workers: {workers}",
-            f"🎯 Quota: {quota} DD and {quota} CD (ceil({workers} × 0.8))",
+            f"Active workers: {workers}",
+            f"Formula: ceil({workers} × 0.8) = {quota}",
+            f"Target: {quota} DD • {quota} CD",
         ])
     else:
-        lines.extend(["👥 Active workers: no tracked poll", "🎯 Quota: unavailable for this setup day"])
+        lines.extend(["Active workers: no tracked poll", "Target: unavailable for this setup day"])
     lines.extend([
-        f"✅ Results: {dd_total} DD | {cd_total} CD",
-        f"💼 Commission rate: {int(rate * 100)}%",
+        f"Actual: {dd_total} DD {dd_status} • {cd_total} CD {cd_status}",
+        f"Commission: {int(rate * 100)}%",
         "",
-        "PAGE TOTALS",
+        "📄 PAGE TOTALS",
     ])
     for page, values in sorted(page_stats.items()):
-        lines.append(f"• {page}: {values['dd']} DD | {values['cd']} CD | {money(values['gross'])}")
-    lines.extend(["", "EMPLOYEE SALES & COMMISSION"])
+        lines.extend([
+            page.upper(),
+            f"  {values['dd']} DD • {values['cd']} CD",
+            f"  Sales: {money(values['gross'])}",
+        ])
+    lines.extend(["", "👥 EMPLOYEE RANKING"])
     ranking = sorted(employee_stats.items(), key=lambda item: (-item[1]["gross"], item[0].casefold()))
     if ranking:
         for index, (name, values) in enumerate(ranking, 1):
-            lines.append(
-                f"{index}. {name} — {values['dd']} DD | {money(values['gross'])} sales | {money(salaries[name])} pay"
-            )
+            lines.extend([
+                f"{index}. {name}",
+                f"   {values['dd']} DD • {money(values['gross'])} sales",
+                f"   Pay: {money(salaries[name])}",
+            ])
     else:
         lines.append("No parsed done deals.")
     lines.extend([
         "",
-        "FINANCIALS",
-        f"Gross price deals: {money(gross)}",
-        f"Less employee commissions: {money(salary_total)}",
-        f"Profit after commissions: {money(profit)}",
+        "💰 FINANCIALS",
+        f"Gross: {money(gross)}",
+        f"Commissions: −{money(salary_total)}",
+        f"Net profit: {money(profit)}",
     ])
     if skipped_done or skipped_close or capped:
         lines.extend(["", "DATA CHECK"])
@@ -271,14 +282,20 @@ def split_message(text: str, limit: int = 4000) -> list[str]:
     return parts
 
 
-def queue_daily_polls(work_date: dt.date, now: dt.datetime, allowed: set[int]) -> int:
+def queue_daily_polls(
+    work_date: dt.date,
+    now: dt.datetime,
+    allowed: set[int],
+    *,
+    existing_chats: set[int] | None = None,
+) -> int:
     queued = 0
-    date_label = work_date.strftime("%B %d, %Y")
+    existing_chats = existing_chats or set()
     for chat_id, config in GROUPS.items():
-        if chat_id not in allowed:
+        if chat_id not in allowed or chat_id in existing_chats:
             continue
         payload = {
-            "question": f"Will you be active tomorrow? — {date_label}",
+            "question": f"ACTIVE FOR TOMORROW\n{work_date.strftime('%A, %B %d, %Y')} (PHT)\nWill you be active?",
             "options": ["✅ Active", "❌ Not active"],
             "is_anonymous": False,
             "allows_multiple_answers": False,
@@ -299,20 +316,21 @@ def queue_daily_polls(work_date: dt.date, now: dt.datetime, allowed: set[int]) -
 
 def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None) -> str:
     workers, quota, has_poll = quota_for(count_row)
-    date_label = work_date.strftime("%B %d, %Y")
+    date_label = work_date.strftime("%A, %B %d, %Y")
     if not has_poll:
         return (
-            f"📣 TOMORROW'S QUOTA — {date_label}\n\n"
+            f"📣 TOMORROW'S QUOTA\n📅 {date_label} (PHT)\n\n"
             "No tracked availability poll was found. Please contact the manager before applying a quota."
         )
     return "\n".join([
-        f"📣 TOMORROW'S QUOTA — {date_label}",
-        f"🏢 {config['name']}",
+        "📣 TOMORROW'S QUOTA",
+        f"📅 {date_label} (PHT)",
+        f"🏢 {config['name'].upper()}",
         "",
         f"Active workers: {workers}",
-        f"Client quota: ceil({workers} × 0.8) = {quota}",
-        f"Done Deals target: {quota}",
-        f"Close Deals target: {quota}",
+        f"Formula: ceil({workers} × 0.8) = {quota}",
+        f"DD target: {quota}",
+        f"CD target: {quota}",
         "",
         "Both DD and CD targets must be reached for 40% commission. Otherwise, commission is 35%.",
     ])
@@ -357,7 +375,13 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
     return queued
 
 
-def queue_historical_reports(work_dates: list[dt.date], now: dt.datetime, allowed: set[int]) -> int:
+def queue_historical_reports(
+    work_dates: list[dt.date],
+    now: dt.datetime,
+    allowed: set[int],
+    *,
+    version: str = "v1",
+) -> int:
     if DAILY_REPORTS_CHAT_ID not in allowed:
         return 0
     queued = 0
@@ -381,7 +405,7 @@ def queue_historical_reports(work_dates: list[dt.date], now: dt.datetime, allowe
                     action_type="message",
                     payload={"text": part, "disable_notification": False},
                     scheduled_for=now,
-                    dedupe_key=f"historical-report:{work_date.isoformat()}:{chat_id}:{part_number}",
+                    dedupe_key=f"historical-report:{version}:{work_date.isoformat()}:{chat_id}:{part_number}",
                 ):
                     queued += 1
     return queued
@@ -390,8 +414,11 @@ def queue_historical_reports(work_dates: list[dt.date], now: dt.datetime, allowe
 def run_due_daily_automation(now: dt.datetime, allowed: set[int]) -> int:
     local_now = now.astimezone(MANILA)
     queued = 0
+    tomorrow = local_now.date() + dt.timedelta(days=1)
+    registered = set(daily_poll_counts(allowed, tomorrow))
+    if any(chat_id in allowed and chat_id not in registered for chat_id in GROUPS):
+        queued += queue_daily_polls(tomorrow, now, allowed, existing_chats=registered)
     if local_now.hour == 0 and local_now.minute < 15:
-        queued += queue_daily_polls(local_now.date() + dt.timedelta(days=1), now, allowed)
         queued += queue_daily_closeout(local_now.date() - dt.timedelta(days=1), now, allowed)
     elif local_now.hour == 23 and local_now.minute == 59:
         queued += queue_daily_closeout(local_now.date(), now, allowed)

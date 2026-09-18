@@ -54,11 +54,11 @@ class DailyAutomationTests(unittest.TestCase):
                 dt.date(2026, 9, 19),
                 {"active_workers": 2},
             )
-        self.assertIn("Quota: 2 DD and 2 CD", report)
-        self.assertIn("Commission rate: 40%", report)
-        self.assertIn("Gross price deals: ₱1,500", report)
-        self.assertIn("Less employee commissions: ₱600", report)
-        self.assertIn("Profit after commissions: ₱900", report)
+        self.assertIn("Target: 2 DD • 2 CD", report)
+        self.assertIn("Commission: 40%", report)
+        self.assertIn("Gross: ₱1,500", report)
+        self.assertIn("Commissions: −₱600", report)
+        self.assertIn("Net profit: ₱900", report)
         self.assertLess(report.index("Alex"), report.index("Bea"))
 
     def test_queues_nonanonymous_dated_polls_in_configured_topics(self):
@@ -69,7 +69,7 @@ class DailyAutomationTests(unittest.TestCase):
         first = enqueue.call_args_list[0].kwargs
         self.assertFalse(first["payload"]["is_anonymous"])
         self.assertEqual(first["payload"]["daily_poll_date"], "2026-09-20")
-        self.assertIn("September 20, 2026", first["payload"]["question"])
+        self.assertIn("Sunday, September 20, 2026", first["payload"]["question"])
 
     def test_historical_report_classifies_exported_paid_and_close_entries(self):
         rows = [
@@ -92,8 +92,8 @@ class DailyAutomationTests(unittest.TestCase):
                 historical=True,
             )
         self.assertIn("HISTORICAL SAMPLE", report)
-        self.assertIn("Results: 1 DD | 1 CD", report)
-        self.assertIn("Gross price deals: ₱1,000", report)
+        self.assertIn("Actual: 1 DD ✅ • 1 CD ✅", report)
+        self.assertIn("Gross: ₱1,000", report)
         self.assertIn("Reconstructed from the Telegram Desktop export", report)
 
 
