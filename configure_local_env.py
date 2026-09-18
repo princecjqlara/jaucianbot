@@ -43,10 +43,38 @@ def replace_service_key() -> None:
     print("Updated the local service role key.")
 
 
+def set_db_url() -> None:
+    if not TARGET.exists():
+        raise SystemExit(".env.local does not exist")
+    lines = TARGET.read_text(encoding="utf-8").splitlines()
+    values = dict(line.split("=", 1) for line in lines if "=" in line)
+    db_url = getpass.getpass("Supabase Postgres connection string: ").strip()
+    parsed = urlsplit(db_url)
+    project_ref = urlsplit(values["SUPABASE_URL"]).hostname.split(".")[0]
+    expected_host = f"db.{project_ref}.supabase.co"
+    if parsed.scheme not in {"postgres", "postgresql"} or parsed.hostname != expected_host or not parsed.password:
+        raise SystemExit(f"Expected a password-bearing Postgres URL for {expected_host}")
+    if "\n" in db_url or "\r" in db_url:
+        raise SystemExit("The Postgres URL must be a single line")
+    replacement = f"SUPABASE_DB_URL={db_url}"
+    updated = [line for line in lines if not line.startswith("SUPABASE_DB_URL=")]
+    updated.append(replacement)
+    temporary = TARGET.with_name(".env.local.tmp")
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+        output.write("\n".join(updated) + "\n")
+    os.replace(temporary, TARGET)
+    print("Saved the Supabase Postgres connection string locally.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--replace-service-key", action="store_true")
+    parser.add_argument("--set-db-url", action="store_true")
     args = parser.parse_args()
+    if args.set_db_url:
+        set_db_url()
+        return
     if args.replace_service_key:
         replace_service_key()
         return
@@ -72,6 +100,7 @@ def main() -> None:
         "SUPABASE_URL": supabase_url,
         "SUPABASE_ANON_KEY": anon_key,
         "SUPABASE_SERVICE_ROLE_KEY": service_key,
+        "SUPABASE_DB_URL": "",
         "ALLOWED_CHAT_IDS": ",".join(approved),
         "TELEGRAM_WEBHOOK_SECRET": secrets.token_urlsafe(32),
         "INSIGHTS_API_KEY": secrets.token_urlsafe(32),
