@@ -54,6 +54,7 @@ GROUPS = {
 PAGE_RE = re.compile(r"(?im)^\s*page(?:\s+name)?\s*:\s*([^\n]+)")
 PRICE_RE = re.compile(r"(?im)^\s*(?:price\s*deal|pd)\s*:\s*(?:php|₱)?\s*([\d,]+(?:\.\d+)?)")
 CLOSE_RE = re.compile(r"(?im)^\s*close\s*deals?\s*:\s*(\d+)")
+DONE_MARKER_RE = re.compile(r"(?im)^\s*(?:paid\b|total\s*(?:payment|pay)\s*:)")
 
 
 def normalize_page(text: str, configured: dict[str, str]) -> str:
@@ -115,7 +116,13 @@ def messages_for_day(chat_id: int, work_date: dt.date) -> tuple[list[dict], bool
     return selected, len(rows) == 500
 
 
-def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None) -> str:
+def build_group_report(
+    chat_id: int,
+    work_date: dt.date,
+    count_row: dict | None,
+    *,
+    historical: bool = False,
+) -> str:
     config = GROUPS[chat_id]
     rows, capped = messages_for_day(chat_id, work_date)
     page_stats = defaultdict(lambda: {"cd": 0, "dd": 0, "gross": Decimal("0")})
@@ -127,7 +134,21 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
     for row in rows:
         thread_id = row.get("thread_id")
         text = row.get("text") or ""
-        if thread_id == config["done"]:
+        historical_done = (
+            historical
+            and thread_id is None
+            and PAGE_RE.search(text)
+            and PRICE_RE.search(text)
+            and DONE_MARKER_RE.search(text)
+        )
+        historical_close = (
+            historical
+            and thread_id is None
+            and PAGE_RE.search(text)
+            and PRICE_RE.search(text)
+            and not DONE_MARKER_RE.search(text)
+        )
+        if thread_id == config["done"] or historical_done:
             page = parse_page(text, config["pages"])
             price = parse_price(text)
             if page is None or price is None:
@@ -139,7 +160,7 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
             page_stats[page]["gross"] += price
             employee_stats[author]["dd"] += 1
             employee_stats[author]["gross"] += price
-        elif thread_id == config["close"]:
+        elif thread_id == config["close"] or historical_close:
             page = parse_page(text, config["pages"])
             close_count = parse_close_count(text)
             if page is None or close_count is None:
@@ -168,7 +189,7 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
 
     date_label = work_date.strftime("%B %d, %Y")
     lines = [
-        f"📊 DAILY REPORT — {date_label}",
+        f"📊 {'HISTORICAL SAMPLE — ' if historical else 'DAILY REPORT — '}{date_label}",
         f"🏢 {config['name']}",
         "",
     ]
@@ -211,7 +232,26 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
             lines.append(f"• {skipped_close} Close Deals message(s) missing a readable page or count.")
         if capped:
             lines.append("• The 500-message daily retrieval limit was reached; review this group for overflow.")
+    if historical:
+        lines.extend([
+            "",
+            "SOURCE NOTE",
+            "Reconstructed from the Telegram Desktop export. Exported messages have no topic IDs, so paid/Total Payment entries count as DD and unpaid Price Deal entries count as CD.",
+        ])
     return "\n".join(lines)
+
+
+def historical_active_count(chat_id: int, work_date: dt.date) -> int | None:
+    previous_date = work_date - dt.timedelta(days=1)
+    rows, _ = messages_for_day(chat_id, previous_date)
+    excluded = re.compile(r"(?i)inactive|active\s+tomorrow|how\s+many|answer\s+the\s+poll|\bguys\b|\bilan\b|\bsino\b")
+    workers = set()
+    for row in rows:
+        text = row.get("text") or ""
+        author = (row.get("author_name") or "").strip()
+        if author and re.search(r"(?i)\bactive\b", text) and "?" not in text and not excluded.search(text):
+            workers.add(author.casefold())
+    return len(workers) if workers else None
 
 
 def split_message(text: str, limit: int = 4000) -> list[str]:
@@ -314,6 +354,36 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
                 dedupe_key=f"daily-report:{report_date.isoformat()}:{chat_id}:{part_number}",
             ):
                 queued += 1
+    return queued
+
+
+def queue_historical_reports(work_dates: list[dt.date], now: dt.datetime, allowed: set[int]) -> int:
+    if DAILY_REPORTS_CHAT_ID not in allowed:
+        return 0
+    queued = 0
+    for work_date in work_dates:
+        for chat_id, config in GROUPS.items():
+            if chat_id not in allowed:
+                continue
+            workers = historical_active_count(chat_id, work_date)
+            report = build_group_report(
+                chat_id,
+                work_date,
+                {"active_workers": workers} if workers is not None else None,
+                historical=True,
+            )
+            report_parts = split_message(report)
+            for part_number, part in enumerate(report_parts, 1):
+                if len(report_parts) > 1:
+                    part = f"{part}\n\nPart {part_number}"
+                if enqueue_scheduled_action(
+                    chat_id=DAILY_REPORTS_CHAT_ID,
+                    action_type="message",
+                    payload={"text": part, "disable_notification": False},
+                    scheduled_for=now,
+                    dedupe_key=f"historical-report:{work_date.isoformat()}:{chat_id}:{part_number}",
+                ):
+                    queued += 1
     return queued
 
 

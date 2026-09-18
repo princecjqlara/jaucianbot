@@ -71,6 +71,31 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertEqual(first["payload"]["daily_poll_date"], "2026-09-20")
         self.assertIn("September 20, 2026", first["payload"]["question"])
 
+    def test_historical_report_classifies_exported_paid_and_close_entries(self):
+        rows = [
+            {
+                "thread_id": None,
+                "text": "Client\nPAID\nPrice Deal: 1,000\nTotal Payment: 1,000\nPage: Azshinari",
+                "author_name": "Alex",
+            },
+            {
+                "thread_id": None,
+                "text": "Client\nDP: 150\nPrice Deal: 1,000\nPage: Azshinari",
+                "author_name": "Alex",
+            },
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254,
+                dt.date(2026, 9, 18),
+                {"active_workers": 1},
+                historical=True,
+            )
+        self.assertIn("HISTORICAL SAMPLE", report)
+        self.assertIn("Results: 1 DD | 1 CD", report)
+        self.assertIn("Gross price deals: ₱1,000", report)
+        self.assertIn("Reconstructed from the Telegram Desktop export", report)
+
 
 if __name__ == "__main__":
     unittest.main()
