@@ -72,6 +72,14 @@ def save_update(update: dict, allowed: set[int]) -> bool:
     return bool(result)
 
 
+def save_poll_answer(update: dict, allowed: set[int]) -> bool:
+    result = request(
+        "rpc/insights_ingest_poll_answer",
+        {"p_update": update, "p_allowed_ids": sorted(allowed)},
+    )
+    return bool(result)
+
+
 def archive_status(allowed: set[int]) -> list[dict]:
     return request("rpc/insights_status", {"p_allowed_ids": sorted(allowed)}) or []
 
@@ -130,6 +138,28 @@ def create_scheduled_action(
     if not rows:
         raise SupabaseError("Supabase did not return the created schedule")
     return rows[0]
+
+
+def enqueue_scheduled_action(
+    *,
+    chat_id: int,
+    action_type: str,
+    payload: dict,
+    scheduled_for: dt.datetime,
+    dedupe_key: str,
+) -> bool:
+    rows = request(
+        "scheduled_actions?on_conflict=dedupe_key",
+        {
+            "chat_id": chat_id,
+            "action_type": action_type,
+            "payload": payload,
+            "scheduled_for": scheduled_for.isoformat(),
+            "dedupe_key": dedupe_key,
+        },
+        prefer="resolution=ignore-duplicates,return=representation",
+    ) or []
+    return bool(rows)
 
 
 def list_scheduled_actions(
@@ -191,3 +221,25 @@ def finish_scheduled_action(
         },
     )
     return bool(result)
+
+
+def register_daily_poll(
+    *, poll_id: str, chat_id: int, thread_id: int,
+    work_date: dt.date, telegram_message_id: int,
+) -> bool:
+    result = request("rpc/insights_register_daily_poll", {
+        "p_poll_id": poll_id,
+        "p_chat_id": chat_id,
+        "p_thread_id": thread_id,
+        "p_work_date": work_date.isoformat(),
+        "p_telegram_message_id": telegram_message_id,
+    })
+    return bool(result)
+
+
+def daily_poll_counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
+    rows = request("rpc/insights_daily_poll_counts", {
+        "p_work_date": work_date.isoformat(),
+        "p_allowed_ids": sorted(allowed),
+    }) or []
+    return {int(row["chat_id"]): row for row in rows}

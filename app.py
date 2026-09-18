@@ -20,8 +20,11 @@ from cloud_store import (
     finish_scheduled_action,
     known_chats,
     list_scheduled_actions,
+    register_daily_poll,
+    save_poll_answer,
     save_update,
 )
+from daily_automation import run_due_daily_automation
 from telegram_sender import send_scheduled_action
 
 
@@ -236,10 +239,11 @@ def schedules_route(environ, start_response, method: str):
 def dispatch_route(environ, start_response):
     try:
         allowed = allowed_chat_ids()
+        queued = run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
         actions = claim_scheduled_actions(allowed, limit=10)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
-        return response(start_response, 503, {"ok": False, "processed": 0, "sent": 0, "failed": 0})
+        return response(start_response, 503, {"ok": False, "queued": 0, "processed": 0, "sent": 0, "failed": 0})
     sent = 0
     failed = 0
     for action in actions:
@@ -249,6 +253,17 @@ def dispatch_route(environ, start_response):
             if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id):
                 raise RuntimeError("schedule was not finalized")
             sent += 1
+            if action["action_type"] == "poll" and action["payload"].get("daily_poll_date"):
+                try:
+                    register_daily_poll(
+                        poll_id=message["poll"]["id"],
+                        chat_id=int(action["chat_id"]),
+                        thread_id=int(action["payload"]["message_thread_id"]),
+                        work_date=dt.date.fromisoformat(action["payload"]["daily_poll_date"]),
+                        telegram_message_id=message_id,
+                    )
+                except Exception as poll_error:
+                    print(f"Daily poll registration failed: {type(poll_error).__name__}")
             try:
                 save_update({"message": message}, allowed)
             except Exception as archive_error:
@@ -263,6 +278,7 @@ def dispatch_route(environ, start_response):
     status = 200 if failed == 0 else 502
     return response(start_response, status, {
         "ok": failed == 0,
+        "queued": queued,
         "processed": len(actions),
         "sent": sent,
         "failed": failed,
@@ -286,7 +302,10 @@ def webhook_route(environ, start_response):
     except RuntimeError:
         return response(start_response, 503, {"ok": False, "error": "invalid configuration"})
     try:
-        save_update(update, allowed)
+        if "poll_answer" in update:
+            save_poll_answer(update, allowed)
+        else:
+            save_update(update, allowed)
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})

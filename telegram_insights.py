@@ -172,7 +172,7 @@ def collect(db: sqlite3.Connection) -> None:
     while True:
         try:
             row = db.execute("SELECT value FROM state WHERE key='next_offset'").fetchone()
-            params = {"timeout": 25, "limit": 100, "allowed_updates": json.dumps(["message", "edited_message", "my_chat_member"])}
+            params = {"timeout": 25, "limit": 100, "allowed_updates": json.dumps(["message", "edited_message", "my_chat_member", "poll_answer"])}
             if row:
                 params["offset"] = int(row["value"])
             updates = api_request(token, "getUpdates", params)

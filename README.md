@@ -77,3 +77,14 @@ Schedule controls use the private `INSIGHTS_API_KEY` stored for this Windows acc
 ```
 
 Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notifications, or `--thread TOPIC_ID` for a forum topic. Polls also accept `--multiple` and `--public`. Failed deliveries retry after five minutes up to five attempts. A cron run sends up to ten due actions, so the one-minute job catches newly due work promptly.
+
+## Daily quota and sales automation
+
+The one-minute dispatcher also runs the four configured Veo group workflows in Philippine time:
+
+- At 12:00 AM it posts a dated, nonanonymous Active/Not Active poll for the following day in each **Active for Tomorrow** topic.
+- At 11:59 PM it calculates `ceil(active workers × 0.8)`. The same number is the group target for Done Deals and Close Deals, and it posts the following day's target in each announcements topic.
+- It reads that day's configured Done Deals and Close Deals topics, groups results by page, totals Price Deal amounts, and posts one organized report per group to **DAILY REPORTS**.
+- Employees are ranked by Price Deal sales. When the group reaches both its DD and CD targets, each employee's pay is 40% of their Price Deal total; otherwise it is 35%. Profit is gross Price Deal value less those commissions.
+
+The report flags messages it cannot parse. Deal entries should include `Page:` plus `Price Deal:` or `PD:`. Close Deal summaries should include `Page name:` and `Close Deal:`. The commission calculation uses Price Deal and excludes tips, revisions, down payments, and Total Payment differences.

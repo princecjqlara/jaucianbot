@@ -152,13 +152,15 @@ class WsgiApplicationTests(unittest.TestCase):
         }
         sent_message = {"message_id": 51, "chat": {"id": -100123, "type": "supergroup"}, "date": 1}
         with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.run_due_daily_automation", return_value=0
+        ), patch(
             "app.claim_scheduled_actions", return_value=[action]
         ) as claim, patch("app.send_scheduled_action", return_value=sent_message) as send, patch(
             "app.finish_scheduled_action", return_value=True
         ) as finish, patch("app.save_update") as save:
             status, payload = call_app("/api/cron/dispatch")
         self.assertEqual(status, 200)
-        self.assertEqual(payload, {"ok": True, "processed": 1, "sent": 1, "failed": 0})
+        self.assertEqual(payload, {"ok": True, "queued": 0, "processed": 1, "sent": 1, "failed": 0})
         claim.assert_called_once_with({-100123}, limit=10)
         send.assert_called_once_with(action)
         finish.assert_called_once_with(7, success=True, telegram_message_id=51)
@@ -166,11 +168,30 @@ class WsgiApplicationTests(unittest.TestCase):
 
     def test_dispatch_with_no_due_actions_is_safe(self):
         with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.run_due_daily_automation", return_value=0
+        ), patch(
             "app.claim_scheduled_actions", return_value=[]
         ):
             status, payload = call_app("/api/cron/dispatch")
         self.assertEqual(status, 200)
         self.assertEqual(payload["processed"], 0)
+
+    def test_webhook_stores_poll_answer(self):
+        update = {"update_id": 2, "poll_answer": {"poll_id": "poll-1"}}
+        body = json.dumps(update).encode()
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123"},
+        ), patch("app.save_poll_answer") as save:
+            status, payload = call_app(
+                "/api/webhook",
+                method="POST",
+                headers={"X-Telegram-Bot-Api-Secret-Token": "correct"},
+                body=body,
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        save.assert_called_once_with(update, {-100123})
 
     def test_unknown_route_returns_not_found(self):
         status, _ = call_app("/missing")
