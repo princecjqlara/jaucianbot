@@ -1,0 +1,7 @@
+*
+!api/
+!api/**
+!cloud_http.py
+!cloud_store.py
+!.python-version
+!vercel.json
