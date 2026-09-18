@@ -120,6 +120,7 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
     rows, capped = messages_for_day(chat_id, work_date)
     page_stats = defaultdict(lambda: {"cd": 0, "dd": 0, "gross": Decimal("0")})
     employee_stats = defaultdict(lambda: {"dd": 0, "gross": Decimal("0")})
+    counted_close_reports: set[tuple[str, str]] = set()
     skipped_done = 0
     skipped_close = 0
 
@@ -145,6 +146,11 @@ def build_group_report(chat_id: int, work_date: dt.date, count_row: dict | None)
                 if text.strip():
                     skipped_close += 1
                 continue
+            if CLOSE_RE.search(text):
+                author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
+                if author_key in counted_close_reports:
+                    continue
+                counted_close_reports.add(author_key)
             page_stats[page]["cd"] += close_count
 
     for canonical in dict.fromkeys(config["pages"].values()):

@@ -42,6 +42,11 @@ class DailyAutomationTests(unittest.TestCase):
                 "text": "Page name: Azshinari\nClose Deal: 2",
                 "author_name": "Alex",
             },
+            {
+                "thread_id": 1132,
+                "text": "Page name: Azshinari\nClose Deal: 1",
+                "author_name": "Alex",
+            },
         ]
         with patch("daily_automation.messages_for_day", return_value=(rows, False)):
             report = build_group_report(
