@@ -44,6 +44,15 @@ def status_route(environ, start_response):
     return response(start_response, 200, {"ok": True, "groups": groups})
 
 
+def health_route(environ, start_response):
+    try:
+        archive_status(allowed_chat_ids())
+    except Exception as error:
+        print(f"Health query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True})
+
+
 def messages_route(environ, start_response):
     if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
         return response(start_response, 401, {"ok": False})
@@ -110,10 +119,12 @@ def app(environ, start_response):
     path = environ.get("PATH_INFO", "")
     if path == "/api/status" and method == "GET":
         return status_route(environ, start_response)
+    if path == "/api/health" and method == "GET":
+        return health_route(environ, start_response)
     if path == "/api/messages" and method == "GET":
         return messages_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/status", "/api/messages", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

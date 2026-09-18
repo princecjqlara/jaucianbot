@@ -21,11 +21,11 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
 3. Run `./migrate_to_supabase.ps1` in this workspace. It copies the local archive, including imported history, to Supabase. Rerunning skips duplicates.
 4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. It reads the same webhook secret from `.env.local`. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
 5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN`. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
-6. In the cron-job.org Console, create an API key under **Settings**, then run `py configure_cronjob.py https://YOUR-PRODUCTION-DOMAIN`. Paste the API key at the hidden prompt. The script creates or updates an authenticated health check that calls `/api/status` every 15 minutes and enables failure and recovery notifications. The cron-job.org API key is not saved by the script.
+6. In the cron-job.org Console, create a GET job for `https://YOUR-PRODUCTION-DOMAIN/api/health` every 15 minutes. The endpoint checks Vercel and Supabase and returns only `{"ok": true}`. Dashboard setup does not need an API key or request headers. The optional `configure_cronjob.py` script uses a cron-job.org API key only when creating the job through its REST API.
 
 Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and service role key private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
 
-The webhook handles new messages as they arrive. The cron-job.org task only monitors `/api/status`; it does not consume Telegram updates. See [cron-job.org's REST API documentation](https://docs.cron-job.org/rest-api.html) and [Telegram's webhook documentation](https://core.telegram.org/bots/api#setwebhook).
+The webhook handles new messages as they arrive. The cron-job.org task only monitors `/api/health`; it does not consume Telegram updates. See [cron-job.org's documentation](https://docs.cron-job.org/) and [Telegram's webhook documentation](https://core.telegram.org/bots/api#setwebhook).
 
 ## Windows setup
 

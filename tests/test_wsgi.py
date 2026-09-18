@@ -28,6 +28,23 @@ def call_app(path, *, method="GET", headers=None, body=b"", query=""):
 
 
 class WsgiApplicationTests(unittest.TestCase):
+    def test_public_health_checks_supabase_without_exposing_groups(self):
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.archive_status", return_value=[{"chat_id": -100123}]
+        ) as status_query:
+            status, payload = call_app("/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"ok": True})
+        status_query.assert_called_once_with({-100123})
+
+    def test_public_health_reports_database_failure(self):
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "-100123"}), patch(
+            "app.archive_status", side_effect=RuntimeError("database unavailable")
+        ):
+            status, payload = call_app("/api/health")
+        self.assertEqual(status, 503)
+        self.assertEqual(payload, {"ok": False})
+
     def test_status_requires_authorization(self):
         with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct"}):
             status, payload = call_app("/api/status")
