@@ -1,7 +1,13 @@
-*
-!api/
-!api/**
-!cloud_http.py
-!cloud_store.py
-!.python-version
-!vercel.json
+.env*
+!.env.example
+.git/
+.venv/
+.vercel/
+veo messages files/
+telegram_insights.sqlite3
+telegram_insights.sqlite3-*
+*.dpapi
+.insights-base-url
+*.log
+__pycache__/
+tests/
