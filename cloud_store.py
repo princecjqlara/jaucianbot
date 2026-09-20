@@ -106,6 +106,19 @@ def archive_messages(
     }) or []
 
 
+def daily_messages(chat_id: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
+    """Read one local workday, including author IDs for poll/deal matching."""
+    filters = urllib.parse.urlencode([
+        ("select", "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source"),
+        ("chat_id", f"eq.{chat_id}"),
+        ("sent_utc", f"gte.{start_utc.isoformat()}"),
+        ("sent_utc", f"lt.{end_utc.isoformat()}"),
+        ("order", "sent_utc.desc,message_id.desc"),
+        ("limit", 501),
+    ])
+    return request("messages?" + filters) or []
+
+
 def upsert_chats(chats: list[dict]) -> None:
     if chats:
         request("chats?on_conflict=chat_id", chats, prefer="resolution=merge-duplicates,return=minimal")
@@ -147,6 +160,7 @@ def enqueue_scheduled_action(
     payload: dict,
     scheduled_for: dt.datetime,
     dedupe_key: str,
+    repeat_interval_minutes: int | None = None,
 ) -> bool:
     rows = request(
         "scheduled_actions?on_conflict=dedupe_key",
@@ -156,10 +170,23 @@ def enqueue_scheduled_action(
             "payload": payload,
             "scheduled_for": scheduled_for.isoformat(),
             "dedupe_key": dedupe_key,
+            "repeat_interval_minutes": repeat_interval_minutes,
         },
         prefer="resolution=ignore-duplicates,return=representation",
     ) or []
     return bool(rows)
+
+
+def existing_daily_reminder_chats(work_date: dt.date, hour: int, allowed: set[int]) -> set[int]:
+    if not allowed:
+        return set()
+    filters = urllib.parse.urlencode({
+        "select": "chat_id",
+        "chat_id": "in.(" + ",".join(str(value) for value in sorted(allowed)) + ")",
+        "dedupe_key": f'like."daily-reminder:{work_date.isoformat()}:{hour}:*"',
+    })
+    rows = request("scheduled_actions?" + filters) or []
+    return {int(row["chat_id"]) for row in rows}
 
 
 def list_scheduled_actions(
@@ -243,3 +270,58 @@ def daily_poll_counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
         "p_allowed_ids": sorted(allowed),
     }) or []
     return {int(row["chat_id"]): row for row in rows}
+
+
+def daily_poll_active_users(poll_id: str) -> list[dict]:
+    filters = urllib.parse.urlencode({
+        "select": "user_id,user_name",
+        "poll_id": f"eq.{poll_id}",
+        "active": "eq.true",
+        "order": "user_name.asc,user_id.asc",
+    })
+    return request("daily_poll_answers?" + filters) or []
+
+
+def freebie_actions(allowed: set[int]) -> list[dict]:
+    """Read assignment history from the existing durable scheduler table."""
+    if not allowed:
+        return []
+    result: list[dict] = []
+    offset = 0
+    while True:
+        filters = urllib.parse.urlencode({
+            "select": "id,chat_id,payload,status,scheduled_for,sent_at,telegram_message_id",
+            "chat_id": "in.(" + ",".join(str(chat_id) for chat_id in sorted(allowed)) + ")",
+            "dedupe_key": "like.freebie:*",
+            "order": "id.asc",
+            "limit": 1000,
+            "offset": offset,
+        })
+        rows = request("scheduled_actions?" + filters) or []
+        result.extend(rows)
+        if len(rows) < 1000:
+            return result
+        offset += 1000
+
+
+def update_freebie_action(action_id: int, payload: dict, *, status: str) -> dict | None:
+    """Atomically confirm one still-open assignment from a matching Telegram reply."""
+    filters = urllib.parse.urlencode({
+        "id": f"eq.{action_id}",
+        "status": "in.(pending,processing,failed)",
+        "payload->>freebie_completed_at": "is.null",
+    })
+    rows = request(
+        "scheduled_actions?" + filters,
+        {"payload": payload, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        method="PATCH",
+        prefer="return=representation",
+    ) or []
+    return rows[0] if rows else None
+
+
+def freebie_action_state(action_id: int) -> dict | None:
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
+    })) or []
+    return rows[0] if rows else None

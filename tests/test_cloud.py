@@ -3,12 +3,17 @@ import os
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
+import datetime as dt
 from http.server import HTTPServer
 from unittest.mock import patch
 
 from api.webhook import handler
-from cloud_store import allowed_chat_ids, save_update
+from cloud_store import (
+    allowed_chat_ids, daily_messages, daily_poll_active_users,
+    existing_daily_reminder_chats, save_update,
+)
 
 
 class CloudStorageTests(unittest.TestCase):
@@ -25,6 +30,31 @@ class CloudStorageTests(unittest.TestCase):
         with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": "invalid"}):
             with self.assertRaises(RuntimeError):
                 allowed_chat_ids()
+
+    def test_daily_report_reads_authors_and_active_poll_voters(self):
+        start = dt.datetime(2026, 9, 18, 16, tzinfo=dt.timezone.utc)
+        end = start + dt.timedelta(days=1)
+        with patch("cloud_store.request", return_value=[]) as request:
+            daily_messages(-100123, start, end)
+            daily_poll_active_users("poll-1")
+        message_path = request.call_args_list[0].args[0]
+        message_params = urllib.parse.parse_qs(message_path.split("?", 1)[1])
+        self.assertIn("author_id", message_params["select"][0])
+        self.assertEqual(message_params["sent_utc"], [f"gte.{start.isoformat()}", f"lt.{end.isoformat()}"])
+        self.assertEqual(message_params["limit"], ["501"])
+        answer_path = request.call_args_list[1].args[0]
+        answer_params = urllib.parse.parse_qs(answer_path.split("?", 1)[1])
+        self.assertEqual(answer_params["poll_id"], ["eq.poll-1"])
+        self.assertEqual(answer_params["active"], ["eq.true"])
+
+    def test_existing_reminder_lookup_is_scoped_to_slot_and_groups(self):
+        with patch("cloud_store.request", return_value=[{"chat_id": -100123}]) as request:
+            chats = existing_daily_reminder_chats(dt.date(2026, 9, 19), 10, {-100123, -100456})
+        self.assertEqual(chats, {-100123})
+        path = request.call_args.args[0]
+        params = urllib.parse.parse_qs(path.split("?", 1)[1])
+        self.assertEqual(params["chat_id"], ["in.(-100456,-100123)"])
+        self.assertEqual(params["dedupe_key"], ['like."daily-reminder:2026-09-19:10:*"'])
 
 
 class WebhookTests(unittest.TestCase):

@@ -50,7 +50,13 @@ def send_scheduled_action(action: dict) -> dict:
     if source.get("message_thread_id") is not None:
         common["message_thread_id"] = source["message_thread_id"]
     if action_type == "message":
-        return telegram_call("sendMessage", {**common, "text": source["text"]})
+        text = source.get("freebie_reminder_text") if action.get("sent_at") else None
+        payload = {**common, "text": text or source["text"]}
+        if source.get("parse_mode"):
+            payload["parse_mode"] = source["parse_mode"]
+        if source.get("reply_markup"):
+            payload["reply_markup"] = source["reply_markup"]
+        return telegram_call("sendMessage", payload)
     if action_type == "poll":
         payload = {
             **common,

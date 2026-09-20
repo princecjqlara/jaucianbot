@@ -1,16 +1,23 @@
 import datetime as dt
+import json
 import unittest
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from daily_automation import (
     GROUPS,
     build_group_report,
+    deal_totals_for_day,
     parse_close_count,
     parse_page,
     parse_price,
     queue_daily_polls,
+    queue_daily_reminders,
+    quota_reminder,
     quota_for,
+    run_due_daily_automation,
+    split_message,
 )
 
 
@@ -20,6 +27,8 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertEqual(parse_price(text), Decimal("1450"))
         self.assertEqual(parse_page(text, GROUPS[-1003962888977]["pages"]), "Manawari Studios")
         self.assertEqual(parse_close_count("Page name: Azshinari\nClose Deal: 2"), 2)
+        self.assertIsNone(parse_page("Page: Unrelated Brand", GROUPS[-1003962888977]["pages"]))
+        self.assertIsNone(parse_close_count("Page: Azshinari\nPrice Deal: 0"))
 
     def test_quota_rounds_up(self):
         self.assertEqual(quota_for({"active_workers": 11}), (11, 9, True))
@@ -71,6 +80,12 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertEqual(first["payload"]["daily_poll_date"], "2026-09-20")
         self.assertIn("Sunday, September 20, 2026", first["payload"]["question"])
 
+    def test_setup_day_poll_says_active_for_today(self):
+        now = dt.datetime(2026, 9, 18, 18, 0, tzinfo=dt.timezone.utc)
+        with patch("daily_automation.enqueue_scheduled_action", return_value=True) as enqueue:
+            queue_daily_polls(dt.date(2026, 9, 19), now, {-1004461399292})
+        self.assertIn("active today", enqueue.call_args.kwargs["payload"]["question"].lower())
+
     def test_historical_report_classifies_exported_paid_and_close_entries(self):
         rows = [
             {
@@ -95,6 +110,220 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("Actual: 1 DD ✅ • 1 CD ✅", report)
         self.assertIn("Gross: ₱1,000", report)
         self.assertIn("Reconstructed from the Telegram Desktop export", report)
+
+    def test_lists_active_poll_voters_without_either_deal(self):
+        rows = [
+            {"thread_id": 1135, "author_id": 1, "author_name": "Alex Renamed",
+             "text": "Price Deal: 1,000\nPage: Azshinari"},
+            {"thread_id": 1132, "author_id": 2, "author_name": "Bea",
+             "text": "Page: Azshinari\nClose Deal: 1"},
+            {"thread_id": 1132, "author_id": 3, "author_name": "Casey",
+             "text": "Page: Azshinari\nClose Deal: 0"},
+            {"thread_id": 1135, "author_id": 4, "author_name": "Dani",
+             "text": "Price Deal missing\nPage: Azshinari"},
+            {"thread_id": 1135, "author_id": 99, "author_name": "Eli",
+             "text": "Price Deal: 700\nPage: Azshinari"},
+            {"thread_id": 1135, "author_id": 6, "author_name": "Fran", "text": "Thanks!"},
+        ]
+        users = [
+            {"user_id": 1, "user_name": "Alex"},
+            {"user_id": 2, "user_name": "Bea"},
+            {"user_id": 3, "user_name": "Casey"},
+            {"user_id": 4, "user_name": "Dani"},
+            {"user_id": 5, "user_name": "Eli"},
+            {"user_id": 6, "user_name": "Fran"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)), \
+             patch("daily_automation.daily_poll_active_users", return_value=users) as fetch:
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 19),
+                {"poll_id": "poll-1", "active_workers": 6},
+            )
+        fetch.assert_called_once_with("poll-1")
+        section = report.split("ACTIVE TEAM MEMBERS WITH NO RECORDED CD OR DD\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("• Casey", section)
+        self.assertIn("• Eli", section)
+        self.assertIn("• Fran", section)
+        self.assertNotIn("• Alex", section)
+        self.assertNotIn("• Bea", section)
+        self.assertNotIn("• Dani", section)
+        self.assertIn("Please review a possible deal post for: Dani", section)
+
+    def test_historical_names_match_exported_deals_and_summaries(self):
+        rows = [
+            {"thread_id": None, "author_name": "Alex", "author_id": None,
+             "text": "Page: Azshinari\nClose Deal: 2"},
+            {"thread_id": None, "author_name": "Bea", "author_id": None,
+             "text": "PAID\nPrice Deal: 1,000\nPage: Azshinari"},
+        ]
+        users = [
+            {"user_id": None, "user_name": "alex"},
+            {"user_id": None, "user_name": "Bea"},
+            {"user_id": None, "user_name": "Casey"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 18),
+                {"active_workers": 3}, historical=True, active_users=users,
+            )
+        section = report.split("ACTIVE TEAM MEMBERS WITH NO RECORDED CD OR DD\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(section, "• Casey")
+        self.assertIn("Actual: 1 DD", report)
+        self.assertIn("0 CD", report)
+
+    def test_does_not_name_people_when_daily_messages_are_capped(self):
+        with patch("daily_automation.messages_for_day", return_value=([], True)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 19),
+                {"active_workers": 1},
+                active_users=[{"user_id": 1, "user_name": "Alex"}],
+            )
+        self.assertIn(
+            "ACTIVE TEAM MEMBERS WITH NO RECORDED CD OR DD\n"
+            "Names aren't listed because the day exceeded the safe message-review limit.",
+            report,
+        )
+        self.assertNotIn("• Alex", report)
+
+    def test_zero_active_responses_do_not_qualify_for_40_percent(self):
+        rows = [{
+            "thread_id": 1135, "author_name": "Alex",
+            "text": "Page: Azshinari\nPrice Deal: 1,000",
+        }]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 19), {"active_workers": 0},
+                active_users=[],
+            )
+        self.assertIn("Target: not set", report)
+        self.assertIn("Commission: 35%", report)
+        self.assertNotIn("Commission: 40%", report)
+
+    def test_incomplete_deal_data_does_not_guess_pay_or_profit(self):
+        rows = [
+            {"thread_id": 1135, "author_name": "Alex",
+             "text": "Page: Azshinari\nPrice Deal: 1,000"},
+            {"thread_id": 1132, "author_name": "Bea",
+             "text": "Page: Azshinari\nClose Deal: pending"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 19), {"active_workers": 2},
+                active_users=[],
+            )
+        self.assertIn("Commission: needs a quick data review", report)
+        self.assertIn("Pay: pending data review", report)
+        self.assertIn("Net profit: pending data review", report)
+
+    def test_casual_topic_replies_are_not_flagged_as_broken_deals(self):
+        rows = [
+            {"thread_id": 1135, "author_name": "Alex", "text": "Thanks!"},
+            {"thread_id": 1132, "author_name": "Bea", "text": "Great work"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 19), {"active_workers": 1},
+                active_users=[],
+            )
+        self.assertNotIn("DATA CHECK", report)
+
+    def test_reminder_totals_follow_report_deal_rules(self):
+        rows = [
+            {"thread_id": 1135, "text": "Page: Azshinari\nPrice Deal: 1,000"},
+            {"thread_id": 1135, "text": "Page: Azshinari\nPrice Deal: 500"},
+            {"thread_id": 1132, "author_name": "Alex", "text": "Page: Azshinari\nClose Deal: 2"},
+            {"thread_id": 1132, "author_name": "Alex", "text": "Page: Azshinari\nClose Deal: 1"},
+            {"thread_id": 1132, "author_name": "Bea", "text": "Page: Azshinari\nPD: 900"},
+            {"thread_id": 1135, "text": "Thanks"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            totals = deal_totals_for_day(-1003647732254, dt.date(2026, 9, 19))
+        self.assertEqual(totals, (2, 3, False, False))
+        reminder = quota_reminder(
+            GROUPS[-1003647732254], dt.date(2026, 9, 19), 7,
+            {"active_workers": 5}, *totals,
+        )
+        self.assertIn("Target: 4 DD and 4 CD", reminder)
+        self.assertIn("So far: 2 DD • 3 CD", reminder)
+        self.assertIn("Still needed: 2 DD • 1 CD", reminder)
+
+    def test_reminders_go_to_all_announcements_topics_once_per_slot(self):
+        now = dt.datetime(2026, 9, 18, 23, tzinfo=dt.timezone.utc)
+        with patch("daily_automation.daily_poll_counts", return_value={
+            chat_id: {"active_workers": 5} for chat_id in GROUPS
+        }), patch("daily_automation.existing_daily_reminder_chats", return_value=set()), \
+             patch("daily_automation.deal_totals_for_day", return_value=(2, 3, False, False)), \
+             patch("daily_automation.enqueue_scheduled_action", return_value=True) as enqueue:
+            queued = queue_daily_reminders(dt.date(2026, 9, 19), 7, now, set(GROUPS))
+        self.assertEqual(queued, 4)
+        for call in enqueue.call_args_list:
+            args = call.kwargs
+            self.assertEqual(args["payload"]["message_thread_id"], GROUPS[args["chat_id"]]["announcements"])
+            self.assertEqual(args["scheduled_for"], now)
+            self.assertEqual(args["dedupe_key"], f"daily-reminder:2026-09-19:7:{args['chat_id']}")
+            self.assertIn("Still needed: 2 DD • 1 CD", args["payload"]["text"])
+
+    def test_existing_reminders_skip_progress_reads_and_duplicate_sends(self):
+        date = dt.date(2026, 9, 19)
+        now = dt.datetime(2026, 9, 18, 23, 30, tzinfo=dt.timezone.utc)
+        with patch("daily_automation.existing_daily_reminder_chats", return_value=set(GROUPS)), \
+             patch("daily_automation.daily_poll_counts") as counts, \
+             patch("daily_automation.deal_totals_for_day") as deals, \
+             patch("daily_automation.enqueue_scheduled_action") as enqueue:
+            self.assertEqual(queue_daily_reminders(date, 7, now, set(GROUPS)), 0)
+        counts.assert_not_called()
+        deals.assert_not_called()
+        enqueue.assert_not_called()
+
+    def test_reminder_avoids_unverified_quota_or_negative_remaining(self):
+        config = GROUPS[-1003647732254]
+        date = dt.date(2026, 9, 19)
+        no_poll = quota_reminder(config, date, 13, None, 2, 1, False, False)
+        self.assertIn("Active poll hasn't been recorded", no_poll)
+        self.assertNotIn("Still needed:", no_poll)
+        capped = quota_reminder(config, date, 19, {"active_workers": 5}, 2, 1, True, False)
+        self.assertIn("manual check", capped)
+        self.assertNotIn("Still needed:", capped)
+        met = quota_reminder(config, date, 19, {"active_workers": 5}, 6, 4, False, False)
+        self.assertIn("Still needed: 0 DD • 0 CD", met)
+
+    def test_reminder_flags_unreadable_deal_posts_before_claiming_a_gap(self):
+        rows = [{"thread_id": 1135, "text": "Page: Azshinari\nPrice Deal missing"}]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            totals = deal_totals_for_day(-1003647732254, dt.date(2026, 9, 19))
+        self.assertEqual(totals, (0, 0, False, True))
+        reminder = quota_reminder(
+            GROUPS[-1003647732254], dt.date(2026, 9, 19), 7,
+            {"active_workers": 5}, *totals,
+        )
+        self.assertIn("exact remaining gap isn't shown", reminder)
+        self.assertNotIn("Still needed:", reminder)
+
+    def test_split_message_never_leaves_an_oversized_line(self):
+        parts = split_message("A" * 8101, limit=4000)
+        self.assertEqual("".join(parts), "A" * 8101)
+        self.assertTrue(all(len(part) <= 4000 for part in parts))
+
+    def test_dispatch_queues_six_philippine_time_reminder_slots(self):
+        chat_id = -1003647732254
+        with patch("daily_automation.daily_poll_counts", return_value={chat_id: {}}), \
+             patch("daily_automation.queue_daily_reminders", return_value=1) as reminders:
+            for hour in (7, 10, 13, 16, 19, 21):
+                now = dt.datetime(2026, 9, 19, hour, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+                run_due_daily_automation(now, {chat_id})
+                reminders.assert_called_with(dt.date(2026, 9, 19), hour, now, {chat_id})
+            self.assertEqual(reminders.call_count, 6)
+            run_due_daily_automation(dt.datetime(2026, 9, 18, 23, 59, tzinfo=dt.timezone.utc), {chat_id})
+            self.assertEqual(reminders.call_count, 7)
+            run_due_daily_automation(dt.datetime(2026, 9, 19, 0, tzinfo=dt.timezone.utc), {chat_id})
+            self.assertEqual(reminders.call_count, 7)
+
+    def test_vercel_cron_covers_midnight_and_daytime_hours(self):
+        config = json.loads((Path(__file__).resolve().parents[1] / "vercel.json").read_text())
+        self.assertEqual(
+            {(job["path"], job["schedule"]) for job in config["crons"]},
+            {("/api/cron/dispatch", f"0 {hour} * * *") for hour in (*range(14), 16, 23)},
+        )
 
 
 if __name__ == "__main__":

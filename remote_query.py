@@ -17,6 +17,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("groups")
+    commands.add_parser("freebies")
     messages = commands.add_parser("messages")
     messages.add_argument("--group", type=int)
     messages.add_argument("--days", type=float, default=7)
@@ -54,6 +55,8 @@ def main() -> None:
     body = None
     if args.command == "groups":
         path = "/api/groups"
+    elif args.command == "freebies":
+        path = "/api/freebies/status"
     elif args.command == "messages":
         params = {"days": args.days, "limit": args.limit}
         if args.group is not None:

@@ -9,41 +9,66 @@ from collections import defaultdict
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from cloud_store import archive_messages, daily_poll_counts, enqueue_scheduled_action
+from cloud_store import (
+    daily_messages, daily_poll_active_users, daily_poll_counts,
+    enqueue_scheduled_action, existing_daily_reminder_chats,
+)
 
 
 MANILA = ZoneInfo("Asia/Manila")
 DAILY_REPORTS_CHAT_ID = -1004362432984
 AUTOMATION_START_DATE = dt.date(2026, 9, 19)
+REMINDER_HOURS = (7, 10, 13, 16, 19, 21)
 
 GROUPS = {
     -1004423057797: {
         "name": "Veo Ollie",
         "announcements": 4794,
+        "freebie": 4811,
+        "crm_pages": {"Vista Media Agency": "142b8647-c785-4205-a558-5e0cb26d7151", "Loki Media": "1a4fc336-1530-4064-a2a2-f79b2b005772"},
         "active": 4536,
         "done": 17,
         "close": 16,
-        "pages": {"vista": "Vista", "loki": "Loki"},
+        "pages": {
+            "vista": "Vista", "vistamedia": "Vista", "vistamediaagency": "Vista",
+            "loki": "Loki", "lokimedia": "Loki", "lokimediaagency": "Loki",
+        },
     },
     -1003962888977: {
         "name": "Veo Jessa",
         "announcements": 5,
+        "freebie": 3240,
+        "crm_pages": {"Manawari Studios": "b33a9b46-6470-48ed-bcfc-4235aa46f241"},
         "active": 3050,
         "done": 7,
         "close": 6,
-        "pages": {"manawaristudio": "Manawari Studios", "manawaristudios": "Manawari Studios"},
+        "pages": {
+            "manawari": "Manawari Studios", "manawaristudio": "Manawari Studios",
+            "manawaristudios": "Manawari Studios", "manawaridtudios": "Manawari Studios",
+        },
     },
     -1003647732254: {
         "name": "Veo",
         "announcements": 248,
+        "freebie": 26249,
+        "crm_pages": {"Azshinari": "d3f40d05-aa54-498e-bff7-e9c4410b7471", "SAMA KANA MEDIA": "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"},
         "active": 25893,
         "done": 1135,
         "close": 1132,
-        "pages": {"azshinari": "Azshinari", "samakanamedia": "Sama Ka Na Media"},
+        "pages": {
+            "ashinari": "Azshinari", "aszhinari": "Azshinari", "aszihinari": "Azshinari",
+            "azhinari": "Azshinari", "azsginari": "Azshinari", "azsh": "Azshinari",
+            "azshi": "Azshinari", "azshin": "Azshinari", "azshinari": "Azshinari",
+            "samakana": "Sama Ka Na Media", "samakanaadverts": "Sama Ka Na Media",
+            "samakanamedia": "Sama Ka Na Media", "sknm": "Sama Ka Na Media",
+            "smkn": "Sama Ka Na Media",
+        },
     },
     -1004461399292: {
         "name": "Veo Jel",
         "announcements": 2,
+        "freebie": 3003,
+        "crm_pages": {"Onset Media Agency": "fee0cc66-ce01-4ad9-94ef-0c8948ce4f0b"},
         "active": 2917,
         "done": 6,
         "close": 8,
@@ -57,10 +82,10 @@ CLOSE_RE = re.compile(r"(?im)^\s*close\s*deals?\s*:\s*(\d+)")
 DONE_MARKER_RE = re.compile(r"(?im)^\s*(?:paid\b|total\s*(?:payment|pay)\s*:)")
 
 
-def normalize_page(text: str, configured: dict[str, str]) -> str:
+def normalize_page(text: str, configured: dict[str, str]) -> str | None:
     value = text.split("(", 1)[0].strip(" .:-")
     key = re.sub(r"[^a-z0-9]", "", value.casefold())
-    return configured.get(key, value.title() or "Unknown page")
+    return configured.get(key)
 
 
 def parse_page(text: str, configured: dict[str, str]) -> str | None:
@@ -82,7 +107,8 @@ def parse_close_count(text: str) -> int | None:
     match = CLOSE_RE.search(text)
     if match:
         return int(match.group(1))
-    return 1 if parse_price(text) is not None else None
+    price = parse_price(text)
+    return 1 if price is not None and price > 0 else None
 
 
 def money(value: Decimal) -> str:
@@ -102,18 +128,21 @@ def quota_for(count_row: dict | None) -> tuple[int, int, bool]:
 def messages_for_day(chat_id: int, work_date: dt.date) -> tuple[list[dict], bool]:
     start_local = dt.datetime.combine(work_date, dt.time.min, tzinfo=MANILA)
     end_local = start_local + dt.timedelta(days=1)
-    rows = archive_messages(
-        {chat_id},
-        since=start_local.astimezone(dt.timezone.utc),
-        limit=500,
-        group=chat_id,
+    rows = daily_messages(
+        chat_id,
+        start_local.astimezone(dt.timezone.utc),
+        end_local.astimezone(dt.timezone.utc),
     )
-    selected = []
-    for row in rows:
-        sent = dt.datetime.fromisoformat(row["sent_utc"].replace("Z", "+00:00"))
-        if start_local <= sent.astimezone(MANILA) < end_local:
-            selected.append(row)
-    return selected, len(rows) == 500
+    return rows[:500], len(rows) > 500
+
+
+def same_author(user: dict, row: dict) -> bool:
+    user_id, author_id = user.get("user_id"), row.get("author_id")
+    if user_id is not None and author_id is not None:
+        return int(user_id) == int(author_id)
+    name = " ".join((user.get("user_name") or "").split()).casefold()
+    author = " ".join((row.get("author_name") or "").split()).casefold()
+    return bool(name and author and name == author)
 
 
 def build_group_report(
@@ -122,12 +151,15 @@ def build_group_report(
     count_row: dict | None,
     *,
     historical: bool = False,
+    active_users: list[dict] | None = None,
 ) -> str:
     config = GROUPS[chat_id]
     rows, capped = messages_for_day(chat_id, work_date)
     page_stats = defaultdict(lambda: {"cd": 0, "dd": 0, "gross": Decimal("0")})
     employee_stats = defaultdict(lambda: {"dd": 0, "gross": Decimal("0")})
     counted_close_reports: set[tuple[str, str]] = set()
+    deal_rows: list[dict] = []
+    uncertain_rows: list[dict] = []
     skipped_done = 0
     skipped_close = 0
 
@@ -151,28 +183,49 @@ def build_group_report(
         if thread_id == config["done"] or historical_done:
             page = parse_page(text, config["pages"])
             price = parse_price(text)
-            if page is None or price is None:
-                if text.strip():
+            if page is None or price is None or price <= 0:
+                looks_like_deal = bool(
+                    PAGE_RE.search(text) or PRICE_RE.search(text) or DONE_MARKER_RE.search(text)
+                    or row.get("content_type") in {"photo", "video", "document"}
+                )
+                if looks_like_deal:
                     skipped_done += 1
+                    uncertain_rows.append(row)
                 continue
             author = (row.get("author_name") or "Unknown employee").strip()
             page_stats[page]["dd"] += 1
             page_stats[page]["gross"] += price
             employee_stats[author]["dd"] += 1
             employee_stats[author]["gross"] += price
+            deal_rows.append(row)
         elif thread_id == config["close"] or historical_close:
             page = parse_page(text, config["pages"])
             close_count = parse_close_count(text)
             if page is None or close_count is None:
-                if text.strip():
+                looks_like_deal = bool(
+                    PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
+                    or row.get("content_type") in {"photo", "video", "document"}
+                )
+                if looks_like_deal:
                     skipped_close += 1
+                    uncertain_rows.append(row)
                 continue
+            if close_count > 0:
+                deal_rows.append(row)
             if CLOSE_RE.search(text):
                 author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
                 if author_key in counted_close_reports:
                     continue
                 counted_close_reports.add(author_key)
             page_stats[page]["cd"] += close_count
+        elif historical and thread_id is None:
+            # Exported close summaries can duplicate individual CD entries.
+            # They establish that an employee had a CD without changing totals.
+            summary = CLOSE_RE.search(text)
+            if summary and int(summary.group(1)) > 0:
+                deal_rows.append(row)
+            elif (PAGE_RE.search(text) or PRICE_RE.search(text) or DONE_MARKER_RE.search(text)) and text.strip():
+                uncertain_rows.append(row)
 
     for canonical in dict.fromkeys(config["pages"].values()):
         page_stats[canonical]
@@ -181,15 +234,20 @@ def build_group_report(
     dd_total = sum(values["dd"] for values in page_stats.values())
     gross = sum((values["gross"] for values in page_stats.values()), Decimal("0"))
     workers, quota, has_poll = quota_for(count_row)
-    qualified = has_poll and cd_total >= quota and dd_total >= quota
-    rate = Decimal("0.40") if qualified else Decimal("0.35")
-    salaries = {name: values["gross"] * rate for name, values in employee_stats.items()}
-    salary_total = sum(salaries.values(), Decimal("0"))
-    profit = gross - salary_total
+    qualified = has_poll and workers > 0 and cd_total >= quota and dd_total >= quota
+    incomplete = capped or bool(uncertain_rows)
+    rate = None if has_poll and workers > 0 and incomplete and not qualified else (
+        Decimal("0.40") if qualified else Decimal("0.35")
+    )
+    salaries = {
+        name: values["gross"] * rate for name, values in employee_stats.items()
+    } if rate is not None else {}
+    salary_total = sum(salaries.values(), Decimal("0")) if rate is not None else None
+    profit = gross - salary_total if salary_total is not None else None
 
     date_label = work_date.strftime("%A, %B %d, %Y")
-    dd_status = "✅" if has_poll and dd_total >= quota else ("❌" if has_poll else "—")
-    cd_status = "✅" if has_poll and cd_total >= quota else ("❌" if has_poll else "—")
+    dd_status = "✅" if has_poll and workers > 0 and dd_total >= quota else ("❌" if has_poll and workers > 0 else "—")
+    cd_status = "✅" if has_poll and workers > 0 and cd_total >= quota else ("❌" if has_poll and workers > 0 else "—")
     lines = [
         f"📊 {'HISTORICAL SAMPLE' if historical else 'DAILY REPORT'}",
         f"📅 {date_label}",
@@ -197,17 +255,22 @@ def build_group_report(
         "",
         "🎯 QUOTA & RESULT",
     ]
-    if has_poll:
+    if has_poll and workers > 0:
         lines.extend([
             f"Active workers: {workers}",
-            f"Formula: ceil({workers} × 0.8) = {quota}",
+            f"Team target (80%, rounded up): {quota}",
             f"Target: {quota} DD • {quota} CD",
         ])
+    elif has_poll:
+        lines.extend([
+            "Active workers: none recorded",
+            "Target: not set because no one marked themselves active.",
+        ])
     else:
-        lines.extend(["Active workers: no tracked poll", "Target: unavailable for this setup day"])
+        lines.extend(["Active workers: no tracked poll", "Target: unavailable until the poll is confirmed."])
     lines.extend([
         f"Actual: {dd_total} DD {dd_status} • {cd_total} CD {cd_status}",
-        f"Commission: {int(rate * 100)}%",
+        "Commission: needs a quick data review" if rate is None else f"Commission: {int(rate * 100)}%",
         "",
         "📄 PAGE TOTALS",
     ])
@@ -224,25 +287,56 @@ def build_group_report(
             lines.extend([
                 f"{index}. {name}",
                 f"   {values['dd']} DD • {money(values['gross'])} sales",
-                f"   Pay: {money(salaries[name])}",
+                "   Pay: pending data review" if rate is None else f"   Pay: {money(salaries[name])}",
             ])
     else:
-        lines.append("No parsed done deals.")
+        lines.append("No readable Done Deals were recorded.")
+    lines.extend(["", "ACTIVE TEAM MEMBERS WITH NO RECORDED CD OR DD"])
+    if active_users is None and count_row and count_row.get("poll_id"):
+        active_users = daily_poll_active_users(count_row["poll_id"])
+    if active_users is None:
+        lines.append("Names aren't available because no individual Active responses were recorded for this date.")
+    elif capped:
+        lines.append("Names aren't listed because the day exceeded the safe message-review limit.")
+    elif count_row and len(active_users) != int(count_row["active_workers"]):
+        lines.append("Names aren't listed because the Active responses changed while this report was being prepared.")
+    else:
+        no_deals = []
+        uncertain = []
+        for user in active_users:
+            if any(same_author(user, row) for row in deal_rows):
+                continue
+            name = user.get("user_name") or str(user.get("user_id") or "Unknown employee")
+            if any(same_author(user, row) for row in uncertain_rows):
+                uncertain.append(name)
+            else:
+                no_deals.append(name)
+        lines.extend(f"• {name}" for name in sorted(no_deals, key=str.casefold))
+        if not no_deals:
+            lines.append("Everyone has at least one recorded CD or DD.")
+        if uncertain:
+            lines.append("Please review a possible deal post for: " + ", ".join(sorted(uncertain, key=str.casefold)))
     lines.extend([
         "",
         "💰 FINANCIALS",
         f"Gross: {money(gross)}",
-        f"Commissions: −{money(salary_total)}",
-        f"Net profit: {money(profit)}",
+        "Commissions: pending data review" if salary_total is None else f"Commissions: −{money(salary_total)}",
+        "Net profit: pending data review" if profit is None else f"Net profit: {money(profit)}",
     ])
+    if not historical:
+        from freebie_automation import freebie_report_lines
+        try:
+            lines.extend(freebie_report_lines(chat_id, work_date))
+        except Exception:
+            lines.extend(["", "🎁 CONFIRMED FREEBIES SENT", "Freebie assignment data couldn't be loaded for this report."])
     if skipped_done or skipped_close or capped:
         lines.extend(["", "DATA CHECK"])
         if skipped_done:
-            lines.append(f"• {skipped_done} Done Deals message(s) missing a readable page or Price Deal.")
+            lines.append(f"• Please review {skipped_done} possible Done Deals post(s); the page or Price Deal wasn't readable.")
         if skipped_close:
-            lines.append(f"• {skipped_close} Close Deals message(s) missing a readable page or count.")
+            lines.append(f"• Please review {skipped_close} possible Close Deals post(s); the page or count wasn't readable.")
         if capped:
-            lines.append("• The 500-message daily retrieval limit was reached; review this group for overflow.")
+            lines.append("• This group passed the 500-message review limit, so please check it manually for any overflow.")
     if historical:
         lines.extend([
             "",
@@ -252,17 +346,24 @@ def build_group_report(
     return "\n".join(lines)
 
 
-def historical_active_count(chat_id: int, work_date: dt.date) -> int | None:
+def historical_active_users(chat_id: int, work_date: dt.date) -> list[dict] | None:
     previous_date = work_date - dt.timedelta(days=1)
-    rows, _ = messages_for_day(chat_id, previous_date)
+    rows, capped = messages_for_day(chat_id, previous_date)
+    if capped:
+        return None
     excluded = re.compile(r"(?i)inactive|active\s+tomorrow|how\s+many|answer\s+the\s+poll|\bguys\b|\bilan\b|\bsino\b")
-    workers = set()
+    workers = {}
     for row in rows:
         text = row.get("text") or ""
         author = (row.get("author_name") or "").strip()
         if author and re.search(r"(?i)\bactive\b", text) and "?" not in text and not excluded.search(text):
-            workers.add(author.casefold())
-    return len(workers) if workers else None
+            workers[author.casefold()] = {"user_id": row.get("author_id"), "user_name": author}
+    return list(workers.values()) if workers else None
+
+
+def historical_active_count(chat_id: int, work_date: dt.date) -> int | None:
+    users = historical_active_users(chat_id, work_date)
+    return len(users) if users is not None else None
 
 
 def split_message(text: str, limit: int = 4000) -> list[str]:
@@ -271,6 +372,12 @@ def split_message(text: str, limit: int = 4000) -> list[str]:
     parts: list[str] = []
     current = ""
     for line in text.splitlines():
+        while len(line) > limit:
+            if current:
+                parts.append(current)
+                current = ""
+            parts.append(line[:limit])
+            line = line[limit:]
         candidate = line if not current else current + "\n" + line
         if len(candidate) > limit and current:
             parts.append(current)
@@ -294,9 +401,13 @@ def queue_daily_polls(
     for chat_id, config in GROUPS.items():
         if chat_id not in allowed or chat_id in existing_chats:
             continue
+        day_label = "TODAY" if work_date == now.astimezone(MANILA).date() else "TOMORROW"
         payload = {
-            "question": f"ACTIVE FOR TOMORROW\n{work_date.strftime('%A, %B %d, %Y')} (PHT)\nWill you be active?",
-            "options": ["✅ Active", "❌ Not active"],
+            "question": (
+                f"Hi team! Will you be active {day_label.lower()}?\n"
+                f"{work_date.strftime('%A, %B %d, %Y')} (PHT)"
+            ),
+            "options": ["✅ Yes, I'll be active", "❌ No, I won't be active"],
             "is_anonymous": False,
             "allows_multiple_answers": False,
             "disable_notification": False,
@@ -314,26 +425,146 @@ def queue_daily_polls(
     return queued
 
 
-def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None) -> str:
+def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None, *, today: dt.date | None = None) -> str:
     workers, quota, has_poll = quota_for(count_row)
     date_label = work_date.strftime("%A, %B %d, %Y")
+    heading = "TODAY'S QUOTA" if today == work_date else "TOMORROW'S QUOTA"
     if not has_poll:
         return (
-            f"📣 TOMORROW'S QUOTA\n📅 {date_label} (PHT)\n\n"
-            "No tracked availability poll was found. Please contact the manager before applying a quota."
+            f"📣 {heading}\n📅 {date_label} (PHT)\n\n"
+            "We couldn't find the availability poll yet, so no quota has been set. "
+            "Please check with your manager before using a target for this date."
         )
+    if workers == 0:
+        return "\n".join([
+            f"📣 {heading}",
+            f"📅 {date_label} (PHT)",
+            f"🏢 {config['name'].upper()}",
+            "",
+            "No one has marked themselves active yet, so there isn't a team quota for this date.",
+            "Once the Active poll has responses, we'll calculate the target automatically.",
+        ])
     return "\n".join([
-        "📣 TOMORROW'S QUOTA",
+        f"📣 {heading}",
         f"📅 {date_label} (PHT)",
         f"🏢 {config['name'].upper()}",
         "",
-        f"Active workers: {workers}",
-        f"Formula: ceil({workers} × 0.8) = {quota}",
-        f"DD target: {quota}",
-        f"CD target: {quota}",
+        f"We have {workers} active team member{'s' if workers != 1 else ''}.",
+        f"Today's target: {quota} DD and {quota} CD (80%, rounded up).",
         "",
-        "Both DD and CD targets must be reached for 40% commission. Otherwise, commission is 35%.",
+        "Let's work toward both targets together. Reaching both earns the 40% commission rate; otherwise, the rate is 35%.",
     ])
+
+
+def deal_totals_for_day(chat_id: int, work_date: dt.date) -> tuple[int, int, bool, bool]:
+    """Count live DD/CD posts with the same topic and summary rules as reports."""
+    config = GROUPS[chat_id]
+    rows, capped = messages_for_day(chat_id, work_date)
+    dd_total = cd_total = 0
+    uncertain = False
+    counted_close_reports: set[tuple[str, str]] = set()
+    for row in rows:
+        text = row.get("text") or ""
+        thread_id = row.get("thread_id")
+        if thread_id not in {config["done"], config["close"]}:
+            continue
+        page = parse_page(text, config["pages"])
+        if page is None:
+            uncertain = uncertain or bool(
+                PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
+                or row.get("content_type") in {"photo", "video", "document"}
+            )
+            continue
+        if thread_id == config["done"]:
+            if parse_price(text) is not None:
+                dd_total += 1
+            else:
+                uncertain = True
+        elif thread_id == config["close"]:
+            close_count = parse_close_count(text)
+            if close_count is None:
+                uncertain = True
+                continue
+            if CLOSE_RE.search(text):
+                author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
+                if author_key in counted_close_reports:
+                    continue
+                counted_close_reports.add(author_key)
+            cd_total += close_count
+    return dd_total, cd_total, capped, uncertain
+
+
+def quota_reminder(
+    config: dict, work_date: dt.date, hour: int,
+    count_row: dict | None, dd_total: int, cd_total: int, capped: bool, uncertain: bool,
+) -> str:
+    workers, quota, has_poll = quota_for(count_row)
+    encouragement = {
+        7: "Good morning, team! Let's start strong—follow up with interested clients and remember to record each deal in the right topic.",
+        10: "Nice work so far. Keep the conversations moving, and record each new CD and DD as it comes in.",
+        13: "We're making progress! A few thoughtful follow-ups can go a long way—please keep every CD and DD updated.",
+        16: "Afternoon check-in: revisit your open conversations and let's keep moving toward both targets together.",
+        19: "Good evening, team. Follow up with your warm leads and keep the deal topics up to date—we're nearly there!",
+        21: "Final check-in for today. Let's give the remaining conversations our best and record every deal before closeout.",
+    }[hour]
+    lines = [
+        f"📣 DAILY QUOTA CHECK-IN — {hour % 12 or 12}:00 {'AM' if hour < 12 else 'PM'} PHT",
+        f"📅 {work_date.strftime('%A, %B %d, %Y')}",
+        f"🏢 {config['name'].upper()}",
+        "",
+    ]
+    if not has_poll or workers == 0:
+        lines.append(
+            "Quota: waiting for someone to mark themselves active."
+            if has_poll else "Quota: today's Active poll hasn't been recorded yet."
+        )
+    else:
+        lines.append(f"Active workers: {workers} • Target: {quota} DD and {quota} CD")
+    if capped:
+        lines.append("Progress needs a manual check because there were more messages than the report can safely review.")
+    else:
+        lines.append(f"So far: {dd_total} DD • {cd_total} CD" + (" (readable posts only)" if uncertain else ""))
+        if uncertain:
+            lines.append("A few possible deal posts need a quick review, so the exact remaining gap isn't shown yet.")
+        elif has_poll and workers > 0:
+            remaining_dd = max(quota - dd_total, 0)
+            remaining_cd = max(quota - cd_total, 0)
+            lines.append(f"Still needed: {remaining_dd} DD • {remaining_cd} CD")
+            if remaining_dd == 0 and remaining_cd == 0:
+                encouragement = "Both targets are met—wonderful work, team! Please keep recording any new deals until closeout."
+    lines.extend(["", encouragement])
+    if has_poll and workers > 0:
+        lines.append("Reaching both targets earns the 40% commission rate.")
+    return "\n".join(lines)
+
+
+def queue_daily_reminders(work_date: dt.date, hour: int, now: dt.datetime, allowed: set[int]) -> int:
+    if work_date < AUTOMATION_START_DATE or hour not in REMINDER_HOURS:
+        return 0
+    eligible = allowed.intersection(GROUPS)
+    missing = eligible - existing_daily_reminder_chats(work_date, hour, eligible)
+    if not missing:
+        return 0
+    counts = daily_poll_counts(missing, work_date)
+    queued = 0
+    for chat_id, config in GROUPS.items():
+        if chat_id not in missing:
+            continue
+        dd_total, cd_total, capped, uncertain = deal_totals_for_day(chat_id, work_date)
+        reminder = quota_reminder(config, work_date, hour, counts.get(chat_id), dd_total, cd_total, capped, uncertain)
+        if enqueue_scheduled_action(
+            chat_id=chat_id,
+            action_type="message",
+            payload={
+                "text": reminder,
+                "disable_notification": False,
+                "message_thread_id": config["announcements"],
+            },
+            scheduled_for=now,
+            dedupe_key=f"daily-reminder:{work_date.isoformat()}:{hour}:{chat_id}",
+        ):
+            queued += 1
+    return queued
 
 
 def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[int]) -> int:
@@ -346,7 +577,7 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
     for chat_id, config in GROUPS.items():
         if chat_id not in allowed:
             continue
-        announcement = quota_announcement(config, tomorrow, tomorrow_counts.get(chat_id))
+        announcement = quota_announcement(config, tomorrow, tomorrow_counts.get(chat_id), today=now.astimezone(MANILA).date())
         if enqueue_scheduled_action(
             chat_id=chat_id,
             action_type="message",
@@ -389,12 +620,13 @@ def queue_historical_reports(
         for chat_id, config in GROUPS.items():
             if chat_id not in allowed:
                 continue
-            workers = historical_active_count(chat_id, work_date)
+            active_users = historical_active_users(chat_id, work_date)
             report = build_group_report(
                 chat_id,
                 work_date,
-                {"active_workers": workers} if workers is not None else None,
+                {"active_workers": len(active_users)} if active_users is not None else None,
                 historical=True,
+                active_users=active_users,
             )
             report_parts = split_message(report)
             for part_number, part in enumerate(report_parts, 1):
@@ -414,11 +646,17 @@ def queue_historical_reports(
 def run_due_daily_automation(now: dt.datetime, allowed: set[int]) -> int:
     local_now = now.astimezone(MANILA)
     queued = 0
+    today = local_now.date()
+    today_registered = set(daily_poll_counts(allowed, today))
+    if today >= AUTOMATION_START_DATE and any(chat_id in allowed and chat_id not in today_registered for chat_id in GROUPS):
+        queued += queue_daily_polls(today, now, allowed, existing_chats=today_registered)
     tomorrow = local_now.date() + dt.timedelta(days=1)
     registered = set(daily_poll_counts(allowed, tomorrow))
     if any(chat_id in allowed and chat_id not in registered for chat_id in GROUPS):
         queued += queue_daily_polls(tomorrow, now, allowed, existing_chats=registered)
-    if local_now.hour == 0 and local_now.minute < 15:
+    if local_now.hour in REMINDER_HOURS:
+        queued += queue_daily_reminders(local_now.date(), local_now.hour, now, allowed)
+    if local_now.hour == 0:
         queued += queue_daily_closeout(local_now.date() - dt.timedelta(days=1), now, allowed)
     elif local_now.hour == 23 and local_now.minute == 59:
         queued += queue_daily_closeout(local_now.date(), now, allowed)

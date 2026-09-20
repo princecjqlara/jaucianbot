@@ -42,6 +42,18 @@ class TelegramSenderTests(unittest.TestCase):
             "allows_multiple_answers": True,
         })
 
+    def test_repeat_freebie_uses_reminder_and_reply_prompt(self):
+        action = {
+            "chat_id": -100123, "action_type": "message", "sent_at": "2026-09-19T01:00:00Z",
+            "payload": {"text": "Assignment", "freebie_reminder_text": "Reminder",
+                        "parse_mode": "HTML", "reply_markup": {"force_reply": True}},
+        }
+        with patch("telegram_sender.telegram_call", return_value={"message_id": 11}) as call:
+            send_scheduled_action(action)
+        self.assertEqual(call.call_args.args[1]["text"], "Reminder")
+        self.assertEqual(call.call_args.args[1]["parse_mode"], "HTML")
+        self.assertEqual(call.call_args.args[1]["reply_markup"], {"force_reply": True})
+
 
 if __name__ == "__main__":
     unittest.main()

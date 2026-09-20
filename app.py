@@ -17,6 +17,7 @@ from cloud_store import (
     cancel_scheduled_action,
     claim_scheduled_actions,
     create_scheduled_action,
+    daily_poll_counts,
     finish_scheduled_action,
     known_chats,
     list_scheduled_actions,
@@ -25,6 +26,10 @@ from cloud_store import (
     save_update,
 )
 from daily_automation import run_due_daily_automation
+from freebie_automation import (
+    confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
+    freebie_status, poll_answer_chat_today, queue_freebie_assignments,
+)
 from telegram_sender import send_scheduled_action
 
 
@@ -76,6 +81,17 @@ def groups_route(environ, start_response):
         groups = known_chats(allowed_chat_ids())
     except Exception as error:
         print(f"Group discovery query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, "groups": groups})
+
+
+def freebies_status_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        groups = freebie_status(allowed_chat_ids(), dt.datetime.now(dt.timezone.utc))
+    except Exception as error:
+        print(f"Freebie status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, "groups": groups})
 
@@ -236,34 +252,37 @@ def schedules_route(environ, start_response, method: str):
         return response(start_response, 503, {"ok": False})
 
 
-def dispatch_route(environ, start_response):
-    try:
-        allowed = allowed_chat_ids()
-        queued = run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
-        actions = claim_scheduled_actions(allowed, limit=10)
-    except Exception as error:
-        print(f"Schedule claim failed: {type(error).__name__}")
-        return response(start_response, 503, {"ok": False, "queued": 0, "processed": 0, "sent": 0, "failed": 0})
+def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int, int]:
+    actions = claim_scheduled_actions(allowed, limit=limit)
     sent = 0
     failed = 0
     for action in actions:
         try:
+            if is_freebie_action(action) and not freebie_delivery_allowed(action, dt.datetime.now(dt.timezone.utc)):
+                finish_scheduled_action(action["id"], success=True)
+                continue
+            daily_poll_date = action["payload"].get("daily_poll_date")
+            is_daily_poll = action["action_type"] == "poll" and bool(daily_poll_date)
+            if is_daily_poll:
+                work_date = dt.date.fromisoformat(daily_poll_date)
+                existing = daily_poll_counts({int(action["chat_id"])}, work_date).get(int(action["chat_id"]))
+                if existing:
+                    finish_scheduled_action(action["id"], success=True)
+                    continue
             message = send_scheduled_action(action)
             message_id = int(message["message_id"])
+            if is_daily_poll:
+                if not register_daily_poll(
+                    poll_id=message["poll"]["id"],
+                    chat_id=int(action["chat_id"]),
+                    thread_id=int(action["payload"]["message_thread_id"]),
+                    work_date=work_date,
+                    telegram_message_id=message_id,
+                ):
+                    raise RuntimeError("daily poll was not registered")
             if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id):
                 raise RuntimeError("schedule was not finalized")
             sent += 1
-            if action["action_type"] == "poll" and action["payload"].get("daily_poll_date"):
-                try:
-                    register_daily_poll(
-                        poll_id=message["poll"]["id"],
-                        chat_id=int(action["chat_id"]),
-                        thread_id=int(action["payload"]["message_thread_id"]),
-                        work_date=dt.date.fromisoformat(action["payload"]["daily_poll_date"]),
-                        telegram_message_id=message_id,
-                    )
-                except Exception as poll_error:
-                    print(f"Daily poll registration failed: {type(poll_error).__name__}")
             try:
                 save_update({"message": message}, allowed)
             except Exception as archive_error:
@@ -275,11 +294,27 @@ def dispatch_route(environ, start_response):
                 finish_scheduled_action(action["id"], success=False, error=str(error))
             except Exception as finish_error:
                 print(f"Schedule failure update failed: {type(finish_error).__name__}")
+    return len(actions), sent, failed
+
+
+def dispatch_route(environ, start_response):
+    try:
+        allowed = allowed_chat_ids()
+        queued = run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
+        if os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
+            try:
+                queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), allowed)
+            except Exception as freebie_error:
+                print(f"Freebie queue failed: {type(freebie_error).__name__}")
+        processed, sent, failed = deliver_due_actions(allowed, limit=25)
+    except Exception as error:
+        print(f"Schedule claim failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "queued": 0, "processed": 0, "sent": 0, "failed": 0})
     status = 200 if failed == 0 else 502
     return response(start_response, status, {
         "ok": failed == 0,
         "queued": queued,
-        "processed": len(actions),
+        "processed": processed,
         "sent": sent,
         "failed": failed,
     })
@@ -303,12 +338,23 @@ def webhook_route(environ, start_response):
         return response(start_response, 503, {"ok": False, "error": "invalid configuration"})
     try:
         if "poll_answer" in update:
-            save_poll_answer(update, allowed)
+            stored = save_poll_answer(update, allowed)
         else:
-            save_update(update, allowed)
+            stored = save_update(update, allowed)
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})
+    if stored and os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
+        try:
+            if "poll_answer" in update:
+                chat_id = poll_answer_chat_today(update["poll_answer"].get("poll_id", ""), allowed, dt.datetime.now(dt.timezone.utc))
+                if chat_id and queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), {chat_id}):
+                    deliver_due_actions({chat_id}, limit=5)
+            elif confirm_freebie_reply(update, allowed):
+                chat_id = (update.get("message") or update.get("edited_message") or {}).get("chat", {}).get("id")
+                deliver_due_actions({chat_id}, limit=5)
+        except Exception as error:
+            print(f"Webhook freebie automation delayed: {type(error).__name__}")
     return response(start_response, 200, {"ok": True})
 
 
@@ -323,12 +369,14 @@ def app(environ, start_response):
         return messages_route(environ, start_response)
     if path == "/api/groups" and method == "GET":
         return groups_route(environ, start_response)
+    if path == "/api/freebies/status" and method == "GET":
+        return freebies_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/groups", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/groups", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

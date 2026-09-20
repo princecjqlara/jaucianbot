@@ -14,6 +14,8 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
    | `TELEGRAM_BOT_TOKEN` | Bot token used by the outbound scheduler. |
    | `SUPABASE_URL` | This project's HTTPS Supabase URL. |
    | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, for server-side use only. |
+   | `CRM_SUPABASE_URL` | Separate CRM Supabase project URL for freebie assignments. |
+   | `CRM_SUPABASE_SERVICE_ROLE_KEY` | CRM service role key, server-side only. Never use a `NEXT_PUBLIC_` variable for it. |
    | `ALLOWED_CHAT_IDS` | Comma-separated numeric IDs of the approved groups. |
    | `TELEGRAM_WEBHOOK_SECRET` | Random secret generated in `.env.local`. |
    | `INSIGHTS_API_KEY` | Separate random secret generated in `.env.local`. |
@@ -23,13 +25,13 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
 4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. It reads the same webhook secret from `.env.local`. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
 5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN`. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
 6. In the cron-job.org Console, create a GET job for `https://YOUR-PRODUCTION-DOMAIN/api/health` every 15 minutes. The endpoint checks Vercel and Supabase and returns only `{"ok": true}`. Dashboard setup does not need an API key or request headers. The optional `configure_cronjob.py` script uses a cron-job.org API key only when creating the job through its REST API.
-7. Create a second GET job for `https://YOUR-PRODUCTION-DOMAIN/api/cron/dispatch` every minute. It atomically claims due scheduled actions and sends them. It accepts no user content, needs no cron-job.org API key or headers, and returns only delivery counts.
+7. Optionally create a second GET job for `https://YOUR-PRODUCTION-DOMAIN/api/cron/dispatch` every minute for tighter delivery timing. The deployed Vercel crons already run at midnight and hourly from 7 AM through 9 PM Philippine time. The endpoint atomically claims due scheduled actions and returns only delivery counts.
 
 Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and service role key private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
 
 When the bot is added to a new group, send one message there and run `./remote_windows.ps1 groups`. The webhook records the group's ID and title for approval but does not save its messages until its exact ID is added to `ALLOWED_CHAT_IDS` and Vercel is redeployed.
 
-The webhook handles new messages as they arrive. The cron-job.org task only monitors `/api/health`; it does not consume Telegram updates. See [cron-job.org's documentation](https://docs.cron-job.org/) and [Telegram's webhook documentation](https://core.telegram.org/bots/api#setwebhook).
+The webhook handles new messages as they arrive. A cron-job.org task does not consume Telegram updates. See [cron-job.org's documentation](https://docs.cron-job.org/) and [Telegram's webhook documentation](https://core.telegram.org/bots/api#setwebhook).
 
 ## Windows setup
 
@@ -76,15 +78,24 @@ Schedule controls use the private `INSIGHTS_API_KEY` stored for this Windows acc
 ./remote_windows.ps1 cancel-schedule SCHEDULE_ID
 ```
 
-Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notifications, or `--thread TOPIC_ID` for a forum topic. Polls also accept `--multiple` and `--public`. Failed deliveries retry after five minutes up to five attempts. A cron run sends up to ten due actions, so the one-minute job catches newly due work promptly.
+Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notifications, or `--thread TOPIC_ID` for a forum topic. Polls also accept `--multiple` and `--public`. Failed deliveries retry after five minutes up to five attempts. A cron run sends up to 25 due actions.
 
 ## Daily quota and sales automation
 
-The one-minute dispatcher also runs the four configured Veo group workflows in Philippine time:
+The dispatcher also runs the four configured Veo group workflows in Philippine time:
 
-- At 12:00 AM it posts a dated, nonanonymous Active/Not Active poll for the following day in each **Active for Tomorrow** topic.
-- At 11:59 PM it calculates `ceil(active workers × 0.8)`. The same number is the group target for Done Deals and Close Deals, and it posts the following day's target in each announcements topic.
+- Around midnight it posts a dated, nonanonymous Active/Not Active poll for the following day in each **Active for Tomorrow** topic. If today's poll is missing, it posts a catch-up poll for today.
+- At daily closeout it calculates `ceil(active workers × 0.8)`. The same number is the group target for Done Deals and Close Deals, and it posts the next day's target in each announcements topic.
+- At **7:00 AM, 10:00 AM, 1:00 PM, 4:00 PM, 7:00 PM, and 9:00 PM Philippine time**, it posts one reminder in each Veo team's announcements topic. Each reminder reads the latest tracked Active poll and that day's Done Deals and Close Deals posts, shows the target, current totals, and how many DD and CD are still needed, then adds a short encouragement. If the poll or deal data is incomplete, it says so instead of showing an unverified gap.
+- `vercel.json` schedules midnight closeout and hourly daytime dispatches. Dedupe keys prevent duplicate reminders if another dispatcher also runs. Vercel Hobby cron timing can drift within the scheduled hour.
 - It reads that day's configured Done Deals and Close Deals topics, groups results by page, totals Price Deal amounts, and posts one organized report per group to **DAILY REPORTS**.
 - Employees are ranked by Price Deal sales. When the group reaches both its DD and CD targets, each employee's pay is 40% of their Price Deal total; otherwise it is 35%. Profit is gross Price Deal value less those commissions.
+- Each report lists people who answered **Active** in that day's named poll but had no parsed CD or DD. Telegram user IDs match poll answers to live deal posts. Unreadable deal posts are flagged for review instead of counting their authors as having no deals. Historical samples use "active" replies from the previous Philippine day and match exported deal posts by display name.
 
 The report flags messages it cannot parse. Deal entries should include `Page:` plus `Price Deal:` or `PD:`. Close Deal summaries should include `Page name:` and `Close Deal:`. The commission calculation uses Price Deal and excludes tips, revisions, down payments, and Total Payment differences.
+
+## Paid-client freebie assignments
+
+The dispatcher reads the CRM's `Paid`, `PAID`, or `Paid / Availed Service` contact tags for the six configured Veo pages. It chooses older conversations first and posts one assignment per currently Active poll voter in that team's **Freebie Reminder** topic. Each assignment mentions exactly one member and names the paid client, CRM contact ID, and page. A member keeps one open assignment at a time. A reminder becomes due every three hours and is delivered on the next hourly dispatch during 7 AM–9:59 PM Philippine time. The bot checks the current day's Active poll before each reminder and does not remind inactive members.
+
+To confirm a freebie was sent, the assigned member replies to the bot's assignment or reminder with `FREEBIE SENT ABCD1234`, replacing the sample code with the code from their assignment. The bot accepts only that member's exact code in the Freebie Reminder topic, stops the reminders, and queues another eligible paid client while the member is active. Active poll votes and completion replies trigger assignment delivery through the webhook; the scheduled dispatches also pick up any pending work. Replying directly also works when Telegram bot privacy mode is enabled. A client cannot be assigned another freebie until seven full days after the previous freebie was confirmed sent. If no eligible paid contact is available, the bot gives each waiting active member one quiet notice per Philippine day and keeps checking automatically. Workers should still check the CRM conversation before sending to avoid repeating a freebie. The daily report counts these member confirmations by person, CRM page, and team; it cannot independently prove client delivery.
