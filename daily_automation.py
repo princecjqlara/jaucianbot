@@ -235,8 +235,19 @@ def build_group_report(
     gross = sum((values["gross"] for values in page_stats.values()), Decimal("0"))
     workers, quota, has_poll = quota_for(count_row)
     qualified = has_poll and workers > 0 and cd_total >= quota and dd_total >= quota
-    incomplete = capped or bool(uncertain_rows)
-    rate = None if has_poll and workers > 0 and incomplete and not qualified else (
+    # A review should block payroll only when it could actually change the
+    # commission tier. Each unreadable Done Deals post can add at most one DD.
+    # An unreadable Close Deals post may be a summary, so its possible CD count
+    # is deliberately left unbounded. A capped day is likewise indeterminate.
+    dd_could_reach_quota = dd_total + skipped_done >= quota
+    cd_could_reach_quota = cd_total >= quota or skipped_close > 0
+    commission_needs_review = (
+        has_poll
+        and workers > 0
+        and not qualified
+        and (capped or (dd_could_reach_quota and cd_could_reach_quota))
+    )
+    rate = None if commission_needs_review else (
         Decimal("0.40") if qualified else Decimal("0.35")
     )
     salaries = {

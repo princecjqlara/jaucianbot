@@ -199,10 +199,12 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("Commission: 35%", report)
         self.assertNotIn("Commission: 40%", report)
 
-    def test_incomplete_deal_data_does_not_guess_pay_or_profit(self):
+    def test_ambiguous_deal_data_does_not_guess_pay_or_profit(self):
         rows = [
             {"thread_id": 1135, "author_name": "Alex",
              "text": "Page: Azshinari\nPrice Deal: 1,000"},
+            {"thread_id": 1135, "author_name": "Casey",
+             "text": "Page: Azshinari\nPrice Deal: 800"},
             {"thread_id": 1132, "author_name": "Bea",
              "text": "Page: Azshinari\nClose Deal: pending"},
         ]
@@ -214,6 +216,28 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("Commission: needs a quick data review", report)
         self.assertIn("Pay: pending data review", report)
         self.assertIn("Net profit: pending data review", report)
+
+    def test_review_does_not_block_35_percent_when_quota_cannot_be_reached(self):
+        rows = [
+            {"thread_id": 1135, "author_name": "Alex",
+             "text": "Page: Azshinari\nPrice Deal: 1,000"},
+            {"thread_id": 1135, "author_name": "Bea",
+             "text": "Page: Azshinari\nPrice Deal: 800"},
+            {"thread_id": 1135, "author_name": "Bea", "content_type": "photo", "text": ""},
+            {"thread_id": 1132, "author_name": "Alex",
+             "text": "Page: Azshinari\nClose Deal: 4"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(
+                -1003647732254, dt.date(2026, 9, 21), {"active_workers": 5},
+                active_users=[],
+            )
+        self.assertIn("Target: 4 DD", report)
+        self.assertIn("Commission: 35%", report)
+        self.assertIn("Pay:", report)
+        self.assertIn("Net profit:", report)
+        self.assertIn("Please review 1 possible Done Deals post", report)
+        self.assertNotIn("pending data review", report)
 
     def test_casual_topic_replies_are_not_flagged_as_broken_deals(self):
         rows = [
