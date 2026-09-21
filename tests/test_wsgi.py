@@ -74,6 +74,29 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["groups"], discovered)
         query.assert_called_once_with({-100123})
 
+    def test_worker_activity_is_authenticated_and_scoped_to_approved_group(self):
+        report = {"team": "Veo", "workers": []}
+        with patch.dict(
+            os.environ,
+            {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-1003647732254"},
+        ), patch("app.worker_activity_report", return_value=report) as activity:
+            status, payload = call_app(
+                "/api/workers/activity",
+                query="group=-1003647732254&days=14",
+                headers={"Authorization": "Bearer correct"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["activity"], report)
+        self.assertEqual(activity.call_args.args[:2], (-1003647732254, 14))
+
+        with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-100123"}):
+            status, _ = call_app(
+                "/api/workers/activity",
+                query="group=-1003647732254&days=14",
+                headers={"Authorization": "Bearer correct"},
+            )
+        self.assertEqual(status, 403)
+
     def test_webhook_stores_valid_update(self):
         body = json.dumps({"update_id": 1}).encode()
         with patch.dict(

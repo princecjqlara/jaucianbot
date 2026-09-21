@@ -31,6 +31,7 @@ from freebie_automation import (
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
 )
 from telegram_sender import send_scheduled_action
+from worker_activity import worker_activity_report
 
 
 MAX_BODY_BYTES = 1_000_000
@@ -123,6 +124,30 @@ def messages_route(environ, start_response):
         print(f"Messages query failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, "messages": messages})
+
+
+def workers_activity_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    args = parse_qs(environ.get("QUERY_STRING", ""))
+    try:
+        group = int(args["group"][0])
+        days = int(args.get("days", ["14"])[0])
+        if not 1 <= days <= 31:
+            raise ValueError("days must be between 1 and 31")
+    except (KeyError, ValueError, IndexError):
+        return response(start_response, 400, {"ok": False, "error": "valid group and days are required"})
+    allowed = allowed_chat_ids()
+    if group not in allowed:
+        return response(start_response, 403, {"ok": False})
+    try:
+        report = worker_activity_report(group, days, dt.datetime.now(dt.timezone.utc))
+    except KeyError:
+        return response(start_response, 400, {"ok": False, "error": "group has no worker automation configuration"})
+    except Exception as error:
+        print(f"Worker activity query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, "activity": report})
 
 
 def read_json_body(environ) -> dict:
@@ -367,6 +392,8 @@ def app(environ, start_response):
         return health_route(environ, start_response)
     if path == "/api/messages" and method == "GET":
         return messages_route(environ, start_response)
+    if path == "/api/workers/activity" and method == "GET":
+        return workers_activity_route(environ, start_response)
     if path == "/api/groups" and method == "GET":
         return groups_route(environ, start_response)
     if path == "/api/freebies/status" and method == "GET":
@@ -377,6 +404,6 @@ def app(environ, start_response):
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/groups", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

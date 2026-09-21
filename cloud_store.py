@@ -282,6 +282,46 @@ def daily_poll_active_users(poll_id: str) -> list[dict]:
     return request("daily_poll_answers?" + filters) or []
 
 
+def activity_messages(
+    chat_id: int,
+    start_utc: dt.datetime,
+    end_utc: dt.datetime,
+    thread_ids: set[int],
+) -> list[dict]:
+    """Read all deal-topic messages in a bounded period, with pagination."""
+    result: list[dict] = []
+    offset = 0
+    while True:
+        filters = urllib.parse.urlencode({
+            "select": "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source",
+            "chat_id": f"eq.{chat_id}",
+            "sent_utc": f"gte.{start_utc.isoformat()}",
+            "sent_utc": f"lt.{end_utc.isoformat()}",
+            "thread_id": "in.(" + ",".join(str(value) for value in sorted(thread_ids)) + ")",
+            "order": "sent_utc.asc,message_id.asc",
+            "limit": 1000,
+            "offset": offset,
+        })
+        rows = request("messages?" + filters) or []
+        result.extend(rows)
+        if len(rows) < 1000:
+            return result
+        offset += 1000
+
+
+def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date) -> list[dict]:
+    """Read every poll answer for a team over an inclusive date range."""
+    filters = urllib.parse.urlencode({
+        "select": "user_id,user_name,active,daily_polls!inner(work_date,chat_id)",
+        "daily_polls.chat_id": f"eq.{chat_id}",
+        "daily_polls.work_date": f"gte.{start_date.isoformat()}",
+        "daily_polls.work_date": f"lte.{end_date.isoformat()}",
+        "order": "user_id.asc",
+        "limit": 10000,
+    })
+    return request("daily_poll_answers?" + filters) or []
+
+
 def freebie_actions(allowed: set[int]) -> list[dict]:
     """Read assignment history from the existing durable scheduler table."""
     if not allowed:

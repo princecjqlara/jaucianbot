@@ -76,6 +76,7 @@ Schedule controls use the private `INSIGHTS_API_KEY` stored for this Windows acc
 ./remote_windows.ps1 schedule-poll --group CHAT_ID --at '2026-09-20T10:00:00+08:00' --question 'Lunch?' --option 'Pizza' --option 'Rice'
 ./remote_windows.ps1 schedules --status pending
 ./remote_windows.ps1 cancel-schedule SCHEDULE_ID
+./remote_windows.ps1 workers --group CHAT_ID --days 14
 ```
 
 Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notifications, or `--thread TOPIC_ID` for a forum topic. Polls also accept `--multiple` and `--public`. Failed deliveries retry after five minutes up to five attempts. A cron run sends up to 25 due actions.
@@ -86,13 +87,15 @@ The dispatcher also runs the four configured Veo group workflows in Philippine t
 
 - Around midnight it posts a dated, nonanonymous Active/Not Active poll for the following day in each **Active for Tomorrow** topic. If today's poll is missing, it posts a catch-up poll for today.
 - At daily closeout it calculates `ceil(active workers × 0.8)`. The same number is the group target for Done Deals and Close Deals, and it posts the next day's target in each announcements topic.
-- At **7:00 AM, 10:00 AM, 1:00 PM, 4:00 PM, 7:00 PM, and 9:00 PM Philippine time**, it posts one reminder in each Veo team's announcements topic. Each reminder reads the latest tracked Active poll and that day's Done Deals and Close Deals posts, shows the target, current totals, and how many DD and CD are still needed, then adds a short encouragement. If the poll or deal data is incomplete, it says so instead of showing an unverified gap.
+- At **7:00 AM, 10:00 AM, 1:00 PM, 4:00 PM, 7:00 PM, and 9:00 PM Philippine time**, it posts one reminder in each Veo team's announcements topic. Each reminder reads the latest tracked Active poll and that day's Done Deals and Close Deals posts, shows the target, current totals, and how many DD and CD are still needed, then adds a short encouragement. From 10:00 AM onward it identifies Active voters with no readable CD/DD yet; possible unreadable posts are listed separately instead of treating their authors as inactive. Afternoon and evening reminders show the current sales leader and recommend whether the next focus should be new CDs or converting open CDs into paid DDs. If the poll or deal data is incomplete, it says so instead of showing an unverified gap.
 - `vercel.json` schedules midnight closeout and hourly daytime dispatches. Dedupe keys prevent duplicate reminders if another dispatcher also runs. Vercel Hobby cron timing can drift within the scheduled hour.
 - It reads that day's configured Done Deals and Close Deals topics, groups results by page, totals Price Deal amounts, and posts one organized report per group to **DAILY REPORTS**.
 - Employees are ranked by Price Deal sales. When the group reaches both its DD and CD targets, each employee's pay is 40% of their Price Deal total; otherwise it is 35%. Profit is gross Price Deal value less those commissions. An unreadable post is still flagged, but pay stays available when the unresolved posts cannot possibly change the commission tier; only a genuinely undecidable tier remains pending review.
 - Each report lists people who answered **Active** in that day's named poll but had no parsed CD or DD. Telegram user IDs match poll answers to live deal posts. Unreadable deal posts are flagged for review instead of counting their authors as having no deals. Historical samples use "active" replies from the previous Philippine day and match exported deal posts by display name.
 
 The report flags messages it cannot parse. Deal entries should include `Page:` plus `Price Deal:` or `PD:`. Close Deal summaries should include `Page name:` and `Close Deal:`. The commission calculation uses Price Deal and excludes tips, revisions, down payments, and Total Payment differences.
+
+The authenticated `workers` view is for manager coaching. It ranks recorded DD, CD, sales, confirmed freebies, and a transparent activity score; reports Active days with no readable deals; estimates each person's strongest deal-posting hour; and supplies specific improvement suggestions. It does not treat chat volume or login time as productivity, does not penalize people who selected Not Active, and keeps unreadable posts visible as a data-quality issue. The score is operational guidance only and is never used for payroll.
 
 ## Paid-client freebie assignments
 

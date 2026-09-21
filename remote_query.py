@@ -23,6 +23,9 @@ def main() -> None:
     messages.add_argument("--days", type=float, default=7)
     messages.add_argument("--limit", type=int, default=200)
     messages.add_argument("--query")
+    workers = commands.add_parser("workers")
+    workers.add_argument("--group", type=int, required=True)
+    workers.add_argument("--days", type=int, default=14)
     schedules = commands.add_parser("schedules")
     schedules.add_argument("--status", choices=["pending", "processing", "sent", "failed", "cancelled"])
     schedules.add_argument("--limit", type=int, default=100)
@@ -64,6 +67,11 @@ def main() -> None:
         if args.query:
             params["q"] = args.query
         path = "/api/messages?" + urllib.parse.urlencode(params)
+    elif args.command == "workers":
+        path = "/api/workers/activity?" + urllib.parse.urlencode({
+            "group": args.group,
+            "days": args.days,
+        })
     elif args.command == "schedules":
         params = {"limit": args.limit}
         if args.status:

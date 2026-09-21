@@ -8,6 +8,7 @@ from unittest.mock import patch
 from daily_automation import (
     GROUPS,
     build_group_report,
+    deal_progress_for_day,
     deal_totals_for_day,
     parse_close_count,
     parse_page,
@@ -271,12 +272,44 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("So far: 2 DD • 3 CD", reminder)
         self.assertIn("Still needed: 2 DD • 1 CD", reminder)
 
+    def test_smart_reminder_shows_leader_and_active_members_needing_help(self):
+        rows = [
+            {"thread_id": 1135, "author_id": 1, "author_name": "Alex",
+             "text": "Page: Azshinari\nPrice Deal: 1,000"},
+            {"thread_id": 1132, "author_id": 2, "author_name": "Bea",
+             "text": "Page: Azshinari\nClose Deal: 2"},
+            {"thread_id": 1135, "author_id": 3, "author_name": "Casey",
+             "text": "Page: Azshinari\nPrice Deal: pending"},
+        ]
+        active_users = [
+            {"user_id": 1, "user_name": "Alex"},
+            {"user_id": 2, "user_name": "Bea"},
+            {"user_id": 3, "user_name": "Casey"},
+            {"user_id": 4, "user_name": "Dani"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            progress = deal_progress_for_day(-1003647732254, dt.date(2026, 9, 19))
+        reminder = quota_reminder(
+            GROUPS[-1003647732254], dt.date(2026, 9, 19), 19,
+            {"active_workers": 4},
+            progress["dd_total"], progress["cd_total"], progress["capped"], progress["uncertain"],
+            progress=progress, active_users=active_users,
+        )
+        self.assertIn("Current sales leader: Alex — 1 DD, ₱1,000 sales", reminder)
+        self.assertIn("Active members with no recorded CD or DD yet: Dani.", reminder)
+        self.assertIn("Possible activity awaiting a readable post: Casey.", reminder)
+        self.assertNotIn("yet: Alex", reminder)
+        self.assertNotIn("yet: Bea", reminder)
+
     def test_reminders_go_to_all_announcements_topics_once_per_slot(self):
         now = dt.datetime(2026, 9, 18, 23, tzinfo=dt.timezone.utc)
         with patch("daily_automation.daily_poll_counts", return_value={
             chat_id: {"active_workers": 5} for chat_id in GROUPS
         }), patch("daily_automation.existing_daily_reminder_chats", return_value=set()), \
-             patch("daily_automation.deal_totals_for_day", return_value=(2, 3, False, False)), \
+             patch("daily_automation.deal_progress_for_day", return_value={
+                 "dd_total": 2, "cd_total": 3, "capped": False, "uncertain": False,
+                 "deal_rows": [], "uncertain_rows": [], "workers": [],
+             }), \
              patch("daily_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             queued = queue_daily_reminders(dt.date(2026, 9, 19), 7, now, set(GROUPS))
         self.assertEqual(queued, 4)
@@ -292,7 +325,7 @@ class DailyAutomationTests(unittest.TestCase):
         now = dt.datetime(2026, 9, 18, 23, 30, tzinfo=dt.timezone.utc)
         with patch("daily_automation.existing_daily_reminder_chats", return_value=set(GROUPS)), \
              patch("daily_automation.daily_poll_counts") as counts, \
-             patch("daily_automation.deal_totals_for_day") as deals, \
+             patch("daily_automation.deal_progress_for_day") as deals, \
              patch("daily_automation.enqueue_scheduled_action") as enqueue:
             self.assertEqual(queue_daily_reminders(date, 7, now, set(GROUPS)), 0)
         counts.assert_not_called()

@@ -469,11 +469,35 @@ def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None,
 
 def deal_totals_for_day(chat_id: int, work_date: dt.date) -> tuple[int, int, bool, bool]:
     """Count live DD/CD posts with the same topic and summary rules as reports."""
+    progress = deal_progress_for_day(chat_id, work_date)
+    return (
+        progress["dd_total"], progress["cd_total"],
+        progress["capped"], progress["uncertain"],
+    )
+
+
+def deal_progress_for_day(chat_id: int, work_date: dt.date) -> dict:
+    """Return team totals plus per-worker activity for an in-day reminder."""
     config = GROUPS[chat_id]
     rows, capped = messages_for_day(chat_id, work_date)
     dd_total = cd_total = 0
-    uncertain = False
+    deal_rows: list[dict] = []
+    uncertain_rows: list[dict] = []
+    worker_stats: dict[tuple[str, object], dict] = {}
     counted_close_reports: set[tuple[str, str]] = set()
+
+    def worker(row: dict) -> dict:
+        author_id = row.get("author_id")
+        name = " ".join((row.get("author_name") or "Unknown employee").split())
+        key = ("id", int(author_id)) if author_id is not None else ("name", name.casefold())
+        return worker_stats.setdefault(key, {
+            "user_id": int(author_id) if author_id is not None else None,
+            "name": name,
+            "dd": 0,
+            "cd": 0,
+            "gross": Decimal("0"),
+        })
+
     for row in rows:
         text = row.get("text") or ""
         thread_id = row.get("thread_id")
@@ -481,20 +505,26 @@ def deal_totals_for_day(chat_id: int, work_date: dt.date) -> tuple[int, int, boo
             continue
         page = parse_page(text, config["pages"])
         if page is None:
-            uncertain = uncertain or bool(
+            if (
                 PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
                 or row.get("content_type") in {"photo", "video", "document"}
-            )
+            ):
+                uncertain_rows.append(row)
             continue
         if thread_id == config["done"]:
-            if parse_price(text) is not None:
+            price = parse_price(text)
+            if price is not None and price > 0:
                 dd_total += 1
+                stats = worker(row)
+                stats["dd"] += 1
+                stats["gross"] += price
+                deal_rows.append(row)
             else:
-                uncertain = True
+                uncertain_rows.append(row)
         elif thread_id == config["close"]:
             close_count = parse_close_count(text)
             if close_count is None:
-                uncertain = True
+                uncertain_rows.append(row)
                 continue
             if CLOSE_RE.search(text):
                 author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
@@ -502,12 +532,24 @@ def deal_totals_for_day(chat_id: int, work_date: dt.date) -> tuple[int, int, boo
                     continue
                 counted_close_reports.add(author_key)
             cd_total += close_count
-    return dd_total, cd_total, capped, uncertain
+            if close_count > 0:
+                worker(row)["cd"] += close_count
+                deal_rows.append(row)
+    return {
+        "dd_total": dd_total,
+        "cd_total": cd_total,
+        "capped": capped,
+        "uncertain": bool(uncertain_rows),
+        "deal_rows": deal_rows,
+        "uncertain_rows": uncertain_rows,
+        "workers": list(worker_stats.values()),
+    }
 
 
 def quota_reminder(
     config: dict, work_date: dt.date, hour: int,
     count_row: dict | None, dd_total: int, cd_total: int, capped: bool, uncertain: bool,
+    *, progress: dict | None = None, active_users: list[dict] | None = None,
 ) -> str:
     workers, quota, has_poll = quota_for(count_row)
     encouragement = {
@@ -543,6 +585,54 @@ def quota_reminder(
             lines.append(f"Still needed: {remaining_dd} DD • {remaining_cd} CD")
             if remaining_dd == 0 and remaining_cd == 0:
                 encouragement = "Both targets are met—wonderful work, team! Please keep recording any new deals until closeout."
+
+    if progress and not capped:
+        activity_workers = sorted(
+            progress.get("workers") or [],
+            key=lambda item: (-item["gross"], -item["dd"], -item["cd"], item["name"].casefold()),
+        )
+        if activity_workers and hour >= 13:
+            leader = activity_workers[0]
+            if leader["gross"] > 0:
+                lines.append(
+                    f"Current sales leader: {leader['name']} — {leader['dd']} DD, {money(leader['gross'])} sales."
+                )
+            elif leader["cd"] > 0:
+                lines.append(f"Current activity leader: {leader['name']} — {leader['cd']} CD.")
+
+        if active_users is not None and hour >= 10:
+            no_activity: list[str] = []
+            awaiting_review: list[str] = []
+            for user in active_users:
+                if any(same_author(user, row) for row in progress.get("deal_rows") or []):
+                    continue
+                name = user.get("user_name") or str(user.get("user_id") or "Unknown employee")
+                if any(same_author(user, row) for row in progress.get("uncertain_rows") or []):
+                    awaiting_review.append(name)
+                else:
+                    no_activity.append(name)
+            if no_activity:
+                lines.append(
+                    "Active members with no recorded CD or DD yet: "
+                    + ", ".join(sorted(no_activity, key=str.casefold))
+                    + "."
+                )
+            if awaiting_review:
+                lines.append(
+                    "Possible activity awaiting a readable post: "
+                    + ", ".join(sorted(awaiting_review, key=str.casefold))
+                    + "."
+                )
+
+    if has_poll and workers > 0 and not capped and not uncertain:
+        remaining_dd = max(quota - dd_total, 0)
+        remaining_cd = max(quota - cd_total, 0)
+        if remaining_cd and remaining_dd:
+            lines.append("Next focus: advance client conversations, then follow through to payment and record both CD and DD.")
+        elif remaining_cd:
+            lines.append("Next focus: create more qualified client conversations and record each new CD.")
+        elif remaining_dd:
+            lines.append("Next focus: follow up open CDs for payment and record each completed DD.")
     lines.extend(["", encouragement])
     if has_poll and workers > 0:
         lines.append("Reaching both targets earns the 40% commission rate.")
@@ -561,8 +651,16 @@ def queue_daily_reminders(work_date: dt.date, hour: int, now: dt.datetime, allow
     for chat_id, config in GROUPS.items():
         if chat_id not in missing:
             continue
-        dd_total, cd_total, capped, uncertain = deal_totals_for_day(chat_id, work_date)
-        reminder = quota_reminder(config, work_date, hour, counts.get(chat_id), dd_total, cd_total, capped, uncertain)
+        count_row = counts.get(chat_id)
+        progress = deal_progress_for_day(chat_id, work_date)
+        active_users = None
+        if count_row and count_row.get("poll_id"):
+            active_users = daily_poll_active_users(count_row["poll_id"])
+        reminder = quota_reminder(
+            config, work_date, hour, count_row,
+            progress["dd_total"], progress["cd_total"], progress["capped"], progress["uncertain"],
+            progress=progress, active_users=active_users,
+        )
         if enqueue_scheduled_action(
             chat_id=chat_id,
             action_type="message",
