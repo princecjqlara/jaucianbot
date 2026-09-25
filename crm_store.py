@@ -61,3 +61,46 @@ def paid_contacts(page_id: str) -> list[dict]:
                 break
             offset += 1000
     return list(contacts.values())
+
+
+def completed_detail_contacts(page_id: str) -> list[dict]:
+    """Return contacts whose chatbot finished collecting the configured details.
+
+    The chatbot state is authoritative for completion.  ``contacts.pipeline_stage``
+    is included as context, but it is not used as the completion predicate because
+    the CRM updates that outcome independently of the chatbot state.
+    """
+    rows = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({
+        "select": (
+            "contact_id,page_id,status,stop_reason,collected_details,missing_details,"
+            "last_inbound_at,last_bot_reply_at,contacts!inner("
+            "id,page_id,name,psid,last_interaction_at,pipeline_stage)"
+        ),
+        "page_id": f"eq.{page_id}",
+        "stop_reason": "eq.details_collected",
+        "limit": 1000,
+    })) or []
+    contacts: dict[str, dict] = {}
+    for row in rows:
+        contact = row.get("contacts") or {}
+        if isinstance(contact, list):
+            contact = contact[0] if contact else {}
+        if (
+            contact.get("page_id") == page_id
+            and contact.get("id")
+            and (contact.get("name") or "").strip()
+            and contact.get("psid")
+        ):
+            contacts[contact["id"]] = {
+                "id": contact["id"],
+                "name": contact["name"].strip(),
+                "last_interaction_at": contact.get("last_interaction_at"),
+                "pipeline_stage": contact.get("pipeline_stage"),
+                "status": row.get("status"),
+                "stop_reason": row.get("stop_reason"),
+                "collected_details": row.get("collected_details") or {},
+                "missing_details": row.get("missing_details") or [],
+                "last_inbound_at": row.get("last_inbound_at"),
+                "last_bot_reply_at": row.get("last_bot_reply_at"),
+            }
+    return list(contacts.values())
