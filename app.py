@@ -30,6 +30,10 @@ from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
 )
+from new_client_automation import (
+    confirm_new_client_reply, is_new_client_action, new_client_delivery_allowed,
+    new_client_status, queue_new_client_assignments,
+)
 from telegram_sender import send_scheduled_action
 from worker_activity import worker_activity_report
 
@@ -93,6 +97,17 @@ def freebies_status_route(environ, start_response):
         groups = freebie_status(allowed_chat_ids(), dt.datetime.now(dt.timezone.utc))
     except Exception as error:
         print(f"Freebie status failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, "groups": groups})
+
+
+def new_clients_status_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        groups = new_client_status(allowed_chat_ids(), dt.datetime.now(dt.timezone.utc))
+    except Exception as error:
+        print(f"New-client status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, "groups": groups})
 
@@ -283,7 +298,11 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     failed = 0
     for action in actions:
         try:
-            if is_freebie_action(action) and not freebie_delivery_allowed(action, dt.datetime.now(dt.timezone.utc)):
+            now = dt.datetime.now(dt.timezone.utc)
+            if is_freebie_action(action) and not freebie_delivery_allowed(action, now):
+                finish_scheduled_action(action["id"], success=True)
+                continue
+            if is_new_client_action(action) and not new_client_delivery_allowed(action, now):
                 finish_scheduled_action(action["id"], success=True)
                 continue
             daily_poll_date = action["payload"].get("daily_poll_date")
@@ -331,6 +350,10 @@ def dispatch_route(environ, start_response):
                 queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), allowed)
             except Exception as freebie_error:
                 print(f"Freebie queue failed: {type(freebie_error).__name__}")
+            try:
+                queued += queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), allowed)
+            except Exception as assignment_error:
+                print(f"New-client queue failed: {type(assignment_error).__name__}")
         processed, sent, failed = deliver_due_actions(allowed, limit=25)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
@@ -373,13 +396,17 @@ def webhook_route(environ, start_response):
         try:
             if "poll_answer" in update:
                 chat_id = poll_answer_chat_today(update["poll_answer"].get("poll_id", ""), allowed, dt.datetime.now(dt.timezone.utc))
-                if chat_id and queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), {chat_id}):
+                queued = 0
+                if chat_id:
+                    queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
+                    queued += queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
+                if chat_id and queued:
                     deliver_due_actions({chat_id}, limit=5)
-            elif confirm_freebie_reply(update, allowed):
+            elif confirm_new_client_reply(update, allowed) or confirm_freebie_reply(update, allowed):
                 chat_id = (update.get("message") or update.get("edited_message") or {}).get("chat", {}).get("id")
                 deliver_due_actions({chat_id}, limit=5)
         except Exception as error:
-            print(f"Webhook freebie automation delayed: {type(error).__name__}")
+            print(f"Webhook assignment automation delayed: {type(error).__name__}")
     return response(start_response, 200, {"ok": True})
 
 
@@ -398,12 +425,14 @@ def app(environ, start_response):
         return groups_route(environ, start_response)
     if path == "/api/freebies/status" and method == "GET":
         return freebies_status_route(environ, start_response)
+    if path == "/api/new-clients/status" and method == "GET":
+        return new_clients_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

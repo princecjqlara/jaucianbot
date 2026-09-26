@@ -14,7 +14,7 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
    | `TELEGRAM_BOT_TOKEN` | Bot token used by the outbound scheduler. |
    | `SUPABASE_URL` | This project's HTTPS Supabase URL. |
    | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, for server-side use only. |
-   | `CRM_SUPABASE_URL` | Separate CRM Supabase project URL for freebie assignments. |
+   | `CRM_SUPABASE_URL` | Separate CRM Supabase project URL for freebie and new-client assignments. |
    | `CRM_SUPABASE_SERVICE_ROLE_KEY` | CRM service role key, server-side only. Never use a `NEXT_PUBLIC_` variable for it. |
    | `ALLOWED_CHAT_IDS` | Comma-separated numeric IDs of the approved groups. |
    | `TELEGRAM_WEBHOOK_SECRET` | Random secret generated in `.env.local`. |
@@ -95,12 +95,14 @@ The dispatcher also runs the four configured Veo group workflows in Philippine t
 
 The report flags messages it cannot parse. Deal entries should include `Page:` plus `Price Deal:` or `PD:`. Close Deal summaries should include `Page name:` and `Close Deal:`. The commission calculation uses Price Deal and excludes tips, revisions, down payments, and Total Payment differences.
 
-The authenticated `workers` view is for manager coaching. It ranks recorded DD, CD, sales, confirmed freebies, and a transparent activity score; reports Active days with no readable deals; estimates each person's strongest deal-posting hour; and supplies specific improvement suggestions. It does not treat chat volume or login time as productivity, does not penalize people who selected Not Active, and keeps unreadable posts visible as a data-quality issue. The score is operational guidance only and is never used for payroll.
+The authenticated `workers` view is for manager coaching. It ranks recorded DD, CD, sales, confirmed freebies, acknowledged new clients, and a transparent activity score; reports Active days with no readable deals; estimates each person's strongest deal-posting hour; and supplies specific improvement suggestions. It does not treat chat volume or login time as productivity, does not penalize people who selected Not Active, and keeps unreadable posts visible as a data-quality issue. The score is operational guidance only and is never used for payroll.
 
-## Paid-client freebie assignments
+## Freebie assignments
 
-The dispatcher reads contacts whose CRM chatbot state has `stop_reason = details_collected` for the configured Veo pages. It chooses older conversations first and posts one assignment per currently Active poll voter in that team's configured completed-contact topic. Each assignment mentions exactly one member, names the client, includes the chatbot's collected details and CRM contact ID, and requires an exact `FREEBIE SENT <token>` reply after completion. A member keeps one open assignment at a time. A reminder becomes due every three hours and is delivered on the next hourly dispatch during 7 AM–9:59 PM Philippine time. The bot checks the current day's Active poll before each reminder and does not remind inactive members.
+The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pages and posts one assignment per currently Active poll voter in the team's freebie topic. The member checks the CRM conversation, sends a suitable freebie, and replies with `FREEBIE SENT <token>`. A member keeps one open freebie at a time, and a client receives a seven-day break after confirmation.
 
-The completed-contact topic roots are Veo Jel `4180`, Veo `27622`, Veo Jessa `3725`, and Veo Ollie `5758`. Existing legacy freebie assignments remain accepted in their original topics.
+## New-client round robin
 
-To confirm a freebie was sent, the assigned member replies to the bot's assignment or reminder with `FREEBIE SENT ABCD1234`, replacing the sample code with the code from their assignment. The bot accepts only that member's exact code in the assignment's topic, stops the reminders, and queues another eligible completed client while the member is active. Active poll votes and completion replies trigger assignment delivery through the webhook; the scheduled dispatches also pick up any pending work. Replying directly also works when Telegram bot privacy mode is enabled. A client cannot be assigned another freebie until seven full days after the previous freebie was confirmed sent. If no eligible completed client is available, the bot gives each waiting active member one quiet notice per Philippine day and keeps checking automatically. Workers should still check the CRM conversation before sending to avoid repeating a freebie. The daily report counts these member confirmations by person, CRM page, and team; it cannot independently prove client delivery.
+Separately, the new-client dispatcher reads Supabase contacts whose chatbot has `stop_reason = details_collected`, a non-empty collected-details object, and no missing required details. It assigns those contacts in the new-client topics: Veo Jel `4180`, Veo `27622`, Veo Jessa `3725`, and Veo Ollie `5758`.
+
+Only members who selected Active for that Philippine day participate. The bot gives each Active member one client before anyone can move ahead to the next round. A member replies `WORKING ABCD1234` as soon as they start handling the assigned client. That acknowledgment stops reminders and makes the member eligible when the round robin reaches them again. A faster member cannot receive a third client while another Active member has received only one. Contacts already assigned by this workflow are not assigned again.

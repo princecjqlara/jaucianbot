@@ -1,10 +1,9 @@
-"""Assign completed chatbot contacts to today's active Telegram workers."""
+"""Assign paid CRM contacts as freebies to today's active Telegram workers."""
 
 from __future__ import annotations
 
 import datetime as dt
 import html
-import json
 import re
 import secrets
 from collections import Counter
@@ -14,10 +13,7 @@ from cloud_store import (
     daily_poll_active_users, daily_poll_counts, enqueue_scheduled_action,
     freebie_action_state, freebie_actions, update_freebie_action,
 )
-# Freebie assignments use contacts whose chatbot detail-gathering goal is done.
-# Keep the local name so existing callers/tests and the assignment payload remain
-# backwards compatible with the older paid-tag source.
-from crm_store import completed_detail_contacts as paid_contacts
+from crm_store import paid_contacts
 from daily_automation import GROUPS, MANILA
 
 
@@ -35,43 +31,19 @@ def _mention(user_id: int, name: str) -> str:
 
 
 def _assignment_thread(config: dict, contact: dict) -> int:
-    """Use the supplied completed-contact topic, with legacy fallback for old rows."""
-    if contact.get("stop_reason") == "details_collected":
-        return int(config.get("contact_thread") or config["freebie"])
+    """Return the freebie topic; contact is accepted for call-site compatibility."""
     return int(config["freebie"])
-
-
-def _collected_detail_lines(contact: dict) -> str:
-    details = contact.get("collected_details")
-    if not details:
-        return ""
-    if isinstance(details, dict):
-        lines = []
-        for key, value in details.items():
-            if isinstance(value, (dict, list)):
-                value = json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
-            lines.append(f"• {html.escape(str(key))}: {html.escape(str(value))}")
-    else:
-        lines = [f"• {html.escape(str(details))}"]
-    rendered = "\n".join(lines)
-    # Leave room for the assignment instructions under Telegram's 4096-char limit.
-    return rendered[:2600] + ("…" if len(rendered) > 2600 else "")
 
 
 def _assignment_text(user: dict, page: str, contact: dict, token: str) -> tuple[str, str]:
     member = _mention(int(user["user_id"]), user.get("user_name") or str(user["user_id"]))
-    collected = _collected_detail_lines(contact)
-    detail_block = f"\n\nDetails gathered by the chatbot:\n{collected}" if collected else ""
-    stage = contact.get("pipeline_stage")
-    stage_block = f"\nPipeline stage: {html.escape(str(stage))}" if stage else ""
     details = (
-        f"Client: {html.escape(contact['name'])}\n"
+        f"Paid client: {html.escape(contact['name'])}\n"
         f"Page: {html.escape(page)}\n"
-        f"CRM contact ID: <code>{html.escape(contact['id'])}</code>"
-        f"{stage_block}{detail_block}\n\n"
-        "Please take ownership of this client, check the CRM conversation, and prepare the appropriate freebie. "
-        "Reply to this message only after you have completed the task so the bot can track it.\n\n"
-        f"When done, reply exactly: <code>FREEBIE SENT {token}</code>"
+        f"CRM contact ID: <code>{html.escape(contact['id'])}</code>\n\n"
+        "Please check the CRM conversation first, then prepare and send a suitable freebie. "
+        "That quick check helps us avoid sending the client the same freebie twice.\n\n"
+        f"Once it's sent, reply to this message with: <code>FREEBIE SENT {token}</code>"
     )
     return (
         f"🎁 Hi {member}! Here's your next freebie task.\n\n{details}",
@@ -96,8 +68,6 @@ def _completed_contact_cooldowns(history: list[dict], now: dt.datetime) -> set[s
             if completed.tzinfo is None:
                 completed = completed.replace(tzinfo=dt.timezone.utc)
         except (AttributeError, ValueError):
-            # Be conservative if old data is malformed; never risk contacting
-            # the same client again sooner than intended.
             cooling.add(contact_id)
             continue
         if now_utc < completed.astimezone(dt.timezone.utc) + CONTACT_COOLDOWN:
@@ -115,13 +85,13 @@ def _queue_no_contact_notice(chat_id: int, user: dict, now: dt.datetime) -> bool
         action_type="message",
         payload={
             "text": (
-                f"ℹ️ Hi {member}! There isn't an eligible completed client available for a new freebie right now. "
+                f"ℹ️ Hi {member}! There isn't an eligible paid client available for a new freebie right now. "
                 "A client who already received a freebie gets a full 7-day break before another one can be assigned.\n\n"
                 "No action is needed from you—I’ll keep checking and send you an assignment when a contact becomes available."
             ),
             "parse_mode": "HTML",
             "disable_notification": True,
-            "message_thread_id": GROUPS[chat_id].get("contact_thread", GROUPS[chat_id]["freebie"]),
+            "message_thread_id": GROUPS[chat_id]["freebie"],
         },
         scheduled_for=now,
         dedupe_key=f"freebie-unavailable:{local_date.isoformat()}:{chat_id}:{user_id}",
@@ -342,7 +312,7 @@ def freebie_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
     lines.extend(f"• {name}: {count}" for name, count in sorted(people.values(), key=lambda item: (-item[1], item[0].casefold())))
     if not people:
         lines.append("• No confirmations yet.")
-    lines.append("These totals are based on each member's FREEBIE SENT confirmation in the completed-contact topic.")
+    lines.append("These totals are based on each member's FREEBIE SENT confirmation in the freebie topic.")
     return lines
 
 
@@ -368,7 +338,7 @@ def freebie_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         result.append({
             "team": config["name"],
             "chat_id": chat_id,
-            "freebie_thread_id": config.get("contact_thread", config["freebie"]),
+            "freebie_thread_id": config["freebie"],
             "active_today": len(active),
             "open_assignments": sum(
                 is_freebie_action(row) and row.get("status") != "cancelled"

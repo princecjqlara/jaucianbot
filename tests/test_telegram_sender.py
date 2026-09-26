@@ -54,6 +54,16 @@ class TelegramSenderTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[1]["parse_mode"], "HTML")
         self.assertEqual(call.call_args.args[1]["reply_markup"], {"force_reply": True})
 
+    def test_repeat_new_client_uses_working_reminder(self):
+        action = {
+            "chat_id": -100123, "action_type": "message", "sent_at": "2026-09-19T01:00:00Z",
+            "payload": {"text": "New client", "new_client_reminder_text": "Reply WORKING",
+                        "parse_mode": "HTML", "reply_markup": {"force_reply": True}},
+        }
+        with patch("telegram_sender.telegram_call", return_value={"message_id": 12}) as call:
+            send_scheduled_action(action)
+        self.assertEqual(call.call_args.args[1]["text"], "Reply WORKING")
+
 
 if __name__ == "__main__":
     unittest.main()

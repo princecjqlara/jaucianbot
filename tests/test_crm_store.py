@@ -41,6 +41,17 @@ class CrmStoreTests(unittest.TestCase):
         ]):
             self.assertEqual(crm_store.completed_detail_contacts("page-1"), [])
 
+    def test_completed_detail_contacts_requires_full_details(self):
+        contact = {
+            "id": "contact-1", "page_id": "page-1", "name": "Client", "psid": "p",
+        }
+        rows = [
+            {"contacts": contact, "collected_details": {}, "missing_details": []},
+            {"contacts": contact, "collected_details": {"name": "Client"}, "missing_details": ["email"]},
+        ]
+        with patch.object(crm_store, "crm_request", return_value=rows):
+            self.assertEqual(crm_store.completed_detail_contacts("page-1"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -97,6 +97,19 @@ class WsgiApplicationTests(unittest.TestCase):
             )
         self.assertEqual(status, 403)
 
+    def test_new_client_status_uses_its_own_workflow(self):
+        groups = [{"team": "Veo Jel", "assigned_today": 2}]
+        with patch.dict(
+            os.environ,
+            {"INSIGHTS_API_KEY": "correct", "ALLOWED_CHAT_IDS": "-1004461399292"},
+        ), patch("app.new_client_status", return_value=groups) as status_query:
+            status, payload = call_app(
+                "/api/new-clients/status", headers={"Authorization": "Bearer correct"}
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["groups"], groups)
+        self.assertEqual(status_query.call_args.args[0], {-1004461399292})
+
     def test_webhook_stores_valid_update(self):
         body = json.dumps({"update_id": 1}).encode()
         with patch.dict(
@@ -271,14 +284,16 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         save.assert_called_once_with(update, {-100123})
 
-    def test_active_poll_vote_queues_and_delivers_freebie(self):
+    def test_active_poll_vote_queues_both_assignment_workflows(self):
         update = {"poll_answer": {"poll_id": "today-poll"}}
         with patch.dict(os.environ, {
             "TELEGRAM_WEBHOOK_SECRET": "correct", "ALLOWED_CHAT_IDS": "-100123",
             "CRM_SUPABASE_SERVICE_ROLE_KEY": "configured",
         }), patch("app.save_poll_answer", return_value=True), patch(
             "app.poll_answer_chat_today", return_value=-100123
-        ), patch("app.queue_freebie_assignments", return_value=1) as queue, patch(
+        ), patch("app.queue_freebie_assignments", return_value=1) as freebie_queue, patch(
+            "app.queue_new_client_assignments", return_value=1
+        ) as client_queue, patch(
             "app.deliver_due_actions", return_value=(1, 1, 0)
         ) as deliver:
             status, _ = call_app(
@@ -287,7 +302,8 @@ class WsgiApplicationTests(unittest.TestCase):
                 body=json.dumps(update).encode(),
             )
         self.assertEqual(status, 200)
-        self.assertEqual(queue.call_args.args[1], {-100123})
+        self.assertEqual(freebie_queue.call_args.args[1], {-100123})
+        self.assertEqual(client_queue.call_args.args[1], {-100123})
         deliver.assert_called_once_with({-100123}, limit=5)
 
     def test_unknown_route_returns_not_found(self):

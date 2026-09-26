@@ -50,7 +50,9 @@ def send_scheduled_action(action: dict) -> dict:
     if source.get("message_thread_id") is not None:
         common["message_thread_id"] = source["message_thread_id"]
     if action_type == "message":
-        text = source.get("freebie_reminder_text") if action.get("sent_at") else None
+        text = None
+        if action.get("sent_at"):
+            text = source.get("freebie_reminder_text") or source.get("new_client_reminder_text")
         payload = {**common, "text": text or source["text"]}
         if source.get("parse_mode"):
             payload["parse_mode"] = source["parse_mode"]

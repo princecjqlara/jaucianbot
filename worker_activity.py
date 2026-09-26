@@ -6,9 +6,10 @@ import datetime as dt
 from collections import Counter
 from decimal import Decimal
 
-from cloud_store import activity_messages, freebie_actions, poll_answers_for_range
+from cloud_store import activity_messages, freebie_actions, new_client_actions, poll_answers_for_range
 from daily_automation import CLOSE_RE, GROUPS, MANILA, PAGE_RE, PRICE_RE, parse_close_count, parse_page, parse_price
 from freebie_automation import is_freebie_action
+from new_client_automation import is_new_client_action
 
 
 def _timestamp(value: str) -> dt.datetime:
@@ -55,7 +56,7 @@ def _recommendations(worker: dict) -> list[str]:
             "schedule focused follow-up time shortly before it."
         )
     if not suggestions:
-        suggestions.append("Keep the current routine and continue recording every CD, DD, and freebie confirmation.")
+        suggestions.append("Keep the current routine and continue recording every CD, DD, freebie, and new-client confirmation.")
     return suggestions
 
 
@@ -87,6 +88,7 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
             "cd": 0,
             "gross": Decimal("0"),
             "freebies": 0,
+            "new_clients": 0,
             "unreadable_posts": 0,
             "hours": Counter(),
             "first_activity_utc": None,
@@ -153,6 +155,19 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         if start_local <= completed.astimezone(MANILA) < end_local:
             person(payload.get("freebie_assignee_id"), payload.get("freebie_assignee_name"))["freebies"] += 1
 
+    for action in new_client_actions({chat_id}):
+        if not is_new_client_action(action):
+            continue
+        payload = action.get("payload") or {}
+        acknowledged_at = payload.get("new_client_acknowledged_at")
+        if not acknowledged_at:
+            continue
+        acknowledged = _timestamp(acknowledged_at)
+        if start_local <= acknowledged.astimezone(MANILA) < end_local:
+            person(
+                payload.get("new_client_assignee_id"), payload.get("new_client_assignee_name"),
+            )["new_clients"] += 1
+
     workers = []
     for value in people.values():
         active_dates = value.pop("active_dates")
@@ -186,18 +201,20 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         "chat_id": chat_id,
         "start_date": start_date,
         "end_date": local_today,
-        "score_formula": "Deal activity score = 3 points per DD + 2 points per CD; sales, consistency, and freebies are ranked separately",
+        "score_formula": "Deal activity score = 3 points per DD + 2 points per CD; sales, consistency, freebies, and acknowledged new clients are ranked separately",
         "leaders": {
             "overall_activity": leaders("activity_score"),
             "sales": leaders("gross"),
             "done_deals": leaders("dd"),
             "close_deals": leaders("cd"),
             "confirmed_freebies": leaders("freebies"),
+            "acknowledged_new_clients": leaders("new_clients"),
             "consistency": leaders("consistency_percent"),
         },
         "workers": workers,
         "coverage_note": (
-            "Metrics use tracked poll responses, readable live deal-topic posts, and FREEBIE SENT confirmations. "
+            "Metrics use tracked poll responses, readable live deal-topic posts, FREEBIE SENT confirmations, "
+            "and new-client WORKING confirmations. "
             "Best hour means deal-posting time, not login time. Missing or unreadable data is shown separately."
         ),
     }

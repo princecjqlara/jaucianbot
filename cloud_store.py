@@ -365,3 +365,48 @@ def freebie_action_state(action_id: int) -> dict | None:
         "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
     })) or []
     return rows[0] if rows else None
+
+
+def new_client_actions(allowed: set[int]) -> list[dict]:
+    """Read durable new-client round-robin assignments."""
+    if not allowed:
+        return []
+    result: list[dict] = []
+    offset = 0
+    while True:
+        filters = urllib.parse.urlencode({
+            "select": "id,chat_id,payload,status,scheduled_for,sent_at,telegram_message_id",
+            "chat_id": "in.(" + ",".join(str(chat_id) for chat_id in sorted(allowed)) + ")",
+            "dedupe_key": "like.new-client:*",
+            "order": "id.asc",
+            "limit": 1000,
+            "offset": offset,
+        })
+        rows = request("scheduled_actions?" + filters) or []
+        result.extend(rows)
+        if len(rows) < 1000:
+            return result
+        offset += 1000
+
+
+def update_new_client_action(action_id: int, payload: dict, *, status: str) -> dict | None:
+    """Atomically acknowledge one still-open new-client assignment."""
+    filters = urllib.parse.urlencode({
+        "id": f"eq.{action_id}",
+        "status": "in.(pending,processing,failed)",
+        "payload->>new_client_acknowledged_at": "is.null",
+    })
+    rows = request(
+        "scheduled_actions?" + filters,
+        {"payload": payload, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        method="PATCH",
+        prefer="return=representation",
+    ) or []
+    return rows[0] if rows else None
+
+
+def new_client_action_state(action_id: int) -> dict | None:
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
+    })) or []
+    return rows[0] if rows else None

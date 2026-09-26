@@ -1,4 +1,4 @@
-"""Read paid contacts from the separate CRM Supabase project."""
+"""Read paid and completed-detail contacts from the CRM Supabase project."""
 
 from __future__ import annotations
 
@@ -64,11 +64,13 @@ def paid_contacts(page_id: str) -> list[dict]:
 
 
 def completed_detail_contacts(page_id: str) -> list[dict]:
-    """Return contacts whose chatbot finished collecting the configured details.
+    """Return new clients whose complete chatbot details are stored in the CRM.
 
-    The chatbot state is authoritative for completion.  ``contacts.pipeline_stage``
+    The chatbot state is authoritative for completion. ``contacts.pipeline_stage``
     is included as context, but it is not used as the completion predicate because
-    the CRM updates that outcome independently of the chatbot state.
+    the CRM updates that outcome independently of the chatbot state. A row must also
+    contain collected details and no missing required details before it can be
+    assigned to a worker.
     """
     rows = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({
         "select": (
@@ -90,6 +92,8 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
             and contact.get("id")
             and (contact.get("name") or "").strip()
             and contact.get("psid")
+            and row.get("collected_details")
+            and not row.get("missing_details")
         ):
             contacts[contact["id"]] = {
                 "id": contact["id"],

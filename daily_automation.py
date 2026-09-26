@@ -340,10 +340,15 @@ def build_group_report(
     ])
     if not historical:
         from freebie_automation import freebie_report_lines
+        from new_client_automation import new_client_report_lines
         try:
             lines.extend(freebie_report_lines(chat_id, work_date))
         except Exception:
             lines.extend(["", "🎁 CONFIRMED FREEBIES SENT", "Freebie assignment data couldn't be loaded for this report."])
+        try:
+            lines.extend(new_client_report_lines(chat_id, work_date))
+        except Exception:
+            lines.extend(["", "👤 NEW CLIENTS ACKNOWLEDGED", "New-client assignment data couldn't be loaded for this report."])
     if skipped_done or skipped_close or capped:
         lines.extend(["", "DATA CHECK"])
         if skipped_done:

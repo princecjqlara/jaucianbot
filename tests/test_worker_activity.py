@@ -43,17 +43,26 @@ class WorkerActivityTests(unittest.TestCase):
                 "freebie_assignee_name": "Alex", "freebie_completed_at": "2026-09-21T05:00:00+00:00",
             }
         }]
+        new_clients = [{
+            "payload": {
+                "new_client_token": "1234ABCD", "new_client_assignee_id": 1,
+                "new_client_assignee_name": "Alex", "new_client_acknowledged_at": "2026-09-21T06:00:00+00:00",
+            }
+        }]
         with patch("worker_activity.activity_messages", return_value=messages), patch(
             "worker_activity.poll_answers_for_range", return_value=answers
-        ), patch("worker_activity.freebie_actions", return_value=freebies):
+        ), patch("worker_activity.freebie_actions", return_value=freebies), patch(
+            "worker_activity.new_client_actions", return_value=new_clients
+        ):
             report = worker_activity_report(CHAT, 2, NOW)
 
         self.assertEqual(report["leaders"]["overall_activity"][0], {"name": "Alex", "value": 8})
         self.assertEqual(report["leaders"]["confirmed_freebies"][0], {"name": "Alex", "value": 1})
+        self.assertEqual(report["leaders"]["acknowledged_new_clients"][0], {"name": "Alex", "value": 1})
         alex = next(worker for worker in report["workers"] if worker["name"] == "Alex")
         bea = next(worker for worker in report["workers"] if worker["name"] == "Bea")
         casey = next(worker for worker in report["workers"] if worker["name"] == "Casey")
-        self.assertEqual((alex["dd"], alex["cd"], alex["gross"], alex["freebies"]), (2, 1, 1800, 1))
+        self.assertEqual((alex["dd"], alex["cd"], alex["gross"], alex["freebies"], alex["new_clients"]), (2, 1, 1800, 1, 1))
         self.assertEqual(alex["consistency_percent"], 100.0)
         self.assertEqual(alex["best_hour_pht"], 10)
         self.assertEqual(bea["active_days_without_deals"], 1)

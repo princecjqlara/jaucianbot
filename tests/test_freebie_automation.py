@@ -35,8 +35,10 @@ class FreebieAutomationTests(unittest.TestCase):
         self.assertNotIn('tg://user?id=22', first["payload"]["text"])
         self.assertIn("A &amp; B", first["payload"]["text"])
         self.assertIn("Page: Onset Media Agency", first["payload"]["text"])
+        self.assertIn("freebie task", first["payload"]["text"])
+        self.assertIn("FREEBIE SENT", first["payload"]["text"])
 
-    def test_completed_contact_uses_configured_topic_and_includes_collected_details(self):
+    def test_freebie_uses_the_separate_freebie_topic(self):
         contacts = [{
             "id": "complete",
             "name": "Completed Client",
@@ -54,12 +56,9 @@ class FreebieAutomationTests(unittest.TestCase):
         ) as enqueue:
             self.assertEqual(queue_freebie_assignments(NOW, {CHAT}), 1)
         payload = enqueue.call_args.kwargs["payload"]
-        self.assertEqual(payload["message_thread_id"], 4180)
-        self.assertEqual(payload["freebie_thread_id"], 4180)
-        self.assertIn("Details gathered by the chatbot", payload["text"])
-        self.assertIn("business name", payload["text"])
-        self.assertIn("Acme", payload["text"])
-        self.assertEqual(payload["freebie_collected_details"], contacts[0]["collected_details"])
+        self.assertEqual(payload["message_thread_id"], 3003)
+        self.assertEqual(payload["freebie_thread_id"], 3003)
+        self.assertNotIn("Details gathered by the chatbot", payload["text"])
 
     def test_recently_completed_contact_waits_seven_full_days(self):
         history = [{
@@ -172,10 +171,10 @@ class FreebieAutomationTests(unittest.TestCase):
             update["message"]["from"]["id"] = 22
             self.assertFalse(confirm_freebie_reply(update, {CHAT}))
 
-    def test_completed_contact_confirmation_is_accepted_in_configured_topic(self):
+    def test_freebie_confirmation_is_rejected_in_new_client_topic(self):
         row = {"id": 4, "chat_id": CHAT, "payload": {
             "freebie_token": "ABCDEF12", "freebie_assignee_id": 11,
-            "freebie_thread_id": 4180,
+            "freebie_thread_id": 3003,
         }}
         update = {"message": {"chat": {"id": CHAT}, "message_thread_id": 4180,
                               "from": {"id": 11}, "text": "FREEBIE SENT ABCDEF12",
@@ -185,7 +184,7 @@ class FreebieAutomationTests(unittest.TestCase):
         ), patch("freebie_automation.enqueue_scheduled_action", return_value=True), patch(
             "freebie_automation.queue_freebie_assignments"
         ):
-            self.assertTrue(confirm_freebie_reply(update, {CHAT}))
+            self.assertFalse(confirm_freebie_reply(update, {CHAT}))
 
     def test_reports_confirmations_in_manila_day(self):
         rows = [

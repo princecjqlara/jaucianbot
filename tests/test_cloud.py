@@ -12,7 +12,7 @@ from unittest.mock import patch
 from api.webhook import handler
 from cloud_store import (
     allowed_chat_ids, daily_messages, daily_poll_active_users,
-    existing_daily_reminder_chats, save_update,
+    existing_daily_reminder_chats, new_client_actions, save_update,
 )
 
 
@@ -55,6 +55,13 @@ class CloudStorageTests(unittest.TestCase):
         params = urllib.parse.parse_qs(path.split("?", 1)[1])
         self.assertEqual(params["chat_id"], ["in.(-100456,-100123)"])
         self.assertEqual(params["dedupe_key"], ['like."daily-reminder:2026-09-19:10:*"'])
+
+    def test_new_client_history_uses_its_own_dedupe_namespace(self):
+        with patch("cloud_store.request", return_value=[]) as request:
+            self.assertEqual(new_client_actions({-100123}), [])
+        path = request.call_args.args[0]
+        params = urllib.parse.parse_qs(path.split("?", 1)[1])
+        self.assertEqual(params["dedupe_key"], ["like.new-client:*"])
 
 
 class WebhookTests(unittest.TestCase):
