@@ -189,16 +189,36 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             if not candidates:
                 break
             user_id = int(user["user_id"])
-            minimum = min(assignment_counts[member_id] for member_id in member_ids)
-            if user_id in open_members or assignment_counts[user_id] != minimum:
+            if user_id in open_members:
                 continue
-            candidate_index = next(
+            reassignment_index = next(
                 (
                     index for index, (_, candidate) in enumerate(candidates)
-                    if user_id not in prior_assignees.get(candidate["id"], set())
+                    if contact_attempts[candidate["id"]] > 0
+                    and user_id not in prior_assignees.get(candidate["id"], set())
+                    and user_id == min(
+                        (
+                            int(member["user_id"])
+                            for member in members
+                            if int(member["user_id"]) not in open_members
+                            and int(member["user_id"]) not in prior_assignees.get(candidate["id"], set())
+                        ),
+                        key=lambda member_id: (assignment_counts[member_id], member_id),
+                        default=None,
+                    )
                 ),
                 None,
             )
+            minimum = min(assignment_counts[member_id] for member_id in member_ids)
+            candidate_index = reassignment_index
+            if candidate_index is None and assignment_counts[user_id] == minimum:
+                candidate_index = next(
+                    (
+                        index for index, (_, candidate) in enumerate(candidates)
+                        if contact_attempts[candidate["id"]] == 0
+                    ),
+                    None,
+                )
             if candidate_index is None:
                 continue
             page, contact = candidates.pop(candidate_index)

@@ -160,6 +160,33 @@ class NewClientAutomationTests(unittest.TestCase):
             self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 0)
         enqueue.assert_not_called()
 
+    def test_reassignment_overrides_normal_round_minimum(self):
+        members = [{"user_id": 11, "user_name": "Alex"}, {"user_id": 22, "user_name": "Bea"}]
+        stale = assignment(
+            1, 11, "client", 1, status="pending",
+            assigned_at=NOW - dt.timedelta(hours=2),
+        )
+        history = [
+            stale,
+            assignment(2, 22, "done-1", 1, acknowledged=True),
+            assignment(3, 22, "done-2", 2, acknowledged=True),
+        ]
+        contacts = [
+            contact("client", "2026-01-01"),
+            contact("done-1", "2026-01-02"),
+            contact("done-2", "2026-01-03"),
+        ]
+        p1, p2, p3, p4 = self.active_patches(members, history, contacts)
+        with p1, p2, p3, p4, patch(
+            "new_client_automation.update_new_client_action", return_value=stale
+        ), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ) as enqueue:
+            self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 1)
+
+        self.assertEqual(enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
+        self.assertEqual(enqueue.call_args.kwargs["payload"]["new_client_contact_id"], "client")
+
     def test_working_reply_acknowledges_exact_member_topic_and_token(self):
         row = assignment(4, 11, "client", 1, status="pending")
         row["payload"]["new_client_token"] = "ABCDEF12"
