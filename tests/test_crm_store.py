@@ -41,16 +41,32 @@ class CrmStoreTests(unittest.TestCase):
         ]):
             self.assertEqual(crm_store.completed_detail_contacts("page-1"), [])
 
-    def test_completed_detail_contacts_requires_full_details(self):
+    def test_completed_detail_contacts_requires_collected_details(self):
         contact = {
             "id": "contact-1", "page_id": "page-1", "name": "Client", "psid": "p",
         }
         rows = [
             {"contacts": contact, "collected_details": {}, "missing_details": []},
-            {"contacts": contact, "collected_details": {"name": "Client"}, "missing_details": ["email"]},
         ]
         with patch.object(crm_store, "crm_request", return_value=rows):
             self.assertEqual(crm_store.completed_detail_contacts("page-1"), [])
+
+    def test_completed_outcome_wins_over_stale_missing_details(self):
+        row = {
+            "contact_id": "contact-1",
+            "page_id": "page-1",
+            "status": "stopped",
+            "stop_reason": "details_collected",
+            "collected_details": {"name": "Client", "business": "Studio"},
+            "missing_details": ["outdated synonymous prompt"],
+            "contacts": {
+                "id": "contact-1", "page_id": "page-1", "name": "Client", "psid": "p",
+            },
+        }
+        with patch.object(crm_store, "crm_request", return_value=[row]):
+            result = crm_store.completed_detail_contacts("page-1")
+        self.assertEqual([contact["id"] for contact in result], ["contact-1"])
+        self.assertEqual(result[0]["missing_details"], ["outdated synonymous prompt"])
 
 
 if __name__ == "__main__":

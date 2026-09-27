@@ -69,8 +69,9 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
     The chatbot state is authoritative for completion. ``contacts.pipeline_stage``
     is included as context, but it is not used as the completion predicate because
     the CRM updates that outcome independently of the chatbot state. A row must also
-    contain collected details and no missing required details before it can be
-    assigned to a worker.
+    contain collected details before it can be assigned to a worker. The chatbot's
+    final ``details_collected`` outcome wins over ``missing_details`` because older
+    states can retain stale or synonymous prompts after collection is complete.
     """
     rows = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({
         "select": (
@@ -93,7 +94,6 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
             and (contact.get("name") or "").strip()
             and contact.get("psid")
             and row.get("collected_details")
-            and not row.get("missing_details")
         ):
             contacts[contact["id"]] = {
                 "id": contact["id"],
