@@ -12,7 +12,7 @@ from unittest.mock import patch
 from api.webhook import handler
 from cloud_store import (
     allowed_chat_ids, daily_messages, daily_poll_active_users,
-    existing_daily_reminder_chats, new_client_actions, save_update,
+    existing_daily_reminder_chats, new_client_actions, new_client_reply_messages, save_update,
 )
 
 
@@ -62,6 +62,20 @@ class CloudStorageTests(unittest.TestCase):
         path = request.call_args.args[0]
         params = urllib.parse.parse_qs(path.split("?", 1)[1])
         self.assertEqual(params["dedupe_key"], ["like.new-client:*"])
+
+    def test_new_client_reply_lookup_is_scoped_to_topic_and_time(self):
+        since = dt.datetime(2026, 9, 27, 7, 0, tzinfo=dt.timezone.utc)
+        before = since + dt.timedelta(hours=1)
+        with patch("cloud_store.request", return_value=[]) as request:
+            self.assertEqual(new_client_reply_messages(-100123, 4180, since, before), [])
+        path = request.call_args.args[0]
+        params = urllib.parse.parse_qs(path.split("?", 1)[1])
+        self.assertEqual(params["chat_id"], ["eq.-100123"])
+        self.assertEqual(params["thread_id"], ["eq.4180"])
+        self.assertEqual(params["sent_utc"], [
+            "gte.2026-09-27T07:00:00+00:00", "lte.2026-09-27T08:00:00+00:00",
+        ])
+        self.assertEqual(params["text"], ["ilike.*working*"])
 
 
 class WebhookTests(unittest.TestCase):

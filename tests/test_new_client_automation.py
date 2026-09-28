@@ -29,6 +29,7 @@ def contact(contact_id: str, date: str) -> dict:
 def assignment(
     action_id: int, user_id: int, contact_id: str, round_number: int, *,
     acknowledged=False, status="cancelled", assigned_at: dt.datetime | None = None,
+    telegram_message_id: int | None = None,
 ) -> dict:
     payload = {
         "new_client_token": f"TOKEN{action_id:03d}"[-8:],
@@ -44,10 +45,20 @@ def assignment(
         payload["new_client_assigned_at"] = assigned_at.isoformat()
     if acknowledged:
         payload["new_client_acknowledged_at"] = "2026-09-19T01:10:00+00:00"
-    return {"id": action_id, "chat_id": CHAT, "status": status, "payload": payload}
+    return {
+        "id": action_id, "chat_id": CHAT, "status": status,
+        "telegram_message_id": telegram_message_id, "payload": payload,
+    }
 
 
 class NewClientAutomationTests(unittest.TestCase):
+    def setUp(self):
+        self.reply_messages_patcher = patch(
+            "new_client_automation.new_client_reply_messages", return_value=[]
+        )
+        self.reply_messages = self.reply_messages_patcher.start()
+        self.addCleanup(self.reply_messages_patcher.stop)
+
     def active_patches(self, members, history, contacts):
         return (
             patch("new_client_automation.new_client_actions", return_value=history),
@@ -206,6 +217,62 @@ class NewClientAutomationTests(unittest.TestCase):
         self.assertEqual(update_action.call_args.args[1]["new_client_ack_message_id"], 90)
         self.assertIn("working on this client", enqueue.call_args.kwargs["payload"]["text"])
         queue.assert_called_once()
+
+    def test_working_token_accepts_extra_text_and_missing_thread_field(self):
+        row = assignment(5, 11, "client", 1, status="pending")
+        row["payload"]["new_client_token"] = "ABCDEF12"
+        update = {"message": {
+            "chat": {"id": CHAT}, "from": {"id": 11},
+            "text": "Working ABCDEF12, starting now!", "date": 1789780000, "message_id": 91,
+        }}
+        with patch("new_client_automation.new_client_actions", return_value=[row]), patch(
+            "new_client_automation.update_new_client_action", return_value=row
+        ), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ), patch("new_client_automation.queue_new_client_assignments"):
+            self.assertTrue(confirm_new_client_reply(update, {CHAT}))
+
+    def test_direct_working_reply_does_not_require_token(self):
+        row = assignment(6, 11, "client", 1, status="pending", telegram_message_id=500)
+        update = {"message": {
+            "chat": {"id": CHAT}, "message_thread_id": 4180,
+            "reply_to_message": {"message_id": 500},
+            "from": {"id": 11}, "text": "working", "date": 1789780000, "message_id": 92,
+        }}
+        with patch("new_client_automation.new_client_actions", return_value=[row]), patch(
+            "new_client_automation.update_new_client_action", return_value=row
+        ), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ), patch("new_client_automation.queue_new_client_assignments"):
+            self.assertTrue(confirm_new_client_reply(update, {CHAT}))
+
+    def test_archived_working_reply_prevents_timeout_reassignment(self):
+        members = [{"user_id": 11, "user_name": "Alex"}, {"user_id": 22, "user_name": "Bea"}]
+        stale = assignment(
+            7, 11, "client", 1, status="pending",
+            assigned_at=NOW - dt.timedelta(hours=2),
+        )
+        stale["payload"]["new_client_token"] = "ABCDEF12"
+        self.reply_messages.return_value = [{
+            "message_id": 93,
+            "sent_utc": (NOW - dt.timedelta(minutes=90)).isoformat(),
+            "author_id": 11,
+            "text": "WORKING ABCDEF12.",
+            "thread_id": 4180,
+            "reply_to_message_id": None,
+        }]
+        contacts = [contact("client", "2026-01-01")]
+        p1, p2, p3, p4 = self.active_patches(members, [stale], contacts)
+        with p1, p2, p3, p4, patch(
+            "new_client_automation.update_new_client_action", return_value=stale
+        ) as update_action, patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ) as enqueue:
+            self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 0)
+
+        self.assertIn("new_client_acknowledged_at", update_action.call_args.args[1])
+        self.assertEqual(enqueue.call_count, 1)
+        self.assertTrue(enqueue.call_args.kwargs["dedupe_key"].startswith("new-client-ack:"))
 
     def test_assignment_expires_after_its_philippine_day(self):
         action = assignment(4, 11, "client", 1, status="processing")

@@ -16,13 +16,15 @@ from cloud_store import (
     enqueue_scheduled_action,
     new_client_action_state,
     new_client_actions,
+    new_client_reply_messages,
     update_new_client_action,
 )
 from crm_store import completed_detail_contacts
 from daily_automation import GROUPS, MANILA
 
 
-WORKING_RE = re.compile(r"^\s*(?:WORKING|/working)\s+([A-F0-9]{8})\s*$", re.IGNORECASE)
+WORKING_RE = re.compile(r"\b/?working\s+([A-F0-9]{8})\b", re.IGNORECASE)
+WORKING_REPLY_RE = re.compile(r"^\s*/?working(?:\s+(?:on\s+it|now))?[.!]?\s*$", re.IGNORECASE)
 REASSIGN_AFTER = dt.timedelta(hours=1)
 REASSIGN_REASON = "working_not_confirmed_within_one_hour"
 REMINDER_MINUTES = 60
@@ -63,6 +65,66 @@ def _assigned_at(payload: dict) -> dt.datetime | None:
     return assigned
 
 
+def _reply_to_message_id(message: dict) -> int | None:
+    value = message.get("reply_to_message_id")
+    if value is None:
+        value = (message.get("reply_to_message") or {}).get("message_id")
+    return int(value) if value is not None else None
+
+
+def _confirms_assignment(message: dict, row: dict) -> bool:
+    payload = row["payload"]
+    author_id = message.get("author_id")
+    if author_id is None:
+        author_id = (message.get("from") or {}).get("id")
+    if author_id is None or int(author_id) != int(payload["new_client_assignee_id"]):
+        return False
+    thread_id = message.get("thread_id")
+    if thread_id is None:
+        thread_id = message.get("message_thread_id")
+    if thread_id is not None and int(thread_id) != int(payload["new_client_thread_id"]):
+        return False
+    text = message.get("text") or ""
+    token_match = WORKING_RE.search(text)
+    if token_match:
+        return token_match.group(1).upper() == payload["new_client_token"].upper()
+    return bool(
+        WORKING_REPLY_RE.fullmatch(text)
+        and row.get("telegram_message_id") is not None
+        and _reply_to_message_id(message) == int(row["telegram_message_id"])
+    )
+
+
+def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) -> bool:
+    payload = dict(row["payload"])
+    payload["new_client_acknowledged_at"] = acknowledged.isoformat()
+    payload["new_client_ack_message_id"] = message.get("message_id")
+    if not update_new_client_action(int(row["id"]), payload, status="cancelled"):
+        return False
+    row["status"] = "cancelled"
+    row["payload"] = payload
+    member = _mention(
+        int(payload["new_client_assignee_id"]),
+        payload.get("new_client_assignee_name") or str(payload["new_client_assignee_id"]),
+    )
+    enqueue_scheduled_action(
+        chat_id=int(row["chat_id"]),
+        action_type="message",
+        payload={
+            "text": (
+                f"✅ Thanks, {member}! I recorded that you are working on this client. "
+                "The bot will send your next client when the round robin reaches you again."
+            ),
+            "parse_mode": "HTML",
+            "disable_notification": False,
+            "message_thread_id": payload["new_client_thread_id"],
+        },
+        scheduled_for=dt.datetime.now(dt.timezone.utc),
+        dedupe_key=f"new-client-ack:{row['id']}",
+    )
+    return True
+
+
 def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
     """Cancel open assignments that received no WORKING reply for one hour."""
     for row in history:
@@ -72,8 +134,25 @@ def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
         assigned = _assigned_at(payload)
         if payload.get("new_client_acknowledged_at") or not assigned:
             continue
-        if now.astimezone(dt.timezone.utc) < assigned.astimezone(dt.timezone.utc) + REASSIGN_AFTER:
+        deadline = assigned.astimezone(dt.timezone.utc) + REASSIGN_AFTER
+        if now.astimezone(dt.timezone.utc) < deadline:
             continue
+        archived_replies = new_client_reply_messages(
+            int(row["chat_id"]), int(payload["new_client_thread_id"]), assigned, deadline,
+        )
+        archived_confirmation = next(
+            (message for message in archived_replies if _confirms_assignment(message, row)),
+            None,
+        )
+        if archived_confirmation:
+            try:
+                acknowledged = dt.datetime.fromisoformat(
+                    str(archived_confirmation["sent_utc"]).replace("Z", "+00:00")
+                )
+            except (KeyError, TypeError, ValueError):
+                acknowledged = now
+            if _record_confirmation(row, archived_confirmation, acknowledged):
+                continue
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
         cancelled["new_client_cancelled_reason"] = REASSIGN_REASON
@@ -315,19 +394,15 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     chat_id = (message.get("chat") or {}).get("id")
     if chat_id not in allowed or chat_id not in GROUPS:
         return False
-    author_id = (message.get("from") or {}).get("id")
-    match = WORKING_RE.fullmatch(message.get("text") or "")
-    if not author_id or not match:
+    text = message.get("text") or ""
+    if not WORKING_RE.search(text) and not WORKING_REPLY_RE.fullmatch(text):
         return False
-    token = match.group(1).upper()
     matches = [
         row for row in new_client_actions({chat_id})
         if is_new_client_action(row)
         and row.get("status") != "cancelled"
         and not row["payload"].get("new_client_acknowledged_at")
-        and row["payload"]["new_client_token"] == token
-        and int(row["payload"]["new_client_assignee_id"]) == int(author_id)
-        and message.get("message_thread_id") == int(row["payload"]["new_client_thread_id"])
+        and _confirms_assignment(message, row)
     ]
     if len(matches) != 1:
         return False
@@ -336,27 +411,8 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
         message.get("date") or dt.datetime.now(dt.timezone.utc).timestamp(),
         dt.timezone.utc,
     )
-    payload = dict(row["payload"])
-    payload["new_client_acknowledged_at"] = acknowledged.isoformat()
-    payload["new_client_ack_message_id"] = message.get("message_id")
-    if not update_new_client_action(int(row["id"]), payload, status="cancelled"):
+    if not _record_confirmation(row, message, acknowledged):
         return False
-    member = _mention(int(author_id), payload.get("new_client_assignee_name") or str(author_id))
-    enqueue_scheduled_action(
-        chat_id=chat_id,
-        action_type="message",
-        payload={
-            "text": (
-                f"✅ Thanks, {member}! I recorded that you are working on this client. "
-                "The bot will send your next client when the round robin reaches you again."
-            ),
-            "parse_mode": "HTML",
-            "disable_notification": False,
-            "message_thread_id": payload["new_client_thread_id"],
-        },
-        scheduled_for=dt.datetime.now(dt.timezone.utc),
-        dedupe_key=f"new-client-ack:{row['id']}",
-    )
     queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
     return True
 

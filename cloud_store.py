@@ -389,6 +389,23 @@ def new_client_actions(allowed: set[int]) -> list[dict]:
         offset += 1000
 
 
+def new_client_reply_messages(
+    chat_id: int, thread_id: int, since: dt.datetime, before: dt.datetime,
+) -> list[dict]:
+    """Read archived WORKING replies that can confirm a new-client assignment."""
+    filters = urllib.parse.urlencode([
+        ("select", "message_id,sent_utc,author_id,text,thread_id,reply_to_message_id"),
+        ("chat_id", f"eq.{chat_id}"),
+        ("thread_id", f"eq.{thread_id}"),
+        ("sent_utc", f"gte.{since.isoformat()}"),
+        ("sent_utc", f"lte.{before.isoformat()}"),
+        ("text", "ilike.*working*"),
+        ("order", "sent_utc.asc,message_id.asc"),
+        ("limit", "1000"),
+    ])
+    return request("messages?" + filters) or []
+
+
 def update_new_client_action(action_id: int, payload: dict, *, status: str) -> dict | None:
     """Atomically acknowledge one still-open new-client assignment."""
     filters = urllib.parse.urlencode({
