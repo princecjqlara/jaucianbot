@@ -19,7 +19,7 @@ from daily_automation import GROUPS, MANILA
 
 DONE_RE = re.compile(r"^\s*(?:FREEBIE\s+SENT|/freebie_done)\s+([A-F0-9]{8})\s*$", re.IGNORECASE)
 REMINDER_MINUTES = 180
-CONTACT_COOLDOWN = dt.timedelta(days=7)
+CONTACT_COOLDOWN = dt.timedelta(days=14)
 
 
 def is_freebie_action(action: dict) -> bool:
@@ -52,7 +52,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str) -> tuple[
 
 
 def _completed_contact_cooldowns(history: list[dict], now: dt.datetime) -> set[str]:
-    """Return contacts that are still inside their seven-day post-freebie break."""
+    """Return contacts that are still inside their fourteen-day post-freebie break."""
     cooling: set[str] = set()
     now_utc = now.astimezone(dt.timezone.utc)
     for row in history:
@@ -86,7 +86,7 @@ def _queue_no_contact_notice(chat_id: int, user: dict, now: dt.datetime) -> bool
         payload={
             "text": (
                 f"ℹ️ Hi {member}! There isn't an eligible paid client available for a new freebie right now. "
-                "A client who already received a freebie gets a full 7-day break before another one can be assigned.\n\n"
+                "A client who already received a freebie gets a full 14-day break before another one can be assigned.\n\n"
                 "No action is needed from you—I’ll keep checking and send you an assignment when a contact becomes available."
             ),
             "parse_mode": "HTML",

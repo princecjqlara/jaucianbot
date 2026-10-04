@@ -99,7 +99,7 @@ The authenticated `workers` view is for manager coaching. It ranks recorded DD, 
 
 ## Freebie assignments
 
-The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pages and posts one assignment per currently Active poll voter in the team's freebie topic. The member checks the CRM conversation, sends a suitable freebie, and replies with `FREEBIE SENT <token>`. A member keeps one open freebie at a time, and a client receives a seven-day break after confirmation.
+The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pages and posts one assignment per currently Active poll voter in the team's freebie topic. The member checks the CRM conversation, sends a suitable freebie, and replies with `FREEBIE SENT <token>`. A member keeps one open freebie at a time, and a client receives a fourteen-day break after confirmation.
 
 ## New-client round robin
 

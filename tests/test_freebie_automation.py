@@ -60,20 +60,20 @@ class FreebieAutomationTests(unittest.TestCase):
         self.assertEqual(payload["freebie_thread_id"], 3003)
         self.assertNotIn("Details gathered by the chatbot", payload["text"])
 
-    def test_recently_completed_contact_waits_seven_full_days(self):
+    def test_recently_completed_contact_waits_fourteen_full_days(self):
         history = [{
             "id": 1, "chat_id": CHAT, "status": "cancelled",
             "payload": {
                 "freebie_token": "AAAA1111", "freebie_assignee_id": 99,
                 "freebie_contact_id": "recent",
-                "freebie_completed_at": "2026-09-12T01:00:01+00:00",
+                "freebie_completed_at": "2026-09-05T01:00:01+00:00",
             },
         }, {
             "id": 2, "chat_id": CHAT, "status": "cancelled",
             "payload": {
                 "freebie_token": "BBBB2222", "freebie_assignee_id": 98,
                 "freebie_contact_id": "ready",
-                "freebie_completed_at": "2026-09-12T01:00:00+00:00",
+                "freebie_completed_at": "2026-09-05T01:00:00+00:00",
             },
         }]
         contacts = [
@@ -111,7 +111,7 @@ class FreebieAutomationTests(unittest.TestCase):
             self.assertEqual(queue_freebie_assignments(NOW, {CHAT}), 0)
         notice = enqueue.call_args_list[0].kwargs
         self.assertNotIn("freebie_token", notice["payload"])
-        self.assertIn("full 7-day break", notice["payload"]["text"])
+        self.assertIn("full 14-day break", notice["payload"]["text"])
         self.assertIn("No action is needed", notice["payload"]["text"])
         self.assertTrue(notice["payload"]["disable_notification"])
         self.assertEqual(
