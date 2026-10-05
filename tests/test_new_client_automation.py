@@ -47,6 +47,7 @@ def assignment(
         payload["new_client_acknowledged_at"] = "2026-09-19T01:10:00+00:00"
     return {
         "id": action_id, "chat_id": CHAT, "status": status,
+        "sent_at": assigned_at.isoformat() if assigned_at else None,
         "telegram_message_id": telegram_message_id, "payload": payload,
     }
 

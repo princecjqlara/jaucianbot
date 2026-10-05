@@ -131,46 +131,52 @@ def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
         if not is_new_client_action(row) or row.get("status") == "cancelled":
             continue
         payload = row["payload"]
-        assigned = _assigned_at(payload)
-        if payload.get("new_client_acknowledged_at") or not assigned:
+        if payload.get("new_client_acknowledged_at"):
             continue
-        deadline = assigned.astimezone(dt.timezone.utc) + REASSIGN_AFTER
-        if now.astimezone(dt.timezone.utc) < deadline:
-            continue
-        archived_replies = new_client_reply_messages(
-            int(row["chat_id"]), int(payload["new_client_thread_id"]), assigned, deadline,
-        )
-        archived_confirmation = next(
-            (message for message in archived_replies if _confirms_assignment(message, row)),
-            None,
-        )
-        if archived_confirmation:
-            try:
-                acknowledged = dt.datetime.fromisoformat(
-                    str(archived_confirmation["sent_utc"]).replace("Z", "+00:00")
-                )
-            except (KeyError, TypeError, ValueError):
-                acknowledged = now
-            if _record_confirmation(row, archived_confirmation, acknowledged):
+        reason = "assignment_day_ended" if payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat() else REASSIGN_REASON
+        if reason == REASSIGN_REASON:
+            delivered_at = payload.get("_first_delivery_at") or row.get("sent_at")
+            if not delivered_at:
                 continue
+            try:
+                delivered = dt.datetime.fromisoformat(delivered_at.replace("Z", "+00:00"))
+                if delivered.tzinfo is None:
+                    delivered = delivered.replace(tzinfo=dt.timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if now.astimezone(dt.timezone.utc) < delivered + REASSIGN_AFTER:
+                continue
+        assigned = _assigned_at(payload)
+        if assigned:
+            archived_replies = new_client_reply_messages(
+                int(row["chat_id"]), int(payload["new_client_thread_id"]), assigned, now,
+            )
+            confirmation = next((message for message in archived_replies if _confirms_assignment(message, row)), None)
+            if confirmation:
+                try:
+                    acknowledged = dt.datetime.fromisoformat(str(confirmation["sent_utc"]).replace("Z", "+00:00"))
+                except (KeyError, TypeError, ValueError):
+                    acknowledged = now
+                if _record_confirmation(row, confirmation, acknowledged):
+                    continue
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
-        cancelled["new_client_cancelled_reason"] = REASSIGN_REASON
+        cancelled["new_client_cancelled_reason"] = reason
         if update_new_client_action(int(row["id"]), cancelled, status="cancelled"):
             row["status"] = "cancelled"
             row["payload"] = cancelled
 
 
 def _reserved_contact_ids(history: list[dict]) -> set[str]:
-    """Return contacts that are complete or still held by a live assignment."""
     return {
-        row["payload"].get("new_client_contact_id")
-        for row in history
-        if is_new_client_action(row)
-        and row["payload"].get("new_client_contact_id")
+        row["payload"].get("new_client_contact_id") for row in history
+        if is_new_client_action(row) and row["payload"].get("new_client_contact_id")
         and not (
             row.get("status") == "cancelled"
-            and row["payload"].get("new_client_cancelled_reason") == REASSIGN_REASON
+            and not row["payload"].get("new_client_acknowledged_at")
+            and row["payload"].get("new_client_cancelled_reason") in {
+                REASSIGN_REASON, "assignment_day_ended", "assignee_inactive_before_first_delivery",
+            }
         )
     }
 
@@ -182,11 +188,11 @@ def _detail_lines(contact: dict) -> str:
         for key, value in details.items():
             if isinstance(value, (dict, list)):
                 value = json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
-            lines.append(f"• {html.escape(str(key))}: {html.escape(str(value))}")
+            lines.append(f"• {key}: {value}")
     else:
-        lines = [f"• {html.escape(str(details))}"]
+        lines = [f"• {details}"]
     rendered = "\n".join(lines)
-    return rendered[:2800] + ("…" if len(rendered) > 2800 else "")
+    return html.escape(rendered[:2800] + ("…" if len(rendered) > 2800 else ""))
 
 
 def _assignment_text(user: dict, page: str, contact: dict, token: str, round_number: int) -> tuple[str, str]:
@@ -424,10 +430,7 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
         if not is_new_client_action(row):
             continue
         payload = row["payload"]
-        if payload.get("new_client_work_date") != work_date.isoformat():
-            continue
-        acknowledged_at = payload.get("new_client_acknowledged_at")
-        if not acknowledged_at:
+        if _acknowledged_date(payload) != work_date:
             continue
         pages[payload.get("new_client_page") or "Unknown page"] += 1
         user_id = int(payload["new_client_assignee_id"])
@@ -457,8 +460,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "active_today": len(_active_members(chat_id, work_date)),
             "assigned_today": sum(row["payload"].get("new_client_work_date") == work_date.isoformat() for row in actions),
             "acknowledged_today": sum(
-                row["payload"].get("new_client_work_date") == work_date.isoformat()
-                and bool(row["payload"].get("new_client_acknowledged_at"))
+                _acknowledged_date(row["payload"]) == work_date
                 for row in actions
             ),
             "available_complete_clients": {
@@ -467,3 +469,16 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             },
         })
     return result
+
+
+def _acknowledged_date(payload: dict) -> dt.date | None:
+    value = payload.get("new_client_acknowledged_at")
+    if not value:
+        return None
+    try:
+        acknowledged = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if acknowledged.tzinfo is None:
+            acknowledged = acknowledged.replace(tzinfo=dt.timezone.utc)
+        return acknowledged.astimezone(MANILA).date()
+    except (TypeError, ValueError):
+        return None

@@ -122,8 +122,17 @@ def process_update(db: sqlite3.Connection, update: dict) -> None:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(chat_id, message_id) DO UPDATE SET
                             edited_utc=excluded.edited_utc,
+                            author_id=excluded.author_id,
+                            author_name=excluded.author_name,
                             text=excluded.text,
-                            content_type=excluded.content_type
+                            content_type=excluded.content_type,
+                            reply_to_message_id=excluded.reply_to_message_id,
+                            thread_id=excluded.thread_id,
+                            source='bot',
+                            source_file=NULL
+                        WHERE messages.edited_utc IS NULL
+                           OR (excluded.edited_utc IS NOT NULL
+                               AND excluded.edited_utc >= messages.edited_utc)
                         """,
                         (
                             chat["id"], message["message_id"], iso_timestamp(message["date"]),
@@ -135,7 +144,9 @@ def process_update(db: sqlite3.Connection, update: dict) -> None:
                     )
         db.execute(
             "INSERT INTO state(key, value) VALUES ('next_offset', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "ON CONFLICT(key) DO UPDATE SET value=CASE "
+            "WHEN CAST(excluded.value AS INTEGER) > CAST(state.value AS INTEGER) "
+            "THEN excluded.value ELSE state.value END",
             (str(update_id + 1),),
         )
 

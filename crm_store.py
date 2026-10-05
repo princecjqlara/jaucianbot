@@ -73,7 +73,7 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
     final ``details_collected`` outcome wins over ``missing_details`` because older
     states can retain stale or synonymous prompts after collection is complete.
     """
-    rows = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({
+    filters = {
         "select": (
             "contact_id,page_id,status,stop_reason,collected_details,missing_details,"
             "last_inbound_at,last_bot_reply_at,contacts!inner("
@@ -81,8 +81,15 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
         ),
         "page_id": f"eq.{page_id}",
         "stop_reason": "eq.details_collected",
+        "order": "contact_id.asc",
         "limit": 1000,
-    })) or []
+    }
+    rows = []
+    while True:
+        batch = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({**filters, "offset": len(rows)})) or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
     contacts: dict[str, dict] = {}
     for row in rows:
         contact = row.get("contacts") or {}
@@ -93,10 +100,13 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
             and contact.get("id")
             and (contact.get("name") or "").strip()
             and contact.get("psid")
-            and row.get("collected_details")
+            and isinstance(row.get("collected_details"), dict)
+            and row["collected_details"]
         ):
             contacts[contact["id"]] = {
                 "id": contact["id"],
+                "page_id": contact["page_id"],
+                "psid": contact["psid"],
                 "name": contact["name"].strip(),
                 "last_interaction_at": contact.get("last_interaction_at"),
                 "pipeline_stage": contact.get("pipeline_stage"),

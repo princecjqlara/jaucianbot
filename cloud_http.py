@@ -10,7 +10,7 @@ import os
 
 def authorized(header: str | None, env_name: str) -> bool:
     secret = os.environ.get(env_name)
-    return bool(secret and header and hmac.compare_digest(header, f"Bearer {secret}"))
+    return bool(secret and header and hmac.compare_digest(header.encode("utf-8"), f"Bearer {secret}".encode("utf-8")))
 
 
 def send_json(handler, status: int, payload: dict) -> None:

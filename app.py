@@ -18,6 +18,7 @@ from cloud_store import (
     claim_scheduled_actions,
     create_scheduled_action,
     daily_poll_counts,
+    defer_scheduled_action,
     finish_scheduled_action,
     known_chats,
     list_scheduled_actions,
@@ -39,6 +40,7 @@ from worker_activity import worker_activity_report
 
 
 MAX_BODY_BYTES = 1_000_000
+AUTOMATION_VERSION = "2026-10-05.2"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -67,7 +69,7 @@ def status_route(environ, start_response):
     except Exception as error:
         print(f"Status query failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
-    return response(start_response, 200, {"ok": True, "groups": groups})
+    return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION})
 
 
 def health_route(environ, start_response):
@@ -189,7 +191,7 @@ def validate_action(payload: dict) -> tuple[int, str, dict, dt.datetime, int | N
         raw_time = payload["scheduled_for"]
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("missing or invalid schedule fields") from error
-    if action_type not in {"message", "poll"} or not isinstance(raw_action, dict):
+    if not isinstance(action_type, str) or action_type not in {"message", "poll"} or not isinstance(raw_action, dict):
         raise ValueError("invalid action")
     if not isinstance(raw_time, str):
         raise ValueError("scheduled_for must be an ISO timestamp")
@@ -300,10 +302,10 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
         try:
             now = dt.datetime.now(dt.timezone.utc)
             if is_freebie_action(action) and not freebie_delivery_allowed(action, now):
-                finish_scheduled_action(action["id"], success=True)
+                defer_scheduled_action(action)
                 continue
             if is_new_client_action(action) and not new_client_delivery_allowed(action, now):
-                finish_scheduled_action(action["id"], success=True)
+                defer_scheduled_action(action)
                 continue
             daily_poll_date = action["payload"].get("daily_poll_date")
             is_daily_poll = action["action_type"] == "poll" and bool(daily_poll_date)
@@ -311,7 +313,7 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                 work_date = dt.date.fromisoformat(daily_poll_date)
                 existing = daily_poll_counts({int(action["chat_id"])}, work_date).get(int(action["chat_id"]))
                 if existing:
-                    finish_scheduled_action(action["id"], success=True)
+                    finish_scheduled_action(action["id"], success=True, claim=action)
                     continue
             message = send_scheduled_action(action)
             message_id = int(message["message_id"])
@@ -324,7 +326,7 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                     telegram_message_id=message_id,
                 ):
                     raise RuntimeError("daily poll was not registered")
-            if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id):
+            if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id, claim=action):
                 raise RuntimeError("schedule was not finalized")
             sent += 1
             try:
@@ -335,36 +337,45 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
             failed += 1
             print(f"Scheduled delivery failed: {type(error).__name__}")
             try:
-                finish_scheduled_action(action["id"], success=False, error=str(error))
+                finish_scheduled_action(action["id"], success=False, error=str(error), claim=action)
             except Exception as finish_error:
                 print(f"Schedule failure update failed: {type(finish_error).__name__}")
     return len(actions), sent, failed
 
 
 def dispatch_route(environ, start_response):
+    queued = 0
+    queue_errors = []
     try:
         allowed = allowed_chat_ids()
-        queued = run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
+        try:
+            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as daily_error:
+            queue_errors.append("daily")
+            print(f"Daily queue failed: {type(daily_error).__name__}")
         if os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
             try:
                 queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), allowed)
             except Exception as freebie_error:
+                queue_errors.append("freebie")
                 print(f"Freebie queue failed: {type(freebie_error).__name__}")
             try:
                 queued += queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), allowed)
             except Exception as assignment_error:
+                queue_errors.append("new_client")
                 print(f"New-client queue failed: {type(assignment_error).__name__}")
         processed, sent, failed = deliver_due_actions(allowed, limit=25)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False, "queued": 0, "processed": 0, "sent": 0, "failed": 0})
-    status = 200 if failed == 0 else 502
+    status = 502 if failed else 503 if queue_errors else 200
     return response(start_response, status, {
-        "ok": failed == 0,
+        "ok": failed == 0 and not queue_errors,
         "queued": queued,
         "processed": processed,
         "sent": sent,
         "failed": failed,
+        **({"queue_errors": queue_errors} if queue_errors else {}),
     })
 
 
@@ -373,7 +384,7 @@ def webhook_route(environ, start_response):
     supplied = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN")
     if not secret:
         return response(start_response, 503, {"ok": False, "error": "webhook not configured"})
-    if not supplied or not hmac.compare_digest(supplied, secret):
+    if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
         return response(start_response, 401, {"ok": False})
     try:
         allowed = allowed_chat_ids()

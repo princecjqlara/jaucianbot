@@ -7,6 +7,29 @@ import telegram_insights as insights
 
 
 class IngestionTests(unittest.TestCase):
+    def test_old_message_replay_cannot_undo_edit_or_rewind_cursor(self):
+        self.db.execute("INSERT INTO chats(chat_id,title,chat_type,approved,last_seen_utc) VALUES (?,?,?,?,?)",
+                        (self.chat["id"], "Operations", "supergroup", 1, "2026-10-05"))
+        self.db.commit()
+        insights.process_update(self.db, self.update(12, "Corrected", edited=True))
+        insights.process_update(self.db, self.update(11, "Old"))
+        row = self.db.execute("SELECT text,edited_utc FROM messages").fetchone()
+        self.assertEqual(row["text"], "Corrected")
+        self.assertIsNotNone(row["edited_utc"])
+        self.assertEqual(self.db.execute("SELECT value FROM state WHERE key='next_offset'").fetchone()[0], "13")
+
+    def test_edited_topic_and_author_metadata_are_updated(self):
+        self.db.execute("INSERT INTO chats(chat_id,title,chat_type,approved,last_seen_utc) VALUES (?,?,?,?,?)",
+                        (self.chat["id"], "Operations", "supergroup", 1, "2026-10-05"))
+        self.db.commit()
+        insights.process_update(self.db, self.update(1, "Original"))
+        edited = self.update(2, "Corrected", edited=True)
+        edited["edited_message"].update(message_thread_id=99, reply_to_message={"message_id": 88})
+        edited["edited_message"]["from"]["first_name"] = "Alexandra"
+        insights.process_update(self.db, edited)
+        row = self.db.execute("SELECT author_name,thread_id,reply_to_message_id FROM messages").fetchone()
+        self.assertEqual(tuple(row), ("Alexandra", 99, 88))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.patch = patch.object(insights, "DB_PATH", Path(self.temp.name) / "archive.sqlite3")

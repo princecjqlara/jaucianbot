@@ -244,7 +244,28 @@ def finish_scheduled_action(
     success: bool,
     telegram_message_id: int | None = None,
     error: str | None = None,
+    claim: dict | None = None,
 ) -> bool:
+    if claim is not None:
+        now = dt.datetime.now(dt.timezone.utc)
+        payload = dict(claim.get("payload") or {})
+        failures = 0 if success else int(payload.get("_delivery_failures", 0)) + 1
+        payload["_delivery_failures"] = failures
+        repeat = claim.get("repeat_interval_minutes")
+        changes = {
+            "payload": payload, "attempts": failures, "updated_at": now.isoformat(),
+            "status": ("pending" if repeat else "sent") if success else ("failed" if failures >= 5 else "pending"),
+            "last_error": None if success else (error or "delivery failed")[:500],
+        }
+        if success and repeat:
+            changes["scheduled_for"] = (now + dt.timedelta(minutes=repeat)).isoformat()
+        elif not success and failures < 5:
+            changes["scheduled_for"] = (now + dt.timedelta(minutes=5)).isoformat()
+        if success and telegram_message_id is not None:
+            if not payload.get("_first_delivery_at"):
+                payload["_first_delivery_at"] = now.isoformat()
+            changes.update(telegram_message_id=telegram_message_id, sent_at=now.isoformat())
+        return _update_claim(claim, changes)
     result = request(
         "rpc/insights_finish_scheduled_action",
         {
@@ -440,3 +461,22 @@ def new_client_action_state(action_id: int) -> dict | None:
         "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
     })) or []
     return rows[0] if rows else None
+
+
+def _update_claim(claim: dict, changes: dict) -> bool:
+    filters = {"id": f"eq.{claim['id']}", "status": "eq.processing"}
+    if claim.get("updated_at"):
+        filters["updated_at"] = "eq." + claim["updated_at"]
+    return bool(request("scheduled_actions?" + urllib.parse.urlencode(filters), changes,
+                        method="PATCH", prefer="return=representation"))
+
+
+
+def defer_scheduled_action(claim: dict) -> bool:
+    """Reschedule a suppressed reminder without recording a delivery."""
+    now = dt.datetime.now(dt.timezone.utc)
+    return _update_claim(claim, {
+        "status": "pending", "updated_at": now.isoformat(),
+        "scheduled_for": (now + dt.timedelta(minutes=claim.get("repeat_interval_minutes") or 15)).isoformat(),
+        "attempts": max(int(claim.get("attempts") or 1) - 1, 0),
+    })

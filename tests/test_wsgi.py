@@ -199,7 +199,7 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True, "queued": 0, "processed": 1, "sent": 1, "failed": 0})
         claim.assert_called_once_with({-100123}, limit=25)
         send.assert_called_once_with(action)
-        finish.assert_called_once_with(7, success=True, telegram_message_id=51)
+        finish.assert_called_once_with(7, success=True, telegram_message_id=51, claim=action)
         save.assert_called_once_with({"message": sent_message}, {-100123})
 
     def test_dispatch_with_no_due_actions_is_safe(self):
@@ -242,7 +242,7 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["sent"], 1)
         register.assert_called_once()
-        finish.assert_called_once_with(8, success=True, telegram_message_id=52)
+        finish.assert_called_once_with(8, success=True, telegram_message_id=52, claim=action)
 
     def test_tracked_daily_poll_is_not_sent_twice_after_finalize_failure(self):
         action = {
@@ -265,7 +265,7 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["sent"], 0)
         send.assert_not_called()
-        finish.assert_called_once_with(8, success=True)
+        finish.assert_called_once_with(8, success=True, claim=action)
 
     def test_webhook_stores_poll_answer(self):
         update = {"update_id": 2, "poll_answer": {"poll_id": "poll-1"}}
