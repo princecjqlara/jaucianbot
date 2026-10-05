@@ -11,3 +11,4 @@ telegram_insights.sqlite3-*
 *.log
 __pycache__/
 tests/
+.audit/

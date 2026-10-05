@@ -23,6 +23,53 @@ from daily_automation import (
 
 
 class DailyAutomationTests(unittest.TestCase):
+    def test_report_reminder_and_worker_data_share_corrected_totals(self):
+        text = "October 5, 2026\nClient A\nPD: 650 + 550 (two videos) = 1,200\nPage: Manawari Studios"
+        rows = [
+            {"message_id": 1, "thread_id": 7, "author_id": 1, "author_name": "Alex", "text": text},
+            {"message_id": 2, "thread_id": 7, "author_id": 1, "author_name": "Alex", "text": text},
+            {"message_id": 3, "thread_id": 6, "author_id": 1, "author_name": "Alex",
+             "text": "Client B\nDP: 100\nPD: -\nPage: Manawari Studios"},
+            {"message_id": 4, "thread_id": 6, "author_id": 1, "author_name": "Alex",
+             "text": "Close Deal: 1\nPage: Manawari Studios"},
+        ]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)), patch(
+            "freebie_automation.freebie_report_lines", return_value=[]
+        ), patch("new_client_automation.new_client_report_lines", return_value=[]):
+            report = build_group_report(-1003962888977, dt.date(2026, 10, 5), {"active_workers": 1})
+            progress = deal_progress_for_day(-1003962888977, dt.date(2026, 10, 5))
+        self.assertIn("Actual: 1 DD ✅ • 1 CD ✅", report)
+        self.assertIn("Gross: ₱1,200", report)
+        self.assertIn("Commissions: −₱480", report)
+        self.assertEqual((progress["dd_total"], progress["cd_total"]), (1, 1))
+        self.assertEqual(progress["workers"][0]["gross"], Decimal("1200"))
+        self.assertIn("Excluded 1 repeated", report)
+
+    def test_unreadable_posts_do_not_claim_everyone_has_a_deal(self):
+        with patch("daily_automation.messages_for_day", return_value=([
+            {"thread_id": 1135, "author_id": 1, "author_name": "Alex", "text": "Page: Azshinari\nPD: pending"},
+        ], False)):
+            report = build_group_report(-1003647732254, dt.date(2026, 10, 5), {"active_workers": 1},
+                                        active_users=[{"user_id": 1, "user_name": "Alex"}])
+        self.assertNotIn("Everyone has at least one recorded", report)
+        self.assertIn("Please review a possible deal post for: Alex", report)
+
+    def test_missing_poll_does_not_guess_commission_tier(self):
+        with patch("daily_automation.messages_for_day", return_value=([
+            {"thread_id": 1135, "author_name": "Alex", "text": "Page: Azshinari\nPD: 650"},
+        ], False)):
+            report = build_group_report(-1003647732254, dt.date(2026, 10, 5), None)
+        self.assertIn("Commission: needs a quick data review", report)
+
+    def test_employee_commissions_round_before_totaling(self):
+        rows = [{"thread_id": 1135, "author_id": i, "author_name": str(i),
+                 "text": "Page: Azshinari\nPD: 0.10"} for i in (1, 2)]
+        with patch("daily_automation.messages_for_day", return_value=(rows, False)):
+            report = build_group_report(-1003647732254, dt.date(2026, 10, 5), {"active_workers": 5})
+        self.assertEqual(report.count("Pay: ₱0.04"), 2)
+        self.assertIn("Commissions: −₱0.08", report)
+        self.assertIn("Net profit: ₱0.12", report)
+
     def test_parses_current_deal_formats(self):
         text = "SEPTEMBER 18, 2026\nClient\nPD: 1,450\nPAGE: Manawari Studio"
         self.assertEqual(parse_price(text), Decimal("1450"))

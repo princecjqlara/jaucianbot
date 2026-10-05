@@ -10,6 +10,27 @@ NOW = dt.datetime(2026, 9, 22, 4, tzinfo=dt.timezone.utc)
 
 
 class WorkerActivityTests(unittest.TestCase):
+    def test_zero_cd_is_readable_and_uncertain_activity_is_not_a_confirmed_missing_day(self):
+        messages = [
+            {"message_id": 1, "sent_utc": NOW.isoformat(), "author_id": 1,
+             "author_name": "Alex", "thread_id": 1132, "text": "Page: Azshinari\nClose Deal: 0"},
+            {"message_id": 2, "sent_utc": NOW.isoformat(), "author_id": 2,
+             "author_name": "Bea", "thread_id": 1135, "text": "Page: Azshinari\nPD: pending"},
+        ]
+        answers = [{"user_id": i, "user_name": name, "active": True,
+                    "daily_polls": {"work_date": "2026-09-22"}} for i, name in ((1, "Alex"), (2, "Bea"))]
+        with patch("worker_activity.activity_messages", return_value=messages), patch(
+            "worker_activity.poll_answers_for_range", return_value=answers
+        ), patch("worker_activity.freebie_actions", return_value=[]), patch(
+            "worker_activity.new_client_actions", return_value=[]
+        ):
+            report = worker_activity_report(CHAT, 1, NOW)
+        people = {worker["name"]: worker for worker in report["workers"]}
+        self.assertEqual(people["Alex"]["unreadable_posts"], 0)
+        self.assertEqual(people["Alex"]["active_days_without_deals"], 1)
+        self.assertEqual(people["Bea"]["active_days_without_deals"], 0)
+        self.assertEqual(people["Bea"]["active_days_awaiting_review"], 1)
+
     def test_builds_transparent_rankings_hours_and_coaching(self):
         messages = [
             {"message_id": 1, "sent_utc": "2026-09-21T02:00:00+00:00", "author_id": 1,

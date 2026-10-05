@@ -6,12 +6,16 @@ import datetime as dt
 import math
 import re
 from collections import defaultdict
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from cloud_store import (
     daily_messages, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, existing_daily_reminder_chats,
+)
+from deal_parser import (
+    CLOSE_RE, DONE_MARKER_RE, PAGE_RE, PRICE_RE, author_identity, collect_deals,
+    normalize_page, parse_close_count, parse_page, parse_price,
 )
 
 
@@ -80,41 +84,6 @@ GROUPS = {
     },
 }
 
-PAGE_RE = re.compile(r"(?im)^\s*page(?:\s+name)?\s*:\s*([^\n]+)")
-PRICE_RE = re.compile(r"(?im)^\s*(?:price\s*deal|pd)\s*:\s*(?:php|₱)?\s*([\d,]+(?:\.\d+)?)")
-CLOSE_RE = re.compile(r"(?im)^\s*close\s*deals?\s*:\s*(\d+)")
-DONE_MARKER_RE = re.compile(r"(?im)^\s*(?:paid\b|total\s*(?:payment|pay)\s*:)")
-
-
-def normalize_page(text: str, configured: dict[str, str]) -> str | None:
-    value = text.split("(", 1)[0].strip(" .:-")
-    key = re.sub(r"[^a-z0-9]", "", value.casefold())
-    return configured.get(key)
-
-
-def parse_page(text: str, configured: dict[str, str]) -> str | None:
-    match = PAGE_RE.search(text)
-    return normalize_page(match.group(1), configured) if match else None
-
-
-def parse_price(text: str) -> Decimal | None:
-    match = PRICE_RE.search(text)
-    if not match:
-        return None
-    try:
-        return Decimal(match.group(1).replace(",", ""))
-    except Exception:
-        return None
-
-
-def parse_close_count(text: str) -> int | None:
-    match = CLOSE_RE.search(text)
-    if match:
-        return int(match.group(1))
-    price = parse_price(text)
-    return 1 if price is not None and price > 0 else None
-
-
 def money(value: Decimal) -> str:
     formatted = f"{value:,.2f}"
     if formatted.endswith(".00"):
@@ -137,7 +106,7 @@ def messages_for_day(chat_id: int, work_date: dt.date) -> tuple[list[dict], bool
         start_local.astimezone(dt.timezone.utc),
         end_local.astimezone(dt.timezone.utc),
     )
-    return rows[:500], len(rows) > 500
+    return rows[:10000], len(rows) > 10000
 
 
 def same_author(user: dict, row: dict) -> bool:
@@ -161,72 +130,33 @@ def build_group_report(
     rows, capped = messages_for_day(chat_id, work_date)
     page_stats = defaultdict(lambda: {"cd": 0, "dd": 0, "gross": Decimal("0")})
     employee_stats = defaultdict(lambda: {"dd": 0, "gross": Decimal("0")})
-    counted_close_reports: set[tuple[str, str]] = set()
-    deal_rows: list[dict] = []
-    uncertain_rows: list[dict] = []
-    skipped_done = 0
-    skipped_close = 0
-
-    for row in rows:
-        thread_id = row.get("thread_id")
-        text = row.get("text") or ""
-        historical_done = (
-            historical
-            and thread_id is None
-            and PAGE_RE.search(text)
-            and PRICE_RE.search(text)
-            and DONE_MARKER_RE.search(text)
-        )
-        historical_close = (
-            historical
-            and thread_id is None
-            and PAGE_RE.search(text)
-            and PRICE_RE.search(text)
-            and not DONE_MARKER_RE.search(text)
-        )
-        if thread_id == config["done"] or historical_done:
-            page = parse_page(text, config["pages"])
-            price = parse_price(text)
-            if page is None or price is None or price <= 0:
-                looks_like_deal = bool(
-                    PAGE_RE.search(text) or PRICE_RE.search(text) or DONE_MARKER_RE.search(text)
-                    or row.get("content_type") in {"photo", "video", "document"}
-                )
-                if looks_like_deal:
-                    skipped_done += 1
-                    uncertain_rows.append(row)
+    parsed = collect_deals(rows, config, historical=historical)
+    deal_rows = [entry["row"] for entry in parsed["entries"] if entry["count"] > 0]
+    uncertain_rows = parsed["uncertain_rows"]
+    skipped_done = sum(bool(row.get("thread_id") == config["done"] or (
+        historical and row.get("thread_id") is None and DONE_MARKER_RE.search(row.get("text") or "")
+    )) for row in uncertain_rows)
+    skipped_close = len(uncertain_rows) - skipped_done
+    for entry in parsed["entries"]:
+        row, page = entry["row"], entry["page"]
+        if entry["kind"] == "dd":
+            page_stats[page]["dd"] += entry["count"]
+            page_stats[page]["gross"] += entry["gross"]
+            key = author_identity(row)
+            employee_stats[key].update(name=" ".join((row.get("author_name") or "Unknown employee").split()))
+            employee_stats[key]["dd"] += entry["count"]
+            employee_stats[key]["gross"] += entry["gross"]
+        else:
+            page_stats[page]["cd"] += entry["count"]
+    if historical:
+        for row in rows:
+            if row.get("thread_id") is not None or PRICE_RE.search(row.get("text") or ""):
                 continue
-            author = (row.get("author_name") or "Unknown employee").strip()
-            page_stats[page]["dd"] += 1
-            page_stats[page]["gross"] += price
-            employee_stats[author]["dd"] += 1
-            employee_stats[author]["gross"] += price
-            deal_rows.append(row)
-        elif thread_id == config["close"] or historical_close:
-            page = parse_page(text, config["pages"])
-            close_count = parse_close_count(text)
-            if page is None or close_count is None:
-                looks_like_deal = bool(
-                    PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
-                    or row.get("content_type") in {"photo", "video", "document"}
-                )
-                if looks_like_deal:
-                    skipped_close += 1
-                    uncertain_rows.append(row)
-                continue
-            if close_count > 0:
-                deal_rows.append(row)
-            if CLOSE_RE.search(text):
-                author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
-                if author_key in counted_close_reports:
-                    continue
-                counted_close_reports.add(author_key)
-            page_stats[page]["cd"] += close_count
-        elif historical and thread_id is None:
+            text = row.get("text") or ""
             # Exported close summaries can duplicate individual CD entries.
             # They establish that an employee had a CD without changing totals.
             summary = CLOSE_RE.search(text)
-            if summary and int(summary.group(1)) > 0:
+            if summary and (parse_close_count(text) or 0) > 0:
                 deal_rows.append(row)
             elif (PAGE_RE.search(text) or PRICE_RE.search(text) or DONE_MARKER_RE.search(text)) and text.strip():
                 uncertain_rows.append(row)
@@ -251,11 +181,12 @@ def build_group_report(
         and not qualified
         and (capped or (dd_could_reach_quota and cd_could_reach_quota))
     )
-    rate = None if commission_needs_review else (
+    rate = None if commission_needs_review or not has_poll else (
         Decimal("0.40") if qualified else Decimal("0.35")
     )
     salaries = {
-        name: values["gross"] * rate for name, values in employee_stats.items()
+        name: (values["gross"] * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        for name, values in employee_stats.items()
     } if rate is not None else {}
     salary_total = sum(salaries.values(), Decimal("0")) if rate is not None else None
     profit = gross - salary_total if salary_total is not None else None
@@ -289,6 +220,8 @@ def build_group_report(
         "",
         "📄 PAGE TOTALS",
     ])
+    if skipped_done or skipped_close or capped:
+        lines.append("Totals and sales include verified posts only; unresolved entries may change the result.")
     for page, values in sorted(page_stats.items()):
         lines.extend([
             page.upper(),
@@ -296,13 +229,13 @@ def build_group_report(
             f"  Sales: {money(values['gross'])}",
         ])
     lines.extend(["", "👥 EMPLOYEE RANKING"])
-    ranking = sorted(employee_stats.items(), key=lambda item: (-item[1]["gross"], item[0].casefold()))
+    ranking = sorted(employee_stats.items(), key=lambda item: (-item[1]["gross"], item[1]["name"].casefold()))
     if ranking:
-        for index, (name, values) in enumerate(ranking, 1):
+        for index, (key, values) in enumerate(ranking, 1):
             lines.extend([
-                f"{index}. {name}",
+                f"{index}. {values['name']}",
                 f"   {values['dd']} DD • {money(values['gross'])} sales",
-                "   Pay: pending data review" if rate is None else f"   Pay: {money(salaries[name])}",
+                "   Pay: pending data review" if rate is None else f"   Pay: {money(salaries[key])}",
             ])
     else:
         lines.append("No readable Done Deals were recorded.")
@@ -327,7 +260,7 @@ def build_group_report(
             else:
                 no_deals.append(name)
         lines.extend(f"• {name}" for name in sorted(no_deals, key=str.casefold))
-        if not no_deals:
+        if not no_deals and not uncertain:
             lines.append("Everyone has at least one recorded CD or DD.")
         if uncertain:
             lines.append("Please review a possible deal post for: " + ", ".join(sorted(uncertain, key=str.casefold)))
@@ -349,14 +282,20 @@ def build_group_report(
             lines.extend(new_client_report_lines(chat_id, work_date))
         except Exception:
             lines.extend(["", "👤 NEW CLIENTS ACKNOWLEDGED", "New-client assignment data couldn't be loaded for this report."])
-    if skipped_done or skipped_close or capped:
+    if skipped_done or skipped_close or capped or parsed["duplicate_rows"]:
         lines.extend(["", "DATA CHECK"])
         if skipped_done:
             lines.append(f"• Please review {skipped_done} possible Done Deals post(s); the page or Price Deal wasn't readable.")
         if skipped_close:
             lines.append(f"• Please review {skipped_close} possible Close Deals post(s); the page or count wasn't readable.")
+        if parsed["ownership_conflicts"]:
+            lines.append("• The same client and amount were posted by different employees; confirm ownership before adding these deals or pay.")
+        for row in uncertain_rows:
+            lines.append(f"• {config['name']} | UTC {row.get('sent_utc', 'unavailable')} | message #{row.get('message_id', 'unavailable')}")
+        if parsed["duplicate_rows"]:
+            lines.append(f"• Excluded {len(parsed['duplicate_rows'])} repeated deal post(s) from totals.")
         if capped:
-            lines.append("• This group passed the 500-message review limit, so please check it manually for any overflow.")
+            lines.append("• This group passed the 10,000-message review limit, so please check it manually for any overflow.")
     if historical:
         lines.extend([
             "",
@@ -376,7 +315,9 @@ def historical_active_users(chat_id: int, work_date: dt.date) -> list[dict] | No
     for row in rows:
         text = row.get("text") or ""
         author = (row.get("author_name") or "").strip()
-        if author and re.search(r"(?i)\bactive\b", text) and "?" not in text and not excluded.search(text):
+        if (author and re.search(r"(?i)\bactive\b", text) and "?" not in text
+                and not re.search(r"(?i)\b(?:not|no[t']?|won't)\s+(?:be\s+)?active\b", text)
+                and not excluded.search(text)):
             workers[author.casefold()] = {"user_id": row.get("author_id"), "user_name": author}
     return list(workers.values()) if workers else None
 
@@ -493,57 +434,23 @@ def deal_progress_for_day(chat_id: int, work_date: dt.date) -> dict:
     deal_rows: list[dict] = []
     uncertain_rows: list[dict] = []
     worker_stats: dict[tuple[str, object], dict] = {}
-    counted_close_reports: set[tuple[str, str]] = set()
-
-    def worker(row: dict) -> dict:
-        author_id = row.get("author_id")
-        name = " ".join((row.get("author_name") or "Unknown employee").split())
-        key = ("id", int(author_id)) if author_id is not None else ("name", name.casefold())
-        return worker_stats.setdefault(key, {
-            "user_id": int(author_id) if author_id is not None else None,
-            "name": name,
-            "dd": 0,
-            "cd": 0,
-            "gross": Decimal("0"),
+    parsed = collect_deals(rows, config)
+    uncertain_rows = parsed["uncertain_rows"]
+    for entry in parsed["entries"]:
+        if entry["count"] <= 0:
+            continue
+        row = entry["row"]
+        key = author_identity(row)
+        stats = worker_stats.setdefault(key, {
+            "user_id": row.get("author_id"),
+            "name": " ".join((row.get("author_name") or "Unknown employee").split()),
+            "dd": 0, "cd": 0, "gross": Decimal("0"),
         })
-
-    for row in rows:
-        text = row.get("text") or ""
-        thread_id = row.get("thread_id")
-        if thread_id not in {config["done"], config["close"]}:
-            continue
-        page = parse_page(text, config["pages"])
-        if page is None:
-            if (
-                PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
-                or row.get("content_type") in {"photo", "video", "document"}
-            ):
-                uncertain_rows.append(row)
-            continue
-        if thread_id == config["done"]:
-            price = parse_price(text)
-            if price is not None and price > 0:
-                dd_total += 1
-                stats = worker(row)
-                stats["dd"] += 1
-                stats["gross"] += price
-                deal_rows.append(row)
-            else:
-                uncertain_rows.append(row)
-        elif thread_id == config["close"]:
-            close_count = parse_close_count(text)
-            if close_count is None:
-                uncertain_rows.append(row)
-                continue
-            if CLOSE_RE.search(text):
-                author_key = ((row.get("author_name") or "Unknown employee").casefold(), page)
-                if author_key in counted_close_reports:
-                    continue
-                counted_close_reports.add(author_key)
-            cd_total += close_count
-            if close_count > 0:
-                worker(row)["cd"] += close_count
-                deal_rows.append(row)
+        stats[entry["kind"]] += entry["count"]
+        stats["gross"] += entry["gross"]
+        dd_total += entry["count"] if entry["kind"] == "dd" else 0
+        cd_total += entry["count"] if entry["kind"] == "cd" else 0
+        deal_rows.append(row)
     return {
         "dd_total": dd_total,
         "cd_total": cd_total,
@@ -609,7 +516,8 @@ def quota_reminder(
             elif leader["cd"] > 0:
                 lines.append(f"Current activity leader: {leader['name']} — {leader['cd']} CD.")
 
-        if active_users is not None and hour >= 10:
+        if (active_users is not None and hour >= 10
+                and len(active_users) == workers):
             no_activity: list[str] = []
             awaiting_review: list[str] = []
             for user in active_users:

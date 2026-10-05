@@ -108,15 +108,22 @@ def archive_messages(
 
 def daily_messages(chat_id: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
     """Read one local workday, including author IDs for poll/deal matching."""
-    filters = urllib.parse.urlencode([
-        ("select", "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source"),
-        ("chat_id", f"eq.{chat_id}"),
-        ("sent_utc", f"gte.{start_utc.isoformat()}"),
-        ("sent_utc", f"lt.{end_utc.isoformat()}"),
-        ("order", "sent_utc.desc,message_id.desc"),
-        ("limit", 501),
-    ])
-    return request("messages?" + filters) or []
+    result: list[dict] = []
+    while len(result) <= 10000:
+        filters = urllib.parse.urlencode([
+            ("select", "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source"),
+            ("chat_id", f"eq.{chat_id}"),
+            ("sent_utc", f"gte.{start_utc.isoformat()}"),
+            ("sent_utc", f"lt.{end_utc.isoformat()}"),
+            ("order", "sent_utc.desc,message_id.desc"),
+            ("limit", 501),
+            ("offset", len(result)),
+        ])
+        rows = request("messages?" + filters) or []
+        result.extend(rows)
+        if len(rows) < 501:
+            break
+    return result[:10001]
 
 
 def upsert_chats(chats: list[dict]) -> None:
@@ -292,16 +299,16 @@ def activity_messages(
     result: list[dict] = []
     offset = 0
     while True:
-        filters = urllib.parse.urlencode({
-            "select": "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source",
-            "chat_id": f"eq.{chat_id}",
-            "sent_utc": f"gte.{start_utc.isoformat()}",
-            "sent_utc": f"lt.{end_utc.isoformat()}",
-            "thread_id": "in.(" + ",".join(str(value) for value in sorted(thread_ids)) + ")",
-            "order": "sent_utc.asc,message_id.asc",
-            "limit": 1000,
-            "offset": offset,
-        })
+        filters = urllib.parse.urlencode([
+            ("select", "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,source"),
+            ("chat_id", f"eq.{chat_id}"),
+            ("sent_utc", f"gte.{start_utc.isoformat()}"),
+            ("sent_utc", f"lt.{end_utc.isoformat()}"),
+            ("thread_id", "in.(" + ",".join(str(value) for value in sorted(thread_ids)) + ")"),
+            ("order", "sent_utc.asc,message_id.asc"),
+            ("limit", 1000),
+            ("offset", offset),
+        ])
         rows = request("messages?" + filters) or []
         result.extend(rows)
         if len(rows) < 1000:
@@ -311,15 +318,21 @@ def activity_messages(
 
 def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date) -> list[dict]:
     """Read every poll answer for a team over an inclusive date range."""
-    filters = urllib.parse.urlencode({
-        "select": "user_id,user_name,active,daily_polls!inner(work_date,chat_id)",
-        "daily_polls.chat_id": f"eq.{chat_id}",
-        "daily_polls.work_date": f"gte.{start_date.isoformat()}",
-        "daily_polls.work_date": f"lte.{end_date.isoformat()}",
-        "order": "user_id.asc",
-        "limit": 10000,
-    })
-    return request("daily_poll_answers?" + filters) or []
+    result: list[dict] = []
+    while True:
+        filters = urllib.parse.urlencode([
+            ("select", "user_id,user_name,active,daily_polls!inner(work_date,chat_id)"),
+            ("daily_polls.chat_id", f"eq.{chat_id}"),
+            ("daily_polls.work_date", f"gte.{start_date.isoformat()}"),
+            ("daily_polls.work_date", f"lte.{end_date.isoformat()}"),
+            ("order", "poll_id.asc,user_id.asc"),
+            ("limit", 1000),
+            ("offset", len(result)),
+        ])
+        rows = request("daily_poll_answers?" + filters) or []
+        result.extend(rows)
+        if len(rows) < 1000:
+            return result
 
 
 def freebie_actions(allowed: set[int]) -> list[dict]:

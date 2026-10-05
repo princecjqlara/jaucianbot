@@ -7,7 +7,8 @@ from collections import Counter
 from decimal import Decimal
 
 from cloud_store import activity_messages, freebie_actions, new_client_actions, poll_answers_for_range
-from daily_automation import CLOSE_RE, GROUPS, MANILA, PAGE_RE, PRICE_RE, parse_close_count, parse_page, parse_price
+from daily_automation import GROUPS, MANILA
+from deal_parser import collect_deals
 from freebie_automation import is_freebie_action
 from new_client_automation import is_new_client_action
 
@@ -84,6 +85,7 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
             "active_dates": set(),
             "inactive_dates": set(),
             "deal_dates": set(),
+            "uncertain_dates": set(),
             "dd": 0,
             "cd": 0,
             "gross": Decimal("0"),
@@ -105,44 +107,24 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         target = person(row.get("user_id"), row.get("user_name"))
         (target["active_dates"] if row.get("active") else target["inactive_dates"]).add(work_date)
 
-    counted_close_reports: set[tuple[dt.date, tuple[str, object], str]] = set()
-    for row in rows:
-        text = row.get("text") or ""
-        page = parse_page(text, config["pages"])
+    parsed = collect_deals(rows, config)
+    for entry in parsed["entries"]:
+        if entry["count"] <= 0:
+            continue
+        row = entry["row"]
         target = person(row.get("author_id"), row.get("author_name"))
         sent = _timestamp(row["sent_utc"])
         local = sent.astimezone(MANILA)
-        valid = False
-        if row.get("thread_id") == config["done"]:
-            price = parse_price(text)
-            if page is not None and price is not None and price > 0:
-                target["dd"] += 1
-                target["gross"] += price
-                valid = True
-        elif row.get("thread_id") == config["close"]:
-            close_count = parse_close_count(text)
-            if page is not None and close_count is not None:
-                if CLOSE_RE.search(text):
-                    summary_key = (local.date(), _identity(row.get("author_id"), row.get("author_name")), page)
-                    if summary_key in counted_close_reports:
-                        continue
-                    counted_close_reports.add(summary_key)
-                target["cd"] += close_count
-                valid = close_count > 0
-        if valid:
-            target["deal_dates"].add(local.date())
-            target["hours"][local.hour] += 1
-            target["first_activity_utc"] = min(
-                filter(None, (target["first_activity_utc"], sent)), default=sent,
-            )
-            target["last_activity_utc"] = max(
-                filter(None, (target["last_activity_utc"], sent)), default=sent,
-            )
-        elif (
-            PAGE_RE.search(text) or PRICE_RE.search(text) or CLOSE_RE.search(text)
-            or row.get("content_type") in {"photo", "video", "document"}
-        ):
-            target["unreadable_posts"] += 1
+        target[entry["kind"]] += entry["count"]
+        target["gross"] += entry["gross"]
+        target["deal_dates"].add(local.date())
+        target["hours"][local.hour] += 1
+        target["first_activity_utc"] = min(filter(None, (target["first_activity_utc"], sent)), default=sent)
+        target["last_activity_utc"] = max(filter(None, (target["last_activity_utc"], sent)), default=sent)
+    for row in parsed["uncertain_rows"]:
+        target = person(row.get("author_id"), row.get("author_name"))
+        target["unreadable_posts"] += 1
+        target["uncertain_dates"].add(_timestamp(row["sent_utc"]).astimezone(MANILA).date())
 
     for action in freebie_actions({chat_id}):
         if not is_freebie_action(action):
@@ -176,12 +158,14 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         deal_dates = value.pop("deal_dates")
         hours = value.pop("hours")
         deal_active_days = len(deal_dates.intersection(active_dates)) if active_dates else len(deal_dates)
-        no_deal_days = max(active_days - deal_active_days, 0)
+        uncertain_dates = value.pop("uncertain_dates")
+        no_deal_days = len(active_dates - deal_dates - uncertain_dates)
         value.update({
             "active_days": active_days,
             "inactive_days": inactive_days,
             "deal_days": deal_active_days,
             "active_days_without_deals": no_deal_days,
+            "active_days_awaiting_review": len((active_dates - deal_dates).intersection(uncertain_dates)),
             "consistency_percent": round(100 * min(deal_active_days, active_days) / active_days, 1) if active_days else None,
             "best_hour_pht": min((hour for hour, count in hours.items() if count == max(hours.values())), default=None),
             "activity_score": value["dd"] * 3 + value["cd"] * 2,

@@ -11,12 +11,43 @@ from unittest.mock import patch
 
 from api.webhook import handler
 from cloud_store import (
-    allowed_chat_ids, daily_messages, daily_poll_active_users,
+    activity_messages, allowed_chat_ids, daily_messages, daily_poll_active_users,
+    poll_answers_for_range,
     existing_daily_reminder_chats, new_client_actions, new_client_reply_messages, save_update,
 )
 
 
 class CloudStorageTests(unittest.TestCase):
+    def test_activity_queries_keep_both_time_bounds_and_paginate(self):
+        start = dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc)
+        end = start + dt.timedelta(days=2)
+        with patch("cloud_store.request", side_effect=[[{"message_id": i} for i in range(1000)], []]) as request:
+            rows = activity_messages(-100123, start, end, {6, 7})
+        self.assertEqual(len(rows), 1000)
+        for index, call in enumerate(request.call_args_list):
+            params = urllib.parse.parse_qs(call.args[0].split("?", 1)[1])
+            self.assertEqual(params["sent_utc"], [f"gte.{start.isoformat()}", f"lt.{end.isoformat()}"])
+            self.assertEqual(params["offset"], [str(index * 1000)])
+
+    def test_poll_history_keeps_both_date_bounds_and_paginate(self):
+        start, end = dt.date(2026, 10, 1), dt.date(2026, 10, 5)
+        with patch("cloud_store.request", side_effect=[[{"user_id": i} for i in range(1000)], []]) as request:
+            rows = poll_answers_for_range(-100123, start, end)
+        self.assertEqual(len(rows), 1000)
+        for index, call in enumerate(request.call_args_list):
+            params = urllib.parse.parse_qs(call.args[0].split("?", 1)[1])
+            self.assertEqual(params["daily_polls.work_date"], ["gte.2026-10-01", "lte.2026-10-05"])
+            self.assertEqual(params["offset"], [str(index * 1000)])
+
+    def test_daily_report_reads_earlier_deals_beyond_500_chat_messages(self):
+        start = dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc)
+        with patch("cloud_store.request", side_effect=[[{"message_id": i} for i in range(501)], [{"message_id": 900}]]) as request:
+            rows = daily_messages(-100123, start, start + dt.timedelta(days=1))
+        self.assertEqual(len(rows), 502)
+        self.assertEqual(rows[-1]["message_id"], 900)
+        params = urllib.parse.parse_qs(request.call_args_list[1].args[0].split("?", 1)[1])
+        self.assertEqual(params["offset"], ["501"])
+
     def test_passes_allowlist_to_supabase_rpc(self):
         update = {"update_id": 1, "message": {"message_id": 12}}
         with patch("cloud_store.request", return_value=True) as request:
