@@ -40,7 +40,7 @@ from worker_activity import worker_activity_report
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-06.1"
+AUTOMATION_VERSION = "2026-10-06.2"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
