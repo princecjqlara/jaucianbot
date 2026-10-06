@@ -12,8 +12,8 @@ from unittest.mock import patch
 from api.webhook import handler
 from cloud_store import (
     activity_messages, allowed_chat_ids, daily_messages, daily_poll_active_users,
-    poll_answers_for_range,
     existing_daily_reminder_chats, new_client_actions, new_client_reply_messages, save_update,
+    poll_answers_for_range, update_new_client_action,
 )
 
 
@@ -77,6 +77,7 @@ class CloudStorageTests(unittest.TestCase):
         answer_params = urllib.parse.parse_qs(answer_path.split("?", 1)[1])
         self.assertEqual(answer_params["poll_id"], ["eq.poll-1"])
         self.assertEqual(answer_params["active"], ["eq.true"])
+        self.assertIn("updated_at", answer_params["select"][0])
 
     def test_existing_reminder_lookup_is_scoped_to_slot_and_groups(self):
         with patch("cloud_store.request", return_value=[{"chat_id": -100123}]) as request:
@@ -107,6 +108,19 @@ class CloudStorageTests(unittest.TestCase):
             "gte.2026-09-27T07:00:00+00:00", "lte.2026-09-27T08:00:00+00:00",
         ])
         self.assertEqual(params["text"], ["ilike.*working*"])
+
+    def test_new_client_update_can_include_timed_out_cancelled_action(self):
+        with patch("cloud_store.request", return_value=[]) as request:
+            update_new_client_action(
+                42, {"new_client_token": "ABCDEF12"}, status="cancelled",
+                include_cancelled=True,
+            )
+        path = request.call_args.args[0]
+        params = urllib.parse.parse_qs(path.split("?", 1)[1])
+        self.assertEqual(params["id"], ["eq.42"])
+        self.assertEqual(
+            params["status"], ["in.(pending,processing,failed,cancelled)"],
+        )
 
 
 class WebhookTests(unittest.TestCase):

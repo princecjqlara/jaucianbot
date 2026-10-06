@@ -19,15 +19,63 @@ from cloud_store import (
     new_client_reply_messages,
     update_new_client_action,
 )
-from crm_store import completed_detail_contacts
+from crm_store import completed_detail_contacts, contact_identity_map
 from daily_automation import GROUPS, MANILA
 
 
 WORKING_RE = re.compile(r"\b/?working\s+([A-F0-9]{8})\b", re.IGNORECASE)
 WORKING_REPLY_RE = re.compile(r"^\s*/?working(?:\s+(?:on\s+it|now))?[.!]?\s*$", re.IGNORECASE)
-REASSIGN_AFTER = dt.timedelta(hours=1)
 REASSIGN_REASON = "working_not_confirmed_within_one_hour"
+REASSIGN_REASON_30 = "working_not_confirmed_within_30_minutes"
+REASSIGN_REASONS = {REASSIGN_REASON, REASSIGN_REASON_30}
+DUPLICATE_REASON = "contact_already_acknowledged"
 REMINDER_MINUTES = 60
+
+
+def _timeout_minutes(chat_id: int) -> int:
+    return int(GROUPS[chat_id].get("new_client_timeout_minutes", 60))
+
+
+def _timeout_reason(chat_id: int) -> str:
+    return REASSIGN_REASON_30 if _timeout_minutes(chat_id) == 30 else REASSIGN_REASON
+
+
+def _utc_time(value) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(dt.timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _paused_members(today: list[dict], members: list[dict]) -> set[int]:
+    """Pause missed deliveries until a newer Active vote or WORKING reply."""
+    timeouts: dict[int, dt.datetime] = {}
+    acknowledgments: dict[int, dt.datetime] = {}
+    for row in today:
+        payload = row["payload"]
+        user_id = int(payload["new_client_assignee_id"])
+        acknowledged = _utc_time(payload.get("new_client_acknowledged_at"))
+        if acknowledged:
+            acknowledgments[user_id] = max(acknowledgments.get(user_id, acknowledged), acknowledged)
+        elif row.get("status") == "cancelled" and payload.get("new_client_cancelled_reason") in REASSIGN_REASONS:
+            cancelled = _utc_time(payload.get("new_client_cancelled_at"))
+            if cancelled:
+                timeouts[user_id] = max(timeouts.get(user_id, cancelled), cancelled)
+    paused = set()
+    for user in members:
+        user_id = int(user["user_id"])
+        missed = timeouts.get(user_id)
+        if not missed:
+            continue
+        resumed = max(filter(None, (
+            _utc_time(user.get("updated_at")), acknowledgments.get(user_id),
+        )), default=None)
+        if resumed is None or resumed <= missed:
+            paused.add(user_id)
+    return paused
 
 
 def is_new_client_action(action: dict) -> bool:
@@ -65,6 +113,64 @@ def _assigned_at(payload: dict) -> dt.datetime | None:
     return assigned
 
 
+def _normalized_contact_name(page: str | None, name: str | None) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]", "", (name or "").casefold())
+    return f"name:{(page or '').casefold()}:{normalized}" if normalized else None
+
+
+def _contact_identity(page_id: str | None, psid: str | None) -> str | None:
+    return f"psid:{page_id}:{psid}" if page_id and psid else None
+
+
+def _enrich_history_contact_identities(history: list[dict]) -> None:
+    missing = {
+        row["payload"].get("new_client_contact_id")
+        for row in history
+        if is_new_client_action(row)
+        and row["payload"].get("new_client_contact_id")
+        and not row["payload"].get("new_client_contact_identity")
+    }
+    if not missing:
+        return
+    try:
+        identities = contact_identity_map(missing)
+    except Exception:
+        identities = {}
+    for row in history:
+        payload = row.get("payload") or {}
+        mapped = identities.get(payload.get("new_client_contact_id"))
+        if mapped:
+            row["_new_client_contact_identity"] = _contact_identity(*mapped)
+
+
+def _action_contact_keys(row: dict) -> set[str]:
+    payload = row.get("payload") or {}
+    keys = set()
+    contact_id = payload.get("new_client_contact_id")
+    identity = payload.get("new_client_contact_identity") or row.get("_new_client_contact_identity")
+    name_key = _normalized_contact_name(
+        payload.get("new_client_page"), payload.get("new_client_contact_name"),
+    )
+    if contact_id:
+        keys.add(f"id:{contact_id}")
+    if identity:
+        keys.add(identity)
+    elif name_key:
+        keys.add(name_key)
+    return keys
+
+
+def _candidate_contact_keys(page: str, contact: dict) -> set[str]:
+    keys = {f"id:{contact['id']}"}
+    identity = _contact_identity(contact.get("page_id"), contact.get("psid"))
+    name_key = _normalized_contact_name(page, contact.get("name"))
+    if identity:
+        keys.add(identity)
+    if name_key:
+        keys.add(name_key)
+    return keys
+
+
 def _reply_to_message_id(message: dict) -> int | None:
     value = message.get("reply_to_message_id")
     if value is None:
@@ -99,7 +205,13 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) ->
     payload = dict(row["payload"])
     payload["new_client_acknowledged_at"] = acknowledged.isoformat()
     payload["new_client_ack_message_id"] = message.get("message_id")
-    if not update_new_client_action(int(row["id"]), payload, status="cancelled"):
+    include_cancelled = (
+        row.get("status") == "cancelled"
+        and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+    )
+    if not update_new_client_action(
+        int(row["id"]), payload, status="cancelled", include_cancelled=include_cancelled,
+    ):
         return False
     row["status"] = "cancelled"
     row["payload"] = payload
@@ -125,16 +237,85 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) ->
     return True
 
 
+def _message_time(message: dict, fallback: dt.datetime) -> dt.datetime:
+    value = message.get("sent_utc")
+    if value:
+        try:
+            parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+        except (TypeError, ValueError):
+            pass
+    timestamp = message.get("date")
+    if timestamp:
+        return dt.datetime.fromtimestamp(timestamp, dt.timezone.utc)
+    return fallback
+
+
+def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> None:
+    """Make the earliest valid WORKING reply authoritative across retries."""
+    candidates = [
+        row for row in history
+        if is_new_client_action(row)
+        and not row["payload"].get("new_client_acknowledged_at")
+        and (
+            row.get("status") != "cancelled"
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+        )
+        and _assigned_at(row["payload"])
+        and _assigned_at(row["payload"]) >= now - dt.timedelta(days=2)
+    ]
+    claimed_keys = set().union(*(
+        _action_contact_keys(row)
+        for row in history
+        if is_new_client_action(row) and row["payload"].get("new_client_acknowledged_at")
+    )) if history else set()
+    groups: dict[tuple[int, int], list[dict]] = {}
+    for row in candidates:
+        payload = row["payload"]
+        groups.setdefault(
+            (int(row["chat_id"]), int(payload["new_client_thread_id"])), []
+        ).append(row)
+    for (chat_id, thread_id), rows in groups.items():
+        since = min(_assigned_at(row["payload"]) for row in rows)
+        messages = new_client_reply_messages(chat_id, thread_id, since, now)
+        for message in sorted(messages, key=lambda item: _message_time(item, now)):
+            message_time = _message_time(message, now)
+            for row in rows:
+                keys = _action_contact_keys(row)
+                assigned = _assigned_at(row["payload"])
+                if keys.intersection(claimed_keys) or message_time < assigned:
+                    continue
+                if _confirms_assignment(message, row) and _record_confirmation(row, message, message_time):
+                    claimed_keys.update(keys)
+                    break
+    if not claimed_keys:
+        return
+    for row in history:
+        if (
+            not is_new_client_action(row)
+            or row.get("status") == "cancelled"
+            or row["payload"].get("new_client_acknowledged_at")
+            or not _action_contact_keys(row).intersection(claimed_keys)
+        ):
+            continue
+        cancelled = dict(row["payload"])
+        cancelled["new_client_cancelled_at"] = now.isoformat()
+        cancelled["new_client_cancelled_reason"] = DUPLICATE_REASON
+        if update_new_client_action(int(row["id"]), cancelled, status="cancelled"):
+            row["status"] = "cancelled"
+            row["payload"] = cancelled
+
+
 def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
-    """Cancel open assignments that received no WORKING reply for one hour."""
+    """Cancel open assignments after the team's delivered-client wait expires."""
     for row in history:
         if not is_new_client_action(row) or row.get("status") == "cancelled":
             continue
         payload = row["payload"]
         if payload.get("new_client_acknowledged_at"):
             continue
-        reason = "assignment_day_ended" if payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat() else REASSIGN_REASON
-        if reason == REASSIGN_REASON:
+        reason = "assignment_day_ended" if payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat() else _timeout_reason(int(row["chat_id"]))
+        if reason in REASSIGN_REASONS:
             delivered_at = payload.get("_first_delivery_at") or row.get("sent_at")
             if not delivered_at:
                 continue
@@ -144,21 +325,8 @@ def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
                     delivered = delivered.replace(tzinfo=dt.timezone.utc)
             except (TypeError, ValueError):
                 continue
-            if now.astimezone(dt.timezone.utc) < delivered + REASSIGN_AFTER:
+            if now.astimezone(dt.timezone.utc) < delivered + dt.timedelta(minutes=_timeout_minutes(int(row["chat_id"]))):
                 continue
-        assigned = _assigned_at(payload)
-        if assigned:
-            archived_replies = new_client_reply_messages(
-                int(row["chat_id"]), int(payload["new_client_thread_id"]), assigned, now,
-            )
-            confirmation = next((message for message in archived_replies if _confirms_assignment(message, row)), None)
-            if confirmation:
-                try:
-                    acknowledged = dt.datetime.fromisoformat(str(confirmation["sent_utc"]).replace("Z", "+00:00"))
-                except (KeyError, TypeError, ValueError):
-                    acknowledged = now
-                if _record_confirmation(row, confirmation, acknowledged):
-                    continue
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
         cancelled["new_client_cancelled_reason"] = reason
@@ -167,18 +335,22 @@ def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
             row["payload"] = cancelled
 
 
-def _reserved_contact_ids(history: list[dict]) -> set[str]:
-    return {
-        row["payload"].get("new_client_contact_id") for row in history
-        if is_new_client_action(row) and row["payload"].get("new_client_contact_id")
-        and not (
+def _reserved_contact_keys(history: list[dict]) -> set[str]:
+    """Return stable identities for contacts that are complete or still held."""
+    reserved: set[str] = set()
+    for row in history:
+        if not is_new_client_action(row):
+            continue
+        if (
             row.get("status") == "cancelled"
+            and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({
+                "assignment_day_ended", "assignee_inactive_before_first_delivery",
+            })
             and not row["payload"].get("new_client_acknowledged_at")
-            and row["payload"].get("new_client_cancelled_reason") in {
-                REASSIGN_REASON, "assignment_day_ended", "assignee_inactive_before_first_delivery",
-            }
-        )
-    }
+        ):
+            continue
+        reserved.update(_action_contact_keys(row))
+    return reserved
 
 
 def _detail_lines(contact: dict) -> str:
@@ -195,11 +367,20 @@ def _detail_lines(contact: dict) -> str:
     return html.escape(rendered[:2800] + ("…" if len(rendered) > 2800 else ""))
 
 
-def _assignment_text(user: dict, page: str, contact: dict, token: str, round_number: int) -> tuple[str, str]:
+def _assignment_text(user: dict, page: str, contact: dict, token: str, round_number: int, *, chat_id: int) -> tuple[str, str]:
     user_id = int(user["user_id"])
     member = _mention(user_id, user.get("user_name") or str(user_id))
     stage = contact.get("pipeline_stage")
     stage_line = f"\nPipeline stage: {html.escape(str(stage))}" if stage else ""
+    ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+    rotation_text = (
+        "Assignments rotate among ready Active members, prioritizing those with fewer clients and "
+        "then those who have waited longest. Members awaiting a reply or paused after a missed assignment are skipped. "
+        "If you miss the reply deadline, select Not Active and then Active in today's poll when you are available again."
+        if ready_rotation else
+        "Your reply lets the bot continue the round robin. You can receive another client only after "
+        "every Active member has received the same number of assignments."
+    )
     details = (
         f"New client: {html.escape(contact['name'])}\n"
         f"Page: {html.escape(page)}\n"
@@ -209,8 +390,9 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "Please review the CRM conversation and start working on this client. "
         "As soon as you are working on it, reply to this message with: "
         f"<code>WORKING {token}</code>\n\n"
-        "Your reply lets the bot continue the round robin. You can receive another client only after "
-        "every Active member has received the same number of assignments."
+        f"Please reply within {_timeout_minutes(chat_id)} minutes of receiving this assignment, "
+        "otherwise it will be reassigned to another member.\n\n"
+        f"{rotation_text}"
     )
     return (
         f"👤 Hi {member}! New client round {round_number}.\n\n{details}",
@@ -224,20 +406,21 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     if not eligible:
         return 0
     history = new_client_actions(eligible)
+    _enrich_history_contact_identities(history)
+    _reconcile_archived_confirmations(history, now)
     _release_stale_assignments(history, now)
-    used_contacts = _reserved_contact_ids(history)
-    contact_attempts = Counter(
-        row["payload"].get("new_client_contact_id")
-        for row in history
-        if is_new_client_action(row) and row["payload"].get("new_client_contact_id")
-    )
+    used_contact_keys = _reserved_contact_keys(history)
+    contact_attempts: Counter[str] = Counter()
+    for row in history:
+        if is_new_client_action(row):
+            contact_attempts.update(_action_contact_keys(row))
     prior_assignees: dict[str, set[int]] = {}
     for row in history:
         payload = row.get("payload") or {}
-        contact_id = payload.get("new_client_contact_id")
         assignee_id = payload.get("new_client_assignee_id")
-        if contact_id and assignee_id is not None:
-            prior_assignees.setdefault(contact_id, set()).add(int(assignee_id))
+        if assignee_id is not None:
+            for key in _action_contact_keys(row):
+                prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = 0
     for chat_id in sorted(eligible):
         members = _active_members(chat_id, work_date)
@@ -261,15 +444,42 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             if row.get("status") != "cancelled"
             and not row["payload"].get("new_client_acknowledged_at")
         }
+        ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+        if ready_rotation:
+            # Failed offers do not count as clients received; queued offers and
+            # acknowledged clients do. Keep the attempt count separate for dedupe.
+            assignment_counts = Counter(
+                int(row["payload"]["new_client_assignee_id"])
+                for row in today
+                if row["payload"].get("new_client_acknowledged_at") or row.get("status") != "cancelled"
+            )
+            paused = _paused_members(today, members)
+            members = [user for user in members if int(user["user_id"]) not in paused]
+            member_ids = {int(user["user_id"]) for user in members}
+            last_assigned: dict[int, dt.datetime] = {}
+            for row in today:
+                payload = row["payload"]
+                assigned = _utc_time(payload.get("new_client_assigned_at"))
+                if assigned and (payload.get("new_client_acknowledged_at") or row.get("status") != "cancelled"):
+                    user_id = int(payload["new_client_assignee_id"])
+                    last_assigned[user_id] = max(last_assigned.get(user_id, assigned), assigned)
+            epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+            members.sort(key=lambda user: (
+                assignment_counts[int(user["user_id"])],
+                last_assigned.get(int(user["user_id"]), epoch), int(user["user_id"]),
+            ))
         candidates = sorted(
             (
-                (page, contact)
+                (page, contact, _candidate_contact_keys(page, contact))
                 for page, rows in _page_contacts(GROUPS[chat_id])
                 for contact in rows
-                if contact["id"] not in used_contacts
+                if not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
             ),
             key=lambda item: (item[1].get("last_interaction_at") or "", item[1]["id"]),
         )
+        if ready_rotation:
+            # Rescue timed-out contacts first, even if newer fresh leads are waiting.
+            candidates.sort(key=lambda item: max((contact_attempts[key] for key in item[2]), default=0) == 0)
         for user in members:
             if not candidates:
                 break
@@ -278,39 +488,50 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 continue
             reassignment_index = next(
                 (
-                    index for index, (_, candidate) in enumerate(candidates)
-                    if contact_attempts[candidate["id"]] > 0
-                    and user_id not in prior_assignees.get(candidate["id"], set())
+                    index for index, (_, candidate, keys) in enumerate(candidates)
+                    if max((contact_attempts[key] for key in keys), default=0) > 0
+                    and user_id not in set().union(
+                        *(prior_assignees.get(key, set()) for key in keys)
+                    )
                     and user_id == min(
                         (
                             int(member["user_id"])
                             for member in members
                             if int(member["user_id"]) not in open_members
-                            and int(member["user_id"]) not in prior_assignees.get(candidate["id"], set())
+                            and int(member["user_id"]) not in set().union(
+                                *(prior_assignees.get(key, set()) for key in keys)
+                            )
                         ),
-                        key=lambda member_id: (assignment_counts[member_id], member_id),
+                        key=lambda member_id: (
+                            assignment_counts[member_id],
+                            last_assigned.get(member_id, epoch) if ready_rotation else member_id,
+                            member_id,
+                        ),
                         default=None,
                     )
                 ),
                 None,
             )
-            minimum = min(assignment_counts[member_id] for member_id in member_ids)
+            rotation_ids = member_ids - open_members if ready_rotation else member_ids
+            minimum = min(assignment_counts[member_id] for member_id in rotation_ids)
             candidate_index = reassignment_index
             if candidate_index is None and assignment_counts[user_id] == minimum:
                 candidate_index = next(
                     (
-                        index for index, (_, candidate) in enumerate(candidates)
-                        if contact_attempts[candidate["id"]] == 0
+                        index for index, (_, candidate, keys) in enumerate(candidates)
+                        if max((contact_attempts[key] for key in keys), default=0) == 0
                     ),
                     None,
                 )
             if candidate_index is None:
                 continue
-            page, contact = candidates.pop(candidate_index)
+            page, contact, contact_keys = candidates.pop(candidate_index)
             round_number = assignment_counts[user_id] + 1
-            attempt_number = contact_attempts[contact["id"]] + 1
+            attempt_number = max(
+                (contact_attempts[key] for key in contact_keys), default=0,
+            ) + 1
             token = secrets.token_hex(4).upper()
-            message, reminder = _assignment_text(user, page, contact, token, round_number)
+            message, reminder = _assignment_text(user, page, contact, token, round_number, chat_id=chat_id)
             payload = {
                 "text": message,
                 "new_client_reminder_text": reminder,
@@ -326,6 +547,11 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "new_client_assignee_id": user_id,
                 "new_client_assignee_name": user.get("user_name") or str(user_id),
                 "new_client_contact_id": contact["id"],
+                "new_client_contact_page_id": contact.get("page_id"),
+                "new_client_contact_psid": contact.get("psid"),
+                "new_client_contact_identity": _contact_identity(
+                    contact.get("page_id"), contact.get("psid"),
+                ),
                 "new_client_contact_name": contact["name"],
                 "new_client_page": page,
                 "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
@@ -336,7 +562,10 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "new_client_assignment_attempt": attempt_number,
                 "new_client_assigned_at": now.isoformat(),
             }
-            dedupe_key = f"new-client:{chat_id}:{contact['id']}"
+            dedupe_identity = _contact_identity(
+                contact.get("page_id"), contact.get("psid"),
+            ) or f"id:{contact['id']}"
+            dedupe_key = f"new-client:{chat_id}:{dedupe_identity}"
             if attempt_number > 1:
                 dedupe_key += f":attempt-{attempt_number}"
             if enqueue_scheduled_action(
@@ -345,24 +574,35 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 payload=payload,
                 scheduled_for=now,
                 dedupe_key=dedupe_key,
-                repeat_interval_minutes=REMINDER_MINUTES,
+                repeat_interval_minutes=min(REMINDER_MINUTES, _timeout_minutes(chat_id)),
             ):
                 queued += 1
                 assignment_counts[user_id] += 1
                 open_members.add(user_id)
-                used_contacts.add(contact["id"])
-                contact_attempts[contact["id"]] += 1
-                prior_assignees.setdefault(contact["id"], set()).add(user_id)
+                assigned_keys = {f"id:{contact['id']}"}
+                identity = _contact_identity(contact.get("page_id"), contact.get("psid"))
+                if identity:
+                    assigned_keys.add(identity)
+                used_contact_keys.update(assigned_keys)
+                for key in assigned_keys:
+                    contact_attempts[key] += 1
+                    prior_assignees.setdefault(key, set()).add(user_id)
+                candidates = [
+                    item for item in candidates
+                    if not item[2].intersection(assigned_keys)
+                ]
             else:
                 # A concurrent dispatcher reserved this contact. Refresh before
                 # considering another member in the same round.
                 latest = new_client_actions({chat_id})
-                used_contacts.update(
-                    row["payload"].get("new_client_contact_id")
-                    for row in latest
-                    if is_new_client_action(row)
-                )
-                candidates = [item for item in candidates if item[1]["id"] not in used_contacts]
+                _enrich_history_contact_identities(latest)
+                for row in latest:
+                    if is_new_client_action(row):
+                        used_contact_keys.update(_action_contact_keys(row))
+                candidates = [
+                    item for item in candidates
+                    if not item[2].intersection(used_contact_keys)
+                ]
     return queued
 
 
@@ -406,7 +646,10 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     matches = [
         row for row in new_client_actions({chat_id})
         if is_new_client_action(row)
-        and row.get("status") != "cancelled"
+        and (
+            row.get("status") != "cancelled"
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+        )
         and not row["payload"].get("new_client_acknowledged_at")
         and _confirms_assignment(message, row)
     ]
@@ -448,23 +691,40 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
 def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
     work_date = now.astimezone(MANILA).date()
     history = new_client_actions(allowed.intersection(GROUPS))
-    used_contacts = _reserved_contact_ids(history)
+    _enrich_history_contact_identities(history)
+    used_contact_keys = _reserved_contact_keys(history)
     result = []
     for chat_id in sorted(allowed.intersection(GROUPS)):
         actions = [row for row in history if int(row["chat_id"]) == chat_id and is_new_client_action(row)]
         page_contacts = _page_contacts(GROUPS[chat_id])
+        members = _active_members(chat_id, work_date)
+        today = [row for row in actions if row["payload"].get("new_client_work_date") == work_date.isoformat()]
+        paused = _paused_members(today, members) if GROUPS[chat_id].get("new_client_ready_rotation") else set()
+        open_members = {
+            int(row["payload"]["new_client_assignee_id"])
+            for row in today if row.get("status") != "cancelled" and not row["payload"].get("new_client_acknowledged_at")
+        }
         result.append({
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
-            "active_today": len(_active_members(chat_id, work_date)),
+            "active_today": len(members),
+            "reply_deadline_minutes": _timeout_minutes(chat_id),
+            "ready_today": sum(int(user["user_id"]) not in paused.union(open_members) for user in members),
+            "paused_members": [
+                {"user_id": user["user_id"], "name": user.get("user_name")}
+                for user in members if int(user["user_id"]) in paused
+            ],
             "assigned_today": sum(row["payload"].get("new_client_work_date") == work_date.isoformat() for row in actions),
             "acknowledged_today": sum(
                 _acknowledged_date(row["payload"]) == work_date
                 for row in actions
             ),
             "available_complete_clients": {
-                page: sum(contact["id"] not in used_contacts for contact in contacts)
+                page: sum(
+                    not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
+                    for contact in contacts
+                )
                 for page, contacts in page_contacts
             },
         })

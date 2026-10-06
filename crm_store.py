@@ -118,3 +118,20 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
                 "last_bot_reply_at": row.get("last_bot_reply_at"),
             }
     return list(contacts.values())
+
+
+def contact_identity_map(contact_ids: set[str]) -> dict[str, tuple[str, str]]:
+    """Map existing CRM contact IDs to their stable page-scoped PSIDs."""
+    result: dict[str, tuple[str, str]] = {}
+    ordered = sorted(contact_id for contact_id in contact_ids if contact_id)
+    for start in range(0, len(ordered), 100):
+        chunk = ordered[start:start + 100]
+        rows = crm_request("contacts?" + urllib.parse.urlencode({
+            "select": "id,page_id,psid",
+            "id": "in.(" + ",".join(chunk) + ")",
+            "limit": len(chunk),
+        })) or []
+        for row in rows:
+            if row.get("id") and row.get("page_id") and row.get("psid"):
+                result[row["id"]] = (row["page_id"], row["psid"])
+    return result

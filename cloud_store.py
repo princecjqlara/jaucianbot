@@ -278,6 +278,24 @@ def finish_scheduled_action(
     return bool(result)
 
 
+def _update_claim(claim: dict, changes: dict) -> bool:
+    filters = {"id": f"eq.{claim['id']}", "status": "eq.processing"}
+    if claim.get("updated_at"):
+        filters["updated_at"] = "eq." + claim["updated_at"]
+    return bool(request("scheduled_actions?" + urllib.parse.urlencode(filters), changes,
+                        method="PATCH", prefer="return=representation"))
+
+
+def defer_scheduled_action(claim: dict) -> bool:
+    """Reschedule a suppressed reminder without recording a delivery."""
+    now = dt.datetime.now(dt.timezone.utc)
+    return _update_claim(claim, {
+        "status": "pending", "updated_at": now.isoformat(),
+        "scheduled_for": (now + dt.timedelta(minutes=claim.get("repeat_interval_minutes") or 15)).isoformat(),
+        "attempts": max(int(claim.get("attempts") or 1) - 1, 0),
+    })
+
+
 def register_daily_poll(
     *, poll_id: str, chat_id: int, thread_id: int,
     work_date: dt.date, telegram_message_id: int,
@@ -302,7 +320,7 @@ def daily_poll_counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
 
 def daily_poll_active_users(poll_id: str) -> list[dict]:
     filters = urllib.parse.urlencode({
-        "select": "user_id,user_name",
+        "select": "user_id,user_name,updated_at",
         "poll_id": f"eq.{poll_id}",
         "active": "eq.true",
         "order": "user_name.asc,user_id.asc",
@@ -440,11 +458,14 @@ def new_client_reply_messages(
     return request("messages?" + filters) or []
 
 
-def update_new_client_action(action_id: int, payload: dict, *, status: str) -> dict | None:
-    """Atomically acknowledge one still-open new-client assignment."""
+def update_new_client_action(
+    action_id: int, payload: dict, *, status: str, include_cancelled: bool = False,
+) -> dict | None:
+    """Atomically update one unacknowledged new-client assignment."""
+    statuses = "pending,processing,failed,cancelled" if include_cancelled else "pending,processing,failed"
     filters = urllib.parse.urlencode({
         "id": f"eq.{action_id}",
-        "status": "in.(pending,processing,failed)",
+        "status": f"in.({statuses})",
         "payload->>new_client_acknowledged_at": "is.null",
     })
     rows = request(
@@ -461,22 +482,3 @@ def new_client_action_state(action_id: int) -> dict | None:
         "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
     })) or []
     return rows[0] if rows else None
-
-
-def _update_claim(claim: dict, changes: dict) -> bool:
-    filters = {"id": f"eq.{claim['id']}", "status": "eq.processing"}
-    if claim.get("updated_at"):
-        filters["updated_at"] = "eq." + claim["updated_at"]
-    return bool(request("scheduled_actions?" + urllib.parse.urlencode(filters), changes,
-                        method="PATCH", prefer="return=representation"))
-
-
-
-def defer_scheduled_action(claim: dict) -> bool:
-    """Reschedule a suppressed reminder without recording a delivery."""
-    now = dt.datetime.now(dt.timezone.utc)
-    return _update_claim(claim, {
-        "status": "pending", "updated_at": now.isoformat(),
-        "scheduled_for": (now + dt.timedelta(minutes=claim.get("repeat_interval_minutes") or 15)).isoformat(),
-        "attempts": max(int(claim.get("attempts") or 1) - 1, 0),
-    })

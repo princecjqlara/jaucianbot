@@ -55,6 +55,8 @@ GROUPS = {
     },
     -1003647732254: {
         "name": "Veo",
+        "new_client_timeout_minutes": 30,
+        "new_client_ready_rotation": True,
         "announcements": 248,
         "freebie": 26249,
         "contact_thread": 27622,

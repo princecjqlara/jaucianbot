@@ -28,6 +28,8 @@ class CrmStoreTests(unittest.TestCase):
             result = crm_store.completed_detail_contacts("page-1")
 
         self.assertEqual(result[0]["name"], "Cj Lara")
+        self.assertEqual(result[0]["page_id"], "page-1")
+        self.assertEqual(result[0]["psid"], "psid-1")
         self.assertEqual(result[0]["pipeline_stage"], "qualified")
         self.assertEqual(result[0]["stop_reason"], "details_collected")
         query = request.call_args.args[0]
@@ -67,6 +69,13 @@ class CrmStoreTests(unittest.TestCase):
             result = crm_store.completed_detail_contacts("page-1")
         self.assertEqual([contact["id"] for contact in result], ["contact-1"])
         self.assertEqual(result[0]["missing_details"], ["outdated synonymous prompt"])
+
+    def test_contact_identity_map_reads_page_scoped_psids(self):
+        rows = [{"id": "contact-1", "page_id": "page-1", "psid": "psid-1"}]
+        with patch.object(crm_store, "crm_request", return_value=rows) as request:
+            result = crm_store.contact_identity_map({"contact-1"})
+        self.assertEqual(result, {"contact-1": ("page-1", "psid-1")})
+        self.assertIn("contacts?", request.call_args.args[0])
 
 
 if __name__ == "__main__":
