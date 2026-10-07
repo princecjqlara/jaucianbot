@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from api.webhook import handler
 from cloud_store import (
-    activity_messages, allowed_chat_ids, daily_messages, daily_poll_active_users,
+    activity_messages, allowed_chat_ids, daily_messages, daily_poll_active_users, daily_poll_answers,
     existing_daily_reminder_chats, new_client_actions, new_client_reply_messages, save_update,
     poll_answers_for_range, update_new_client_action,
 )
@@ -68,6 +68,7 @@ class CloudStorageTests(unittest.TestCase):
         with patch("cloud_store.request", return_value=[]) as request:
             daily_messages(-100123, start, end)
             daily_poll_active_users("poll-1")
+            daily_poll_answers("poll-1")
         message_path = request.call_args_list[0].args[0]
         message_params = urllib.parse.parse_qs(message_path.split("?", 1)[1])
         self.assertIn("author_id", message_params["select"][0])
@@ -78,6 +79,9 @@ class CloudStorageTests(unittest.TestCase):
         self.assertEqual(answer_params["poll_id"], ["eq.poll-1"])
         self.assertEqual(answer_params["active"], ["eq.true"])
         self.assertIn("updated_at", answer_params["select"][0])
+        all_answer_path = request.call_args_list[2].args[0]
+        all_answer_params = urllib.parse.parse_qs(all_answer_path.split("?", 1)[1])
+        self.assertNotIn("active", all_answer_params)
 
     def test_existing_reminder_lookup_is_scoped_to_slot_and_groups(self):
         with patch("cloud_store.request", return_value=[{"chat_id": -100123}]) as request:
