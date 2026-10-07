@@ -13,6 +13,34 @@ from trabawho_receipts import receipt_report
 from trabawho_songs import song_report_lines
 
 
+def build_trabawho_summary(work_date: dt.date, now: dt.datetime) -> str:
+    """Short, friendly status for the Trabawho announcements topic.
+
+    Detailed receipts, salary, quota, ads, review, and song figures stay in
+    the Daily Reports group.
+    """
+    count = daily_poll_counts({TRABAWHO_CHAT_ID}, work_date).get(TRABAWHO_CHAT_ID)
+    date_label = work_date.strftime('%A, %B %d, %Y')
+    if count:
+        active = int(count["active_workers"])
+        teammate = "teammate" if active == 1 else "teammates"
+        status = f"{active} {teammate} marked Active for this day."
+        next_step = "Client assignments will be shared fairly among the Active team."
+    else:
+        status = "No Active responses yet."
+        next_step = "Please vote in the poll so we can prepare the day's assignments."
+    return "\n".join([
+        "🌟 TRABAWHO TEAM UPDATE",
+        f"📅 {date_label} (PHT)", "",
+        "Hi team! 👋",
+        status,
+        next_step,
+        "Please keep an eye on the New Client topic and reply when your client comes in.",
+        "Let's have a smooth and successful day together! 💛",
+        "Full sales and performance details are available in Daily Reports.",
+    ])
+
+
 def build_trabawho_report(work_date: dt.date, now: dt.datetime) -> str:
     start = dt.datetime.combine(work_date, dt.time.min, tzinfo=MANILA)
     report = receipt_report(receipt_messages(TRABAWHO_CHAT_ID,
@@ -59,28 +87,30 @@ def queue_trabawho_daily_report(now: dt.datetime, allowed: set[int]) -> int:
     if local.time() < dt.time(0, 5):
         return 0
     work_date = local.date() - dt.timedelta(days=1)
-    targets = [(TRABAWHO_CHAT_ID, TRABAWHO["announcements"])]
+    targets = [(TRABAWHO_CHAT_ID, TRABAWHO["announcements"], build_trabawho_summary,
+                f"trabawho-daily-summary-complete:{work_date.isoformat()}:{TRABAWHO_CHAT_ID}")]
     if DAILY_REPORTS_CHAT_ID in allowed:
-        targets.append((DAILY_REPORTS_CHAT_ID, None))
+        targets.append((DAILY_REPORTS_CHAT_ID, None, build_trabawho_report,
+                        f"trabawho-daily-report-complete:{work_date.isoformat()}:{DAILY_REPORTS_CHAT_ID}"))
     missing = []
-    for chat_id, topic in targets:
-        marker = f"trabawho-daily-report-complete:{work_date.isoformat()}:{chat_id}"
+    for chat_id, topic, _, marker in targets:
         if not request("scheduled_actions?" + urllib.parse.urlencode({
             "select": "id", "chat_id": f"eq.{chat_id}", "dedupe_key": f"eq.{marker}", "limit": 1,
         })):
-            missing.append((chat_id, topic, marker))
+            missing.append((chat_id, topic, _, marker))
     if not missing:
         return 0
-    parts = split_message(build_trabawho_report(work_date, now))
     queued = 0
-    for chat_id, topic, marker in missing:
+    for chat_id, topic, builder, marker in missing:
+        parts = split_message(builder(work_date, now))
+        action_prefix = "trabawho-daily-summary" if chat_id == TRABAWHO_CHAT_ID else "trabawho-daily-report"
         for number, text in enumerate(parts, 1):
             payload = {"text": text, "disable_notification": False}
             if topic is not None:
                 payload["message_thread_id"] = topic
             queued += int(enqueue_scheduled_action(
                 chat_id=chat_id, action_type="message", payload=payload, scheduled_for=now,
-                dedupe_key=f"trabawho-daily-report:{work_date.isoformat()}:{chat_id}:{number}",
+                dedupe_key=f"{action_prefix}:{work_date.isoformat()}:{chat_id}:{number}",
             ))
         # The marker means all parts are durably queued, not that Telegram delivered them.
         record_automation_marker(chat_id, marker, now)

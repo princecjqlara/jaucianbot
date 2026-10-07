@@ -131,11 +131,12 @@ The bot creates dated, nonanonymous availability polls for today and tomorrow in
 topic `7581`. Votes for tomorrow affect tomorrow's plan; clients are offered when
 that dated workday arrives, using only that workday's Active voters.
 
-Announcements update when the recorded Active count changes. Quota is
-`active members × 2`; the planned ads budget is `active members × 2 × ₱150`.
-For example, 10 Active members means a quota of 20 and an ads budget of ₱3,000.
-These settings do not apply Veo's DD/CD targets, commission rules, freebie topics,
-or daily payroll reports to Trabawho.
+Announcements update when the recorded Active count changes. Group announcements
+use short, friendly status messages and do not expose the quota formula or ads
+budget. The detailed plan, receipt, salary, review, and song figures are kept in
+the approved Daily Reports group. Internally, quota is `active members × 2` and
+the planned ads budget is `active members × 2 × ₱150`; these settings do not apply
+Veo's DD/CD targets, commission rules, or freebie topics.
 
 Suno uses its own server-only `SUNO_SUPABASE_URL` and
 `SUNO_SUPABASE_SERVICE_ROLE_KEY`; the archive and Veo CRM retain their existing
@@ -173,11 +174,12 @@ Identical message IDs are counted once, but equal amounts on different receipt
 posts are retained. Earnings are recorded amounts, not confirmed salary payouts.
 
 Daily Trabawho reports are queued at 00:05 PHT for the previous calendar day;
-a later cron run that day catches up if necessary. They go to announcements
-topic `16` and also the existing Daily Reports group when it is approved in
-`ALLOWED_CHAT_IDS`. Each report includes Active members, the two-per-member quota,
-planned ads budget, accepted receipt gross/salary, each member's recorded totals,
-labeled tips, receipts needing review, and song deliveries/outstanding jobs.
+a later cron run that day catches up if necessary. Announcements topic `16`
+receives a short, friendly summary, while the approved Daily Reports group
+receives the organized detailed report. The detailed report includes Active
+members, the two-per-member quota, planned ads budget, accepted receipt
+gross/salary, each member's recorded totals, labeled tips, receipts needing
+review, and song deliveries/outstanding jobs.
 Reports and song reminders run independently of Suno connection availability.
 Report markers mean all report parts are queued; dispatcher retries handle
 delivery failures. Amounts with unresolved receipts are explicitly partial.

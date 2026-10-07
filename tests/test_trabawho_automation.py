@@ -37,9 +37,11 @@ class TrabawhoAutomationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan_totals(-1)
         text = plan_text(TOMORROW, 10, TODAY)
-        self.assertIn("TOMORROW'S PLAN", text)
-        self.assertIn("10 × 2 = 20", text)
-        self.assertIn("₱3,000", text)
+        self.assertIn("TRABAWHO TEAM UPDATE — TOMORROW", text)
+        self.assertIn("10 teammates marked Active", text)
+        self.assertNotIn("Team quota", text)
+        self.assertNotIn("Ads budget", text)
+        self.assertNotIn("× 2", text)
         self.assertNotIn("commission", text.lower())
 
     def test_poll_is_dated_nonanonymous_and_uses_active_topic(self):
@@ -65,7 +67,9 @@ class TrabawhoAutomationTests(unittest.TestCase):
             self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 1)
         payload = enqueue.call_args.kwargs["payload"]
         self.assertEqual(payload["message_thread_id"], 16)
-        self.assertIn("₱3,000", payload["text"])
+        self.assertIn("10 teammates marked Active", payload["text"])
+        self.assertNotIn("₱", payload["text"])
+        self.assertNotIn("× 2", payload["text"])
         self.assertEqual(payload["trabawho_work_date"], TODAY.isoformat())
 
     def test_unapproved_group_never_queues_actions(self):

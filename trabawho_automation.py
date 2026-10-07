@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import urllib.parse
-from decimal import Decimal
 
 from cloud_store import daily_poll_counts, enqueue_scheduled_action, request
-from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, money, queue_daily_polls
+from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
 
 
 def plan_totals(active_members: int) -> tuple[int, int]:
@@ -18,15 +17,23 @@ def plan_totals(active_members: int) -> tuple[int, int]:
 
 
 def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
-    quota, ads_budget = plan_totals(active_members)
     label = "TODAY" if work_date == today else "TOMORROW"
+    date_label = work_date.strftime('%A, %B %d, %Y')
+    if active_members:
+        teammate = "teammate" if active_members == 1 else "teammates"
+        status = f"{active_members} {teammate} marked Active for {label.lower()}."
+        next_step = "Client assignments will be shared fairly among the Active team."
+    else:
+        status = "No teammates are marked Active yet."
+        next_step = "Please vote in the poll so we can prepare the day's assignments."
     return "\n".join([
-        f"📣 TRABAWHO — {label}'S PLAN",
-        f"📅 {work_date.strftime('%A, %B %d, %Y')} (PHT)", "",
-        f"Active members: {active_members}",
-        f"Team quota: {active_members} × 2 = {quota}",
-        f"Ads budget: {active_members} × 2 × ₱150 = {money(Decimal(ads_budget))}", "",
-        "Completed Suno clients rotate among members who selected Active for this workday.",
+        f"🌟 TRABAWHO TEAM UPDATE — {label}",
+        f"📅 {date_label} (PHT)", "",
+        "Hi team! 👋",
+        status,
+        next_step,
+        "Please keep an eye on the New Client topic and reply when your client comes in.",
+        "Let's have a smooth and successful day together! 💛",
     ])
 
 
