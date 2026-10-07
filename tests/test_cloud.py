@@ -72,7 +72,7 @@ class CloudStorageTests(unittest.TestCase):
         message_params = urllib.parse.parse_qs(message_path.split("?", 1)[1])
         self.assertIn("author_id", message_params["select"][0])
         self.assertEqual(message_params["sent_utc"], [f"gte.{start.isoformat()}", f"lt.{end.isoformat()}"])
-        self.assertEqual(message_params["limit"], ["501"])
+        self.assertEqual(message_params["limit"], ["100"])
         answer_path = request.call_args_list[1].args[0]
         answer_params = urllib.parse.parse_qs(answer_path.split("?", 1)[1])
         self.assertEqual(answer_params["poll_id"], ["eq.poll-1"])

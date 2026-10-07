@@ -16,6 +16,7 @@ from cloud_store import (
     archive_status,
     cancel_scheduled_action,
     claim_scheduled_actions,
+    claim_automation_slot,
     create_scheduled_action,
     daily_poll_counts,
     defer_scheduled_action,
@@ -26,7 +27,7 @@ from cloud_store import (
     save_poll_answer,
     save_update,
 )
-from daily_automation import run_due_daily_automation
+from daily_automation import GROUPS, run_due_daily_automation
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
@@ -40,7 +41,7 @@ from worker_activity import worker_activity_report
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-06.2"
+AUTOMATION_VERSION = "2026-10-07.1"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -68,7 +69,11 @@ def status_route(environ, start_response):
         groups = archive_status(allowed_chat_ids())
     except Exception as error:
         print(f"Status query failed: {type(error).__name__}")
-        return response(start_response, 503, {"ok": False})
+        payload = {"ok": False, "automation_version": AUTOMATION_VERSION}
+        if getattr(error, "http_status", None) == 402:
+            payload["error"] = "archive_service_restricted"
+            payload["restriction"] = getattr(error, "restriction", None) or "unknown"
+        return response(start_response, 503, payload)
     return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION})
 
 
@@ -353,7 +358,9 @@ def dispatch_route(environ, start_response):
         except Exception as daily_error:
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")
-        if os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
+        assignment_groups = allowed.intersection(GROUPS)
+        if (os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY")
+                and (not assignment_groups or claim_automation_slot(assignment_groups, dt.datetime.now(dt.timezone.utc)))):
             try:
                 queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), allowed)
             except Exception as freebie_error:

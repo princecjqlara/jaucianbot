@@ -277,7 +277,8 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
         ).append(row)
     for (chat_id, thread_id), rows in groups.items():
         since = min(_assigned_at(row["payload"]) for row in rows)
-        messages = new_client_reply_messages(chat_id, thread_id, since, now)
+        messages = new_client_reply_messages(chat_id, thread_id, since, now,
+                                            author_ids={int(row["payload"]["new_client_assignee_id"]) for row in rows})
         for message in sorted(messages, key=lambda item: _message_time(item, now)):
             message_time = _message_time(message, now)
             for row in rows:

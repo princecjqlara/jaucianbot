@@ -4,6 +4,22 @@ This bot archives new messages from Telegram groups you approve. Telegram Deskto
 
 ## Deploy on Vercel
 
+The archive can also use its existing PostgreSQL connection by setting
+`ARCHIVE_TRANSPORT=postgres` and the server-only `SUPABASE_DB_URL`. Use the
+IPv4-compatible Supabase session pooler on port 5432 for Vercel; prepared
+statements are disabled for that connection. This uses the same archive tables
+and functions without a migration or billing change. The CRM retains its separate
+Data API connection. Database errors are sanitized before logging.
+
+Routine assignment-history reads fetch ownership, contact identities, dates,
+and acknowledgment metadata without downloading message bodies or collected
+details. Updates reload just the affected assignment and preserve its full payload
+under a revision check. Periodic assignment scans run at most once per five-minute
+slot across instances; Active votes and confirmations still trigger immediate
+assignment checks. Due deliveries continue on every dispatcher call. Completed
+daily reports are checkpointed to avoid rebuilding them throughout midnight.
+Checkpoints are cancelled scheduler records and cannot be sent to Telegram.
+
 Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase through its server-side Data API. The read-only `/api/status` and `/api/messages` endpoints require an API key. The local `.env.local`, SQLite archive, and exported chat files are excluded from Git. `.env.example` lists the variable names without values.
 
 1. Open this Supabase project's SQL Editor and run [`supabase/schema.sql`](supabase/schema.sql). It creates the archive tables and functions, enables row-level security, and grants access only to the server-side service role. Run `py verify_supabase.py` afterward; it should report that the archive is ready.

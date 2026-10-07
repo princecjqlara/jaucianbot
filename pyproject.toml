@@ -2,7 +2,7 @@
 name = "telegram-group-insights"
 version = "1.0.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["psycopg[binary]>=3.3.6,<4"]
 
 [tool.vercel]
 entrypoint = "app:app"

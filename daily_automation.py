@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from cloud_store import (
     daily_messages, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, existing_daily_reminder_chats,
+    existing_closeout_chats, record_automation_marker,
 )
 from deal_parser import (
     CLOSE_RE, DONE_MARKER_RE, PAGE_RE, PRICE_RE, author_identity, collect_deals,
@@ -599,11 +600,15 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
     if report_date < AUTOMATION_START_DATE or DAILY_REPORTS_CHAT_ID not in allowed:
         return 0
     queued = 0
-    report_counts = daily_poll_counts(allowed, report_date)
+    eligible = allowed.intersection(GROUPS)
+    missing = eligible - existing_closeout_chats(report_date, eligible)
+    if not missing:
+        return 0
+    report_counts = daily_poll_counts(missing, report_date)
     tomorrow = report_date + dt.timedelta(days=1)
-    tomorrow_counts = daily_poll_counts(allowed, tomorrow)
+    tomorrow_counts = daily_poll_counts(missing, tomorrow)
     for chat_id, config in GROUPS.items():
-        if chat_id not in allowed:
+        if chat_id not in missing:
             continue
         announcement = quota_announcement(config, tomorrow, tomorrow_counts.get(chat_id), today=now.astimezone(MANILA).date())
         if enqueue_scheduled_action(
@@ -631,6 +636,7 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
                 dedupe_key=f"daily-report:{report_date.isoformat()}:{chat_id}:{part_number}",
             ):
                 queued += 1
+        record_automation_marker(chat_id, f"daily-closeout-complete:{report_date.isoformat()}:{chat_id}", now)
     return queued
 
 

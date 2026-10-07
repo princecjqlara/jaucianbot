@@ -10,8 +10,16 @@ import urllib.parse
 import urllib.request
 
 
+READ_PAGE_SIZE = 100
+
+
 class SupabaseError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, http_status: int | None = None,
+                 api_code: str | None = None, restriction: str | None = None):
+        super().__init__(message)
+        self.http_status = http_status
+        self.api_code = api_code
+        self.restriction = restriction
 
 
 def allowed_chat_ids() -> set[int]:
@@ -37,6 +45,9 @@ def request(
     prefer: str | None = None,
     method: str | None = None,
 ):
+    if os.environ.get("ARCHIVE_TRANSPORT", "http").strip() == "postgres":
+        from postgres_archive import request as postgres_request
+        return postgres_request(path, payload, prefer=prefer, method=method)
     url, key = credentials()
     headers = {"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"}
     body = None
@@ -57,12 +68,22 @@ def request(
             content = response.read()
             return json.loads(content) if content else None
     except urllib.error.HTTPError as error:
+        restriction = None
         try:
             detail = json.loads(error.read().decode("utf-8"))
             code = detail.get("code", "unknown") if isinstance(detail, dict) else "unknown"
+            if error.code == 402 and isinstance(detail, dict):
+                message = str(detail.get("message", ""))
+                restriction = next((reason for reason in (
+                    "exceed_egress_quota", "overdue_payment",
+                ) if reason in message), None)
         except (json.JSONDecodeError, UnicodeError):
             code = "unknown"
-        raise SupabaseError(f"Supabase Data API HTTP {error.code} ({code})") from error
+        description = f"Supabase Data API HTTP {error.code} ({code})"
+        if restriction:
+            description += f": {restriction}"
+        raise SupabaseError(description, http_status=error.code,
+                            api_code=code, restriction=restriction) from error
     except urllib.error.URLError as error:
         raise SupabaseError(f"Supabase network error ({type(error.reason).__name__})") from error
 
@@ -116,12 +137,12 @@ def daily_messages(chat_id: int, start_utc: dt.datetime, end_utc: dt.datetime) -
             ("sent_utc", f"gte.{start_utc.isoformat()}"),
             ("sent_utc", f"lt.{end_utc.isoformat()}"),
             ("order", "sent_utc.desc,message_id.desc"),
-            ("limit", 501),
+            ("limit", READ_PAGE_SIZE),
             ("offset", len(result)),
         ])
         rows = request("messages?" + filters) or []
         result.extend(rows)
-        if len(rows) < 501:
+        if len(rows) < READ_PAGE_SIZE:
             break
     return result[:10001]
 
@@ -170,7 +191,7 @@ def enqueue_scheduled_action(
     repeat_interval_minutes: int | None = None,
 ) -> bool:
     rows = request(
-        "scheduled_actions?on_conflict=dedupe_key",
+        "scheduled_actions?on_conflict=dedupe_key&select=id",
         {
             "chat_id": chat_id,
             "action_type": action_type,
@@ -182,6 +203,48 @@ def enqueue_scheduled_action(
         prefer="resolution=ignore-duplicates,return=representation",
     ) or []
     return bool(rows)
+
+
+def record_automation_marker(chat_id: int, dedupe_key: str, now: dt.datetime) -> bool:
+    """Atomically record a checkpoint that can never be delivered to Telegram."""
+    return bool(request(
+        "scheduled_actions?on_conflict=dedupe_key&select=id",
+        {"chat_id": chat_id, "action_type": "message", "payload": {},
+         "status": "cancelled", "scheduled_for": now.isoformat(), "dedupe_key": dedupe_key},
+        prefer="resolution=ignore-duplicates,return=representation",
+    ))
+
+
+def claim_automation_slot(allowed: set[int], now: dt.datetime) -> bool:
+    """Limit periodic assignment scans across all instances to one per five minutes."""
+    if not allowed:
+        return False
+    slot = dt.datetime.fromtimestamp(int(now.timestamp()) // 300 * 300, dt.timezone.utc).isoformat()
+    scope = ",".join(str(chat_id) for chat_id in sorted(allowed))
+    dedupe_key = f"automation-clock:{scope}"
+    payload = {"automation_slot": slot}
+    created = request("scheduled_actions?on_conflict=dedupe_key&select=id", {
+        "chat_id": min(allowed), "action_type": "message", "payload": payload,
+        "status": "cancelled", "scheduled_for": now.isoformat(), "dedupe_key": dedupe_key,
+    }, prefer="resolution=ignore-duplicates,return=representation")
+    if created:
+        return True
+    # One durable row per team scope; the database predicate chooses one winner
+    # even when dispatchers attempt the same next slot concurrently.
+    return bool(request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id", "dedupe_key": f"eq.{dedupe_key}", "status": "eq.cancelled",
+        "payload->>automation_slot": f"lt.{slot}",
+    }), {"payload": payload, "updated_at": now.isoformat()}, method="PATCH", prefer="return=representation"))
+
+
+def existing_closeout_chats(work_date: dt.date, allowed: set[int]) -> set[int]:
+    if not allowed:
+        return set()
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "chat_id", "chat_id": "in.(" + ",".join(str(c) for c in sorted(allowed)) + ")",
+        "dedupe_key": f'like."daily-closeout-complete:{work_date.isoformat()}:*"',
+    })) or []
+    return {int(row["chat_id"]) for row in rows}
 
 
 def existing_daily_reminder_chats(work_date: dt.date, hour: int, allowed: set[int]) -> set[int]:
@@ -279,7 +342,7 @@ def finish_scheduled_action(
 
 
 def _update_claim(claim: dict, changes: dict) -> bool:
-    filters = {"id": f"eq.{claim['id']}", "status": "eq.processing"}
+    filters = {"select": "id", "id": f"eq.{claim['id']}", "status": "eq.processing"}
     if claim.get("updated_at"):
         filters["updated_at"] = "eq." + claim["updated_at"]
     return bool(request("scheduled_actions?" + urllib.parse.urlencode(filters), changes,
@@ -345,14 +408,14 @@ def activity_messages(
             ("sent_utc", f"lt.{end_utc.isoformat()}"),
             ("thread_id", "in.(" + ",".join(str(value) for value in sorted(thread_ids)) + ")"),
             ("order", "sent_utc.asc,message_id.asc"),
-            ("limit", 1000),
+            ("limit", READ_PAGE_SIZE),
             ("offset", offset),
         ])
         rows = request("messages?" + filters) or []
         result.extend(rows)
-        if len(rows) < 1000:
+        if len(rows) < READ_PAGE_SIZE:
             return result
-        offset += 1000
+        offset += len(rows)
 
 
 def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date) -> list[dict]:
@@ -365,87 +428,115 @@ def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date)
             ("daily_polls.work_date", f"gte.{start_date.isoformat()}"),
             ("daily_polls.work_date", f"lte.{end_date.isoformat()}"),
             ("order", "poll_id.asc,user_id.asc"),
-            ("limit", 1000),
+            ("limit", READ_PAGE_SIZE),
             ("offset", len(result)),
         ])
         rows = request("daily_poll_answers?" + filters) or []
         result.extend(rows)
-        if len(rows) < 1000:
+        if len(rows) < READ_PAGE_SIZE:
             return result
 
 
-def freebie_actions(allowed: set[int]) -> list[dict]:
-    """Read assignment history from the existing durable scheduler table."""
+FREEBIE_HISTORY_KEYS = (
+    "freebie_token", "freebie_assignee_id", "freebie_assignee_name", "freebie_contact_id",
+    "freebie_contact_name", "freebie_page", "freebie_thread_id", "freebie_assigned_at",
+    "freebie_completed_at", "freebie_completion_message_id", "freebie_cancelled_at",
+    "freebie_cancelled_reason",
+)
+NEW_CLIENT_HISTORY_KEYS = (
+    "new_client_token", "new_client_assignee_id", "new_client_assignee_name",
+    "new_client_contact_id", "new_client_contact_identity", "new_client_contact_page_id",
+    "new_client_contact_psid", "new_client_contact_name", "new_client_page",
+    "new_client_thread_id", "new_client_work_date", "new_client_round",
+    "new_client_assigned_at", "new_client_assignment_attempt", "new_client_acknowledged_at",
+    "new_client_ack_message_id", "new_client_cancelled_at", "new_client_cancelled_reason",
+    "_first_delivery_at",
+)
+
+
+def _assignment_history(allowed: set[int], namespace: str, keys: tuple[str, ...]) -> list[dict]:
+    """Keep every assignment's identity/ownership while excluding message bodies and details."""
     if not allowed:
         return []
     result: list[dict] = []
     offset = 0
     while True:
         filters = urllib.parse.urlencode({
-            "select": "id,chat_id,payload,status,scheduled_for,sent_at,telegram_message_id",
+            "select": "id,chat_id,status,scheduled_for,sent_at,telegram_message_id," + ",".join(
+                f"p{index}:payload->{key}" for index, key in enumerate(keys)
+            ),
             "chat_id": "in.(" + ",".join(str(chat_id) for chat_id in sorted(allowed)) + ")",
-            "dedupe_key": "like.freebie:*",
+            "dedupe_key": f"like.{namespace}:*",
             "order": "id.asc",
-            "limit": 1000,
+            "limit": READ_PAGE_SIZE,
             "offset": offset,
         })
         rows = request("scheduled_actions?" + filters) or []
+        for row in rows:
+            payload = {}
+            for index, key in enumerate(keys):
+                value = row.pop(f"p{index}", None)
+                if value is not None:
+                    payload[key] = value
+            row["payload"] = payload
         result.extend(rows)
-        if len(rows) < 1000:
+        if len(rows) < READ_PAGE_SIZE:
             return result
-        offset += 1000
+        offset += len(rows)
 
 
-def update_freebie_action(action_id: int, payload: dict, *, status: str) -> dict | None:
-    """Atomically confirm one still-open assignment from a matching Telegram reply."""
-    filters = urllib.parse.urlencode({
-        "id": f"eq.{action_id}",
-        "status": "in.(pending,processing,failed)",
-        "payload->>freebie_completed_at": "is.null",
-    })
+def freebie_actions(allowed: set[int]) -> list[dict]:
+    return _assignment_history(allowed, "freebie", FREEBIE_HISTORY_KEYS)
+
+
+def _update_assignment(action_id: int, payload: dict, status: str,
+                       statuses: str, confirmation_key: str) -> dict | None:
+    """Merge a compact history update into the full stored payload under a revision guard."""
+    filters = {"id": f"eq.{action_id}", "status": f"in.({statuses})",
+               f"payload->>{confirmation_key}": "is.null"}
+    current = request("scheduled_actions?" + urllib.parse.urlencode({
+        **filters, "select": "payload,updated_at", "limit": 1,
+    })) or []
+    if not current:
+        return None
+    merged = {**(current[0].get("payload") or {}), **payload}
+    if current[0].get("updated_at"):
+        filters["updated_at"] = "eq." + current[0]["updated_at"]
     rows = request(
-        "scheduled_actions?" + filters,
-        {"payload": payload, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
-        method="PATCH",
-        prefer="return=representation",
+        "scheduled_actions?" + urllib.parse.urlencode({**filters, "select": "id"}),
+        {"payload": merged, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        method="PATCH", prefer="return=representation",
     ) or []
     return rows[0] if rows else None
 
 
+def update_freebie_action(action_id: int, payload: dict, *, status: str) -> dict | None:
+    """Atomically confirm one still-open assignment from a matching Telegram reply."""
+    return _update_assignment(action_id, payload, status, "pending,processing,failed", "freebie_completed_at")
+
+
 def freebie_action_state(action_id: int) -> dict | None:
     rows = request("scheduled_actions?" + urllib.parse.urlencode({
-        "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
+        "select": "id,status,confirmed:payload->freebie_completed_at", "id": f"eq.{action_id}", "limit": 1,
     })) or []
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    row = rows[0]
+    row["payload"] = {"freebie_completed_at": row.pop("confirmed", None)}
+    return row
 
 
 def new_client_actions(allowed: set[int]) -> list[dict]:
     """Read durable new-client round-robin assignments."""
-    if not allowed:
-        return []
-    result: list[dict] = []
-    offset = 0
-    while True:
-        filters = urllib.parse.urlencode({
-            "select": "id,chat_id,payload,status,scheduled_for,sent_at,telegram_message_id",
-            "chat_id": "in.(" + ",".join(str(chat_id) for chat_id in sorted(allowed)) + ")",
-            "dedupe_key": "like.new-client:*",
-            "order": "id.asc",
-            "limit": 1000,
-            "offset": offset,
-        })
-        rows = request("scheduled_actions?" + filters) or []
-        result.extend(rows)
-        if len(rows) < 1000:
-            return result
-        offset += 1000
+    return _assignment_history(allowed, "new-client", NEW_CLIENT_HISTORY_KEYS)
 
 
 def new_client_reply_messages(
     chat_id: int, thread_id: int, since: dt.datetime, before: dt.datetime,
+    *, author_ids: set[int] | None = None,
 ) -> list[dict]:
     """Read archived WORKING replies that can confirm a new-client assignment."""
-    filters = urllib.parse.urlencode([
+    filters = [
         ("select", "message_id,sent_utc,author_id,text,thread_id,reply_to_message_id"),
         ("chat_id", f"eq.{chat_id}"),
         ("thread_id", f"eq.{thread_id}"),
@@ -453,9 +544,18 @@ def new_client_reply_messages(
         ("sent_utc", f"lte.{before.isoformat()}"),
         ("text", "ilike.*working*"),
         ("order", "sent_utc.asc,message_id.asc"),
-        ("limit", "1000"),
-    ])
-    return request("messages?" + filters) or []
+        ("limit", READ_PAGE_SIZE),
+    ]
+    if author_ids is not None:
+        if not author_ids:
+            return []
+        filters.append(("author_id", "in.(" + ",".join(str(i) for i in sorted(author_ids)) + ")"))
+    result = []
+    while True:
+        rows = request("messages?" + urllib.parse.urlencode(filters + [("offset", len(result))])) or []
+        result.extend(rows)
+        if len(rows) < READ_PAGE_SIZE:
+            return result
 
 
 def update_new_client_action(
@@ -463,22 +563,15 @@ def update_new_client_action(
 ) -> dict | None:
     """Atomically update one unacknowledged new-client assignment."""
     statuses = "pending,processing,failed,cancelled" if include_cancelled else "pending,processing,failed"
-    filters = urllib.parse.urlencode({
-        "id": f"eq.{action_id}",
-        "status": f"in.({statuses})",
-        "payload->>new_client_acknowledged_at": "is.null",
-    })
-    rows = request(
-        "scheduled_actions?" + filters,
-        {"payload": payload, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
-        method="PATCH",
-        prefer="return=representation",
-    ) or []
-    return rows[0] if rows else None
+    return _update_assignment(action_id, payload, status, statuses, "new_client_acknowledged_at")
 
 
 def new_client_action_state(action_id: int) -> dict | None:
     rows = request("scheduled_actions?" + urllib.parse.urlencode({
-        "select": "id,status,payload", "id": f"eq.{action_id}", "limit": 1,
+        "select": "id,status,confirmed:payload->new_client_acknowledged_at", "id": f"eq.{action_id}", "limit": 1,
     })) or []
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    row = rows[0]
+    row["payload"] = {"new_client_acknowledged_at": row.pop("confirmed", None)}
+    return row
