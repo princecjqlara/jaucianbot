@@ -88,6 +88,23 @@ GROUPS = {
     },
 }
 
+TRABAWHO_CHAT_ID = -1002894511895
+TRABAWHO = {
+    "name": "Trabawho?",
+    "general": 1,
+    "announcements": 16,
+    "active": 7581,
+    "contact_thread": 7673,
+    "receipts": 4,
+    "songs": 7692,
+    "client_source": "suno",
+    "crm_pages": {"Suno": "suno:pnhzpeyzpwsmwcuafgpw"},
+    "new_client_timeout_minutes": 30,
+    "new_client_ready_rotation": True,
+    "new_client_retry_cooldown_minutes": 30,
+}
+AVAILABILITY_GROUPS = {**GROUPS, TRABAWHO_CHAT_ID: TRABAWHO}
+
 def money(value: Decimal) -> str:
     formatted = f"{value:,.2f}"
     if formatted.endswith(".00"):
@@ -363,7 +380,7 @@ def queue_daily_polls(
 ) -> int:
     queued = 0
     existing_chats = existing_chats or set()
-    for chat_id, config in GROUPS.items():
+    for chat_id, config in AVAILABILITY_GROUPS.items():
         if chat_id not in allowed or chat_id in existing_chats:
             continue
         day_label = "TODAY" if work_date == now.astimezone(MANILA).date() else "TOMORROW"

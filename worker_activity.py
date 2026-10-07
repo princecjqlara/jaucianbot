@@ -7,7 +7,7 @@ from collections import Counter
 from decimal import Decimal
 
 from cloud_store import activity_messages, freebie_actions, new_client_actions, poll_answers_for_range
-from daily_automation import GROUPS, MANILA
+from daily_automation import GROUPS, MANILA, TRABAWHO_CHAT_ID
 from deal_parser import collect_deals
 from freebie_automation import is_freebie_action
 from new_client_automation import is_new_client_action
@@ -63,6 +63,9 @@ def _recommendations(worker: dict) -> list[str]:
 
 def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
     """Build transparent activity metrics; this is coaching data, not payroll data."""
+    if chat_id == TRABAWHO_CHAT_ID:
+        from trabawho_receipts import trabawho_receipt_report
+        return trabawho_receipt_report(days, now)
     config = GROUPS[chat_id]
     local_today = now.astimezone(MANILA).date()
     start_date = local_today - dt.timedelta(days=days - 1)

@@ -422,6 +422,45 @@ def activity_messages(
         offset += len(rows)
 
 
+def receipt_messages(chat_id: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
+    """Read receipt captions and replies, retaining ancestry missing from HTML thread IDs."""
+    fields = "chat_id,message_id,sent_utc,edited_utc,author_id,author_name,text,content_type,thread_id,reply_to_message_id,source"
+    result = []
+    while True:
+        filters = urllib.parse.urlencode([
+            ("select", fields), ("chat_id", f"eq.{chat_id}"),
+            ("sent_utc", f"gte.{start_utc.isoformat()}"), ("sent_utc", f"lt.{end_utc.isoformat()}"),
+            ("order", "sent_utc.asc,message_id.asc"), ("limit", READ_PAGE_SIZE), ("offset", len(result)),
+        ])
+        rows = request("messages?" + filters) or []
+        result.extend(rows)
+        if len(rows) < READ_PAGE_SIZE:
+            break
+    # A receipt may reply to an older receipt or image outside the reporting period.
+    # Fetch ancestors for topic membership only; reporting filters the original dates.
+    known = {row["message_id"] for row in result}
+    attempted = {4}
+    frontier = result
+    for _ in range(32):
+        missing = sorted({r["reply_to_message_id"] for r in frontier
+                          if r.get("thread_id") is None and r.get("reply_to_message_id") is not None
+                          and r["reply_to_message_id"] not in known | attempted})
+        if not missing:
+            break
+        frontier = []
+        for offset in range(0, len(missing), READ_PAGE_SIZE):
+            batch = missing[offset:offset + READ_PAGE_SIZE]
+            filters = urllib.parse.urlencode({
+                "select": fields, "chat_id": f"eq.{chat_id}",
+                "message_id": "in.(" + ",".join(map(str, batch)) + ")", "limit": READ_PAGE_SIZE,
+            })
+            frontier.extend(request("messages?" + filters) or [])
+            attempted.update(batch)
+        known.update(r["message_id"] for r in frontier)
+        result.extend(frontier)
+    return result
+
+
 def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date) -> list[dict]:
     """Read every poll answer for a team over an inclusive date range."""
     result: list[dict] = []
@@ -533,6 +572,68 @@ def freebie_action_state(action_id: int) -> dict | None:
 def new_client_actions(allowed: set[int]) -> list[dict]:
     """Read durable new-client round-robin assignments."""
     return _assignment_history(allowed, "new-client", NEW_CLIENT_HISTORY_KEYS)
+
+
+SONG_JOB_KEYS = (
+    "song_token", "song_assignment_id", "song_assignee_id", "song_assignee_name",
+    "song_contact_name", "song_started_at", "song_deadline_at", "song_completed_at",
+    "song_completion_message_id",
+    "song_ack_queued_at",
+)
+
+
+def song_jobs(chat_id: int) -> list[dict]:
+    return _assignment_history({chat_id}, "trabawho-song-job", SONG_JOB_KEYS)
+
+
+def song_notices(chat_id: int) -> list[dict]:
+    return _assignment_history({chat_id}, "trabawho-song-notice", ("song_job_id", "song_stage"))
+
+
+def create_song_job(chat_id: int, assignment_id: int, payload: dict, now: dt.datetime) -> bool:
+    # Durable state only. Cancelled markers never enter the Telegram delivery queue.
+    return bool(request("scheduled_actions?on_conflict=dedupe_key&select=id", {
+        "chat_id": chat_id, "action_type": "message", "payload": payload, "status": "cancelled",
+        "scheduled_for": now.isoformat(), "dedupe_key": f"trabawho-song-job:{assignment_id}",
+    }, prefer="resolution=ignore-duplicates,return=representation"))
+
+
+def complete_song_job(job_id: int, completed_at: dt.datetime, message_id: int) -> bool:
+    return bool(_update_assignment(job_id, {
+        "song_completed_at": completed_at.isoformat(), "song_completion_message_id": message_id,
+    }, "cancelled", "cancelled", "song_completed_at"))
+
+
+def mark_song_ack_queued(job_id: int, now: dt.datetime) -> bool:
+    return bool(_update_assignment(job_id, {"song_ack_queued_at": now.isoformat()},
+                                   "cancelled", "cancelled", "song_ack_queued_at"))
+
+
+def song_job_state(job_id: int, chat_id: int) -> dict | None:
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id,chat_id,payload", "id": f"eq.{job_id}", "chat_id": f"eq.{chat_id}",
+        "dedupe_key": "like.trabawho-song-job:*", "limit": 1,
+    })) or []
+    return rows[0] if rows else None
+
+
+def song_reply_messages(chat_id: int, thread_id: int, since: dt.datetime,
+                        before: dt.datetime, author_ids: set[int]) -> list[dict]:
+    if not author_ids:
+        return []
+    filters = [
+        ("select", "message_id,sent_utc,edited_utc,author_id,text,thread_id,reply_to_message_id"),
+        ("chat_id", f"eq.{chat_id}"), ("thread_id", f"eq.{thread_id}"),
+        ("sent_utc", f"gte.{since.isoformat()}"), ("sent_utc", f"lte.{before.isoformat()}"),
+        ("author_id", "in.(" + ",".join(map(str, sorted(author_ids))) + ")"),
+        ("order", "sent_utc.asc,message_id.asc"), ("limit", READ_PAGE_SIZE),
+    ]
+    result = []
+    while True:
+        rows = request("messages?" + urllib.parse.urlencode(filters + [("offset", len(result))])) or []
+        result.extend(rows)
+        if len(rows) < READ_PAGE_SIZE:
+            return result
 
 
 def new_client_reply_messages(

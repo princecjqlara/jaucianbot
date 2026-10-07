@@ -123,6 +123,92 @@ The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pag
 
 ## New-client round robin
 
+### Trabawho / Suno
+
+Trabawho (`-1002894511895`) has a separate Suno workflow. General chat is topic
+`1`, announcements `16`, Active for Tomorrow `7581`, and new clients `7673`.
+The bot creates dated, nonanonymous availability polls for today and tomorrow in
+topic `7581`. Votes for tomorrow affect tomorrow's plan; clients are offered when
+that dated workday arrives, using only that workday's Active voters.
+
+Announcements update when the recorded Active count changes. Quota is
+`active members × 2`; the planned ads budget is `active members × 2 × ₱150`.
+For example, 10 Active members means a quota of 20 and an ads budget of ₱3,000.
+These settings do not apply Veo's DD/CD targets, commission rules, freebie topics,
+or daily payroll reports to Trabawho.
+
+Suno uses its own server-only `SUNO_SUPABASE_URL` and
+`SUNO_SUPABASE_SERVICE_ROLE_KEY`; the archive and Veo CRM retain their existing
+credentials. Define the Suno table, ID/name/details columns, and the completion
+column/value using the `SUNO_*` settings in `.env.example` after verifying the
+schema. Optional customer-identity and date columns support stable deduplication
+and oldest-first assignment. The reader paginates, requires the mapped complete
+outcome and a nonempty details object, and leaves assignment disabled if the
+mapping is absent. It never guesses a client table or treats partial details as
+complete. A Suno connection failure is reported separately and does not stop Veo
+queues or due deliveries.
+
+Trabawho follows ready-member rotation with a 30-minute WORKING reply deadline
+and a 30-minute cooldown after a missed reply. Assignments use topic `7673` and
+stable Suno customer identities. Its client checks have a separate one-minute
+checkpoint. Production activation requires the Suno settings in Vercel's
+Production environment and Trabawho in `ALLOWED_CHAT_IDS`. Deployment and live
+schema verification are still required for this new workflow.
+
+Trabawho sales and recorded salary share topic `4` (Receipts). The authenticated
+`GET /api/workers/activity?group=-1002894511895&days=14` manager report reads that
+topic instead of Veo DD/CD topics. `699 (140)` records 699 gross and 140 salary;
+`100 (50) tip` records another 100 gross and 50 salary, once. An explicitly
+labeled tip with no parenthesized share uses the user's 50/50 rule. Written
+shares are authoritative for videos, revisions, and other extras; a 50% share
+alone does not identify a tip. The report separates labeled tips and ranks gross
+receipt totals, including extras and tips. Receipt-post counts are not client
+counts or quota completion. This report is read-only and does not post payroll.
+
+Malformed amounts, conflicting tip shares, unpaid/correction comments, and
+challenged receipts are held for review and excluded from accepted totals.
+Image-only receipts cannot be read. Export topic membership is reconstructed
+from reply ancestry; unresolved membership and source/date coverage are reported.
+Identical message IDs are counted once, but equal amounts on different receipt
+posts are retained. Earnings are recorded amounts, not confirmed salary payouts.
+
+Daily Trabawho reports are queued at 00:05 PHT for the previous calendar day;
+a later cron run that day catches up if necessary. They go to announcements
+topic `16` and also the existing Daily Reports group when it is approved in
+`ALLOWED_CHAT_IDS`. Each report includes Active members, the two-per-member quota,
+planned ads budget, accepted receipt gross/salary, each member's recorded totals,
+labeled tips, receipts needing review, and song deliveries/outstanding jobs.
+Reports and song reminders run independently of Suno connection availability.
+Report markers mean all report parts are queued; dispatcher retries handle
+delivery failures. Amounts with unresolved receipts are explicitly partial.
+
+Song delivery uses topic `7692`. A member's accepted `WORKING` assignment starts
+one persistent 24-hour deadline. Initial and 12/20/23-hour reminders show the
+deadline and time remaining; a 21:00 PHT reminder encourages same-day delivery
+when acceptance precedes that time. Same-day delivery is the target; the tracked
+hard deadline is exactly 24 hours after acceptance, including across midnight.
+Overdue work gets one reminder per 24-hour overdue period until confirmed.
+The bot schedules only the current milestone after downtime and recomputes the
+countdown before sending. A new day or another cron run never resets a deadline.
+
+After delivery to the client, the assigned member posts `SONG SENT ABCD1234` (or
+`DONE ABCD1234`) in topic `7692`, using their client token. A direct `DONE` or
+`SONG SENT` reply to a tracked bot reminder also works. The bot replies to the
+confirmation, records its timestamp, and suppresses pending reminders for that
+client. Token, topic and member identity are required; plain `DONE` without a
+tracked reply and an uploaded file alone do not establish client delivery.
+Archived confirmations reconcile missed webhook handling before new reminders.
+Deadlines and confirmations reuse durable scheduled-action markers, requiring
+no new database table or collector/webhook setup.
+
+Veo, Veo Jel, Veo Jessa, and Veo Ollie retain their existing polls, quotas,
+daily reports, freebies and client assignments. The Veo daily scheduler excludes
+Trabawho; Trabawho source/planning/report failures are caught separately and do
+not stop Veo delivery. A Trabawho poll-lookup failure does not consume a Veo poll
+webhook. The existing authenticated Windows helper supports
+`./remote_windows.ps1 dispatch` to run the shared dispatcher for all approved
+teams when startup is explicitly requested.
+
 Separately, the new-client dispatcher reads Supabase contacts whose chatbot has `stop_reason = details_collected` and a non-empty collected-details object. That final chatbot outcome is authoritative even when an older state retains stale entries in `missing_details`. It assigns those contacts in the new-client topics: Veo Jel `4180`, Veo `27622`, Veo Jessa `3725`, and Veo Ollie `5758`.
 
 Only members who selected Active for that Philippine day participate. The bot gives each Active member one client before anyone can move ahead to the next round. A member replies `WORKING ABCD1234` as soon as they start handling the assigned client; a direct `WORKING` reply to the assignment is also accepted. That acknowledgment stops reminders and makes the member eligible when the round robin reaches them again. Before timing out an assignment, the bot reconciles archived replies so a confirmation cannot be missed and reassigned. If no valid `WORKING` reply arrives within one hour, the assignment is cancelled and the same contact is reassigned to a different Active member. If the original member replies after that timeout, the earliest valid `WORKING` reply wins and any duplicate open assignment is cancelled. Contacts are tracked by their stable page-scoped PSID, with legacy fallbacks, so changing contact details or replacing a CRM row does not create a new assignment. A faster member cannot receive a third client while another Active member has received only one. Acknowledged contacts are never assigned again.

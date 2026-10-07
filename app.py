@@ -27,7 +27,7 @@ from cloud_store import (
     save_poll_answer,
     save_update,
 )
-from daily_automation import GROUPS, run_due_daily_automation
+from daily_automation import GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
@@ -38,10 +38,14 @@ from new_client_automation import (
 )
 from telegram_sender import send_scheduled_action
 from worker_activity import worker_activity_report
+from suno_store import suno_configured
+from trabawho_automation import queue_trabawho_automation, trabawho_poll_work_date
+from trabawho_reports import queue_trabawho_daily_report
+from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_followups, song_notice_delivery_allowed
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-08.1"
+AUTOMATION_VERSION = "2026-10-08.3"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -112,7 +116,20 @@ def new_clients_status_route(environ, start_response):
     if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
         return response(start_response, 401, {"ok": False})
     try:
-        groups = new_client_status(allowed_chat_ids(), dt.datetime.now(dt.timezone.utc))
+        allowed = allowed_chat_ids()
+        now = dt.datetime.now(dt.timezone.utc)
+        groups = new_client_status(allowed.intersection(GROUPS), now)
+        if TRABAWHO_CHAT_ID in allowed:
+            if suno_configured():
+                try:
+                    groups.extend(new_client_status({TRABAWHO_CHAT_ID}, now))
+                except Exception as error:
+                    print(f"Suno status failed: {type(error).__name__}")
+                    groups.append({"team": TRABAWHO["name"], "chat_id": TRABAWHO_CHAT_ID,
+                                   "configured": True, "ok": False, "error": "suno_source_unavailable"})
+            else:
+                groups.append({"team": TRABAWHO["name"], "chat_id": TRABAWHO_CHAT_ID,
+                               "configured": False, "ok": False, "error": "suno_mapping_or_credentials_missing"})
     except Exception as error:
         print(f"New-client status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
@@ -306,6 +323,10 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if is_song_notice(action) and not song_notice_delivery_allowed(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("suppressed song reminder was not finalized")
+                continue
             if is_freebie_action(action) and not freebie_delivery_allowed(action, now):
                 defer_scheduled_action(action)
                 continue
@@ -354,10 +375,28 @@ def dispatch_route(environ, start_response):
     try:
         allowed = allowed_chat_ids()
         try:
-            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed)
+            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - {TRABAWHO_CHAT_ID})
         except Exception as daily_error:
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")
+        if TRABAWHO_CHAT_ID in allowed:
+            try:
+                queued += queue_trabawho_automation(dt.datetime.now(dt.timezone.utc), allowed)
+            except Exception as planning_error:
+                queue_errors.append("trabawho_plan")
+                print(f"Trabawho planning failed: {type(planning_error).__name__}")
+            try:
+                now = dt.datetime.now(dt.timezone.utc)
+                if claim_automation_slot({TRABAWHO_CHAT_ID}, now, workflow="trabawho-songs", interval_seconds=60):
+                    queued += queue_song_followups(now, allowed)
+            except Exception as song_error:
+                queue_errors.append("trabawho_songs")
+                print(f"Trabawho song queue failed: {type(song_error).__name__}")
+            try:
+                queued += queue_trabawho_daily_report(dt.datetime.now(dt.timezone.utc), allowed)
+            except Exception as report_error:
+                queue_errors.append("trabawho_report")
+                print(f"Trabawho report queue failed: {type(report_error).__name__}")
         assignment_groups = allowed.intersection(GROUPS)
         if os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
             now = dt.datetime.now(dt.timezone.utc)
@@ -365,7 +404,7 @@ def dispatch_route(environ, start_response):
                 assignment_groups, now, workflow="new-client", interval_seconds=60,
             ):
                 try:
-                    queued += queue_new_client_assignments(now, allowed)
+                    queued += queue_new_client_assignments(now, allowed - {TRABAWHO_CHAT_ID})
                 except Exception as assignment_error:
                     queue_errors.append("new_client")
                     print(f"New-client queue failed: {type(assignment_error).__name__}")
@@ -375,6 +414,14 @@ def dispatch_route(environ, start_response):
                 except Exception as freebie_error:
                     queue_errors.append("freebie")
                     print(f"Freebie queue failed: {type(freebie_error).__name__}")
+        if TRABAWHO_CHAT_ID in allowed and suno_configured():
+            try:
+                now = dt.datetime.now(dt.timezone.utc)
+                if claim_automation_slot({TRABAWHO_CHAT_ID}, now, workflow="new-client:suno", interval_seconds=60):
+                    queued += queue_new_client_assignments(now, {TRABAWHO_CHAT_ID})
+            except Exception as suno_error:
+                queue_errors.append("suno_new_client")
+                print(f"Suno assignment queue failed: {type(suno_error).__name__}")
         processed, sent, failed = deliver_due_actions(allowed, limit=25)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
@@ -414,6 +461,34 @@ def webhook_route(environ, start_response):
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})
+    if stored and TRABAWHO_CHAT_ID in allowed:
+        handled_trabawho = False
+        try:
+            now = dt.datetime.now(dt.timezone.utc)
+            if "poll_answer" in update:
+                work_date = trabawho_poll_work_date(update["poll_answer"].get("poll_id", ""), now, allowed)
+                if work_date is not None:
+                    handled_trabawho = True
+                    queued = queue_trabawho_automation(now, {TRABAWHO_CHAT_ID})
+                    if work_date == now.astimezone(MANILA).date() and suno_configured():
+                        queued += queue_new_client_assignments(now, {TRABAWHO_CHAT_ID})
+                    if queued:
+                        deliver_due_actions({TRABAWHO_CHAT_ID}, limit=5)
+                    return response(start_response, 200, {"ok": True})
+            else:
+                message = update.get("message") or update.get("edited_message") or {}
+                if (message.get("chat") or {}).get("id") == TRABAWHO_CHAT_ID:
+                    handled_trabawho = True
+                    if confirm_song_reply(update, allowed, now):
+                        deliver_due_actions({TRABAWHO_CHAT_ID}, limit=5)
+                    elif suno_configured() and confirm_new_client_reply(update, allowed):
+                        queue_song_followups(now, {TRABAWHO_CHAT_ID})
+                        deliver_due_actions({TRABAWHO_CHAT_ID}, limit=5)
+                    return response(start_response, 200, {"ok": True})
+        except Exception as error:
+            print(f"Trabawho webhook automation delayed: {type(error).__name__}")
+            if handled_trabawho:
+                return response(start_response, 200, {"ok": True})
     if stored and os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
         try:
             if "poll_answer" in update:

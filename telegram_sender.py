@@ -58,6 +58,8 @@ def send_scheduled_action(action: dict) -> dict:
             payload["parse_mode"] = source["parse_mode"]
         if source.get("reply_markup"):
             payload["reply_markup"] = source["reply_markup"]
+        if source.get("reply_parameters"):
+            payload["reply_parameters"] = source["reply_parameters"]
         return telegram_call("sendMessage", payload)
     if action_type == "poll":
         payload = {

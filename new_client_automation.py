@@ -20,7 +20,7 @@ from cloud_store import (
     update_new_client_action,
 )
 from crm_store import completed_detail_contacts, contact_identity_map
-from daily_automation import GROUPS, MANILA
+from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA
 
 
 WORKING_RE = re.compile(r"\b/?working\s+([A-F0-9]{8})\b", re.IGNORECASE)
@@ -99,6 +99,9 @@ def _active_members(chat_id: int, work_date: dt.date) -> list[dict]:
 
 
 def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
+    if config.get("client_source") == "suno":
+        from suno_store import completed_suno_contacts
+        return [("Suno", completed_suno_contacts())]
     pages = list(config["crm_pages"].items())
     with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
         contacts = list(pool.map(completed_detail_contacts, (page_id for _, page_id in pages)))
@@ -132,6 +135,7 @@ def _enrich_history_contact_identities(history: list[dict]) -> None:
         row["payload"].get("new_client_contact_id")
         for row in history
         if is_new_client_action(row)
+        and GROUPS.get(int(row["chat_id"]), {}).get("client_source") != "suno"
         and row["payload"].get("new_client_contact_id")
         and not row["payload"].get("new_client_contact_identity")
     }
@@ -402,6 +406,12 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "otherwise it will be reassigned to another member.\n\n"
         f"{rotation_text}"
     )
+    if GROUPS[chat_id].get("songs"):
+        details += (
+            "\n\nAfter WORKING, send this client's song today and within 24 hours. "
+            f"Track delivery in https://t.me/c/2894511895/{GROUPS[chat_id]['songs']}. "
+            f"After sending it to the client, post <code>SONG SENT {token}</code> there."
+        )
     return (
         f"👤 Hi {member}! New client round {round_number}.\n\n{details}",
         f"⏰ Hi {member}! Please confirm that you are working on this new client.\n\n{details}",
