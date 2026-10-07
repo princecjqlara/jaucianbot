@@ -17,6 +17,7 @@ REQUIRED_SETTINGS = (
     "SUNO_CLIENTS_TABLE", "SUNO_CLIENT_ID_COLUMN", "SUNO_CLIENT_NAME_COLUMN",
     "SUNO_CLIENT_DETAILS_COLUMN", "SUNO_COMPLETION_COLUMN", "SUNO_COMPLETION_VALUE",
 )
+DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 
 
 def suno_configured() -> bool:
@@ -64,6 +65,9 @@ def completed_suno_contacts() -> list[dict]:
         name: os.environ.get(name, "").strip()
         for name in ("SUNO_CLIENT_IDENTITY_COLUMN", "SUNO_CLIENT_DATE_COLUMN")
     }
+    page_name_col = os.environ.get("SUNO_PAGE_NAME_COLUMN", DEFAULT_PAGE_NAME_COLUMN).strip()
+    if page_name_col:
+        optional["SUNO_PAGE_NAME_COLUMN"] = page_name_col
     if any(value and not PATH_IDENTIFIER.fullmatch(value) for value in optional.values()):
         raise RuntimeError("Invalid Suno optional column mapping")
     direct_columns = {id_col, details_col, complete_col}
@@ -113,6 +117,8 @@ def completed_suno_contacts() -> list[dict]:
             contacts[client_id] = {
                 "id": client_id, "page_id": SOURCE_ID, "psid": str(identity),
                 "name": name.strip(), "collected_details": details,
+                "page_name": (str(mapped_value(page_name_col)).strip()
+                               if page_name_col and mapped_value(page_name_col) else None),
                 "last_interaction_at": mapped_value(optional["SUNO_CLIENT_DATE_COLUMN"]) if optional["SUNO_CLIENT_DATE_COLUMN"] else None,
                 "stop_reason": "details_collected",
             }

@@ -96,6 +96,16 @@ class TrabawhoAutomationTests(unittest.TestCase):
         ) as crm:
             self.assertEqual(_page_contacts(TRABAWHO), [("Suno", [{"id": "suno-1"}])])
         crm.assert_not_called()
+
+    def test_suno_assignments_use_the_relation_backed_page_name(self):
+        with patch("suno_store.completed_suno_contacts", return_value=[
+            {"id": "suno-1", "page_name": "Maico Foods"},
+            {"id": "suno-2", "page_name": "Maico Foods"},
+        ]):
+            self.assertEqual(_page_contacts(TRABAWHO), [("Maico Foods", [
+                {"id": "suno-1", "page_name": "Maico Foods"},
+                {"id": "suno-2", "page_name": "Maico Foods"},
+            ])])
         with patch("new_client_automation.contact_identity_map") as lookup:
             _enrich_history_contact_identities([{"chat_id": CHAT, "payload": {
                 "new_client_token": "ABCDEF12", "new_client_contact_id": "suno-1",

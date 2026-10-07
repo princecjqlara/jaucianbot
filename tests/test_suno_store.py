@@ -32,6 +32,7 @@ class SunoStoreTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "Client")
         self.assertEqual((result[0]["page_id"], result[0]["psid"]), (SOURCE_ID, "1"))
+        self.assertIsNone(result[0]["page_name"])
         query = urllib.parse.parse_qs(request.call_args.args[0].split("?", 1)[1])
         self.assertEqual(query["status"], ["eq.complete"])
         self.assertEqual(query["order"], ["id.asc"])
@@ -62,13 +63,16 @@ class SunoStoreTests(unittest.TestCase):
                     "SUNO_CLIENT_DATE_COLUMN": "contacts.last_interaction_at"}
         row = {"contact_id": "contact-7", "collected_details": {"song": "Birthday"},
                "stop_reason": "details_collected",
-               "contacts": {"name": "Client", "psid": "customer-7", "last_interaction_at": "2026-10-08T00:00:00Z"}}
+               "contacts": {"name": "Client", "psid": "customer-7", "last_interaction_at": "2026-10-08T00:00:00Z"},
+               "pages": {"name": "Maico Foods"}}
         with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=[row]) as request:
             result = completed_suno_contacts()
         self.assertEqual((result[0]["id"], result[0]["name"], result[0]["psid"]),
                          ("contact-7", "Client", "customer-7"))
+        self.assertEqual(result[0]["page_name"], "Maico Foods")
         query = urllib.parse.parse_qs(request.call_args.args[0].split("?", 1)[1])
         self.assertIn("contacts!inner(last_interaction_at,name,psid)", query["select"][0])
+        self.assertIn("pages!inner(name)", query["select"][0])
 
     def test_reader_paginates_past_one_thousand_completed_clients(self):
         with patch.dict("os.environ", SETTINGS, clear=True), patch("suno_store.suno_request", side_effect=[

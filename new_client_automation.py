@@ -101,7 +101,12 @@ def _active_members(chat_id: int, work_date: dt.date) -> list[dict]:
 def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
     if config.get("client_source") == "suno":
         from suno_store import completed_suno_contacts
-        return [("Suno", completed_suno_contacts())]
+        contacts = completed_suno_contacts()
+        pages: dict[str, list[dict]] = {}
+        for contact in contacts:
+            page = (contact.get("page_name") or "Suno").strip() or "Suno"
+            pages.setdefault(page, []).append(contact)
+        return list(pages.items())
     pages = list(config["crm_pages"].items())
     with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
         contacts = list(pool.map(completed_detail_contacts, (page_id for _, page_id in pages)))
