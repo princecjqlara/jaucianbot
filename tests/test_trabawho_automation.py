@@ -62,7 +62,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
 
     def test_changed_active_count_updates_announcements_and_unchanged_count_is_deduped(self):
         with patch("trabawho_automation.daily_poll_counts", return_value={CHAT: {"active_workers": 10}}), patch(
-            "trabawho_automation.request", side_effect=[[{"count": 9}], [{"count": 10}]]
+            "trabawho_automation.request", side_effect=[[{"count": 9}], [{"count": 10, "format": "friendly-v1"}]]
         ), patch("trabawho_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 1)
         payload = enqueue.call_args.kwargs["payload"]
@@ -71,6 +71,13 @@ class TrabawhoAutomationTests(unittest.TestCase):
         self.assertNotIn("₱", payload["text"])
         self.assertNotIn("× 2", payload["text"])
         self.assertEqual(payload["trabawho_work_date"], TODAY.isoformat())
+
+    def test_old_plan_format_is_requeued_once_for_friendly_migration(self):
+        with patch("trabawho_automation.daily_poll_counts", return_value={CHAT: {"active_workers": 10}}), patch(
+            "trabawho_automation.request", return_value=[{"count": 10}]
+        ), patch("trabawho_automation.enqueue_scheduled_action", return_value=True) as enqueue:
+            self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 2)
+        self.assertEqual(enqueue.call_args.kwargs["payload"]["trabawho_plan_format"], "friendly-v1")
 
     def test_unapproved_group_never_queues_actions(self):
         with patch("trabawho_automation.daily_poll_counts") as counts:

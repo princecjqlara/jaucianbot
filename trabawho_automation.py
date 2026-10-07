@@ -9,6 +9,9 @@ from cloud_store import daily_poll_counts, enqueue_scheduled_action, request
 from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
 
 
+FRIENDLY_PLAN_VERSION = "friendly-v1"
+
+
 def plan_totals(active_members: int) -> tuple[int, int]:
     if active_members < 0:
         raise ValueError("Active member count cannot be negative")
@@ -42,12 +45,12 @@ def _queue_plan(work_date: dt.date, count_row: dict, now: dt.datetime) -> int:
     # Remember the last queued count. Unchanged counts produce no repeat posts;
     # concurrent cron and poll callbacks share a minute-scoped database dedupe key.
     latest = request("scheduled_actions?" + urllib.parse.urlencode({
-        "select": "id,count:payload->trabawho_active_count",
+        "select": "id,count:payload->trabawho_active_count,format:payload->>trabawho_plan_format",
         "chat_id": f"eq.{TRABAWHO_CHAT_ID}",
         "payload->>trabawho_work_date": f"eq.{work_date.isoformat()}",
         "order": "id.desc", "limit": 1,
     })) or []
-    if latest and latest[0].get("count") == workers:
+    if latest and latest[0].get("count") == workers and latest[0].get("format") == FRIENDLY_PLAN_VERSION:
         return 0
     minute = int(now.timestamp()) // 60
     return int(enqueue_scheduled_action(
@@ -57,6 +60,7 @@ def _queue_plan(work_date: dt.date, count_row: dict, now: dt.datetime) -> int:
             "message_thread_id": TRABAWHO["announcements"],
             "disable_notification": False,
             "trabawho_work_date": work_date.isoformat(), "trabawho_active_count": workers,
+            "trabawho_plan_format": FRIENDLY_PLAN_VERSION,
         },
         scheduled_for=now,
         dedupe_key=f"trabawho-plan:{work_date.isoformat()}:{minute}:{workers}",
