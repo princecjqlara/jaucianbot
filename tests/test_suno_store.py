@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 from unittest.mock import patch
 
-from suno_store import SOURCE_ID, completed_suno_contacts, suno_configured, suno_request
+from suno_store import SOURCE_ID, completed_suno_contacts, suno_assignment_matches_project, suno_configured, suno_request
 
 
 SETTINGS = {
@@ -25,6 +25,15 @@ def client(client_id="1", **values):
 
 
 class SunoStoreTests(unittest.TestCase):
+    def test_assignment_project_namespace_rejects_veo_and_old_suno_database(self):
+        with patch.dict("os.environ", SETTINGS, clear=True):
+            for page, expected in [
+                (SOURCE_ID, True), (SOURCE_ID + ":hiraya", True),
+                (SOURCE_ID + "-other:hiraya", False),
+                ("suno:pnhzpeyzpwsmwcuafgpw", False), ("veo-page", False), (None, False),
+            ]:
+                self.assertEqual(suno_assignment_matches_project({"payload": {"new_client_contact_page_id": page}}), expected)
+
     def test_reader_uses_verified_mapping_and_rejects_partial_or_empty_details(self):
         rows = [client(), client("2", status="collecting"), client("3", details={}),
                 client("4", details=[]), client("5", name=""), client(None)]

@@ -22,6 +22,15 @@ class DailyReportTests(unittest.TestCase):
         self.assertNotIn("Ads budget", text)
         self.assertNotIn("× 2", text)
         self.assertNotIn("₱", text)
+        self.assertIn("DAILY RECAP", text)
+        self.assertNotIn("will be shared", text)
+
+    def test_missing_past_poll_does_not_ask_for_a_vote_on_yesterday(self):
+        with patch("trabawho_reports.daily_poll_counts", return_value={}):
+            text = build_trabawho_summary(DAY, NOW)
+        self.assertIn("No tracked Active poll responses were recorded", text)
+        self.assertIn("next workday", text)
+        self.assertNotIn("prepare the day's assignments", text)
 
     def test_written_salary_and_user_plan_formulas_in_daily_report(self):
         rows = [{"chat_id": CHAT, "message_id": 1, "sent_utc": "2026-10-08T02:00:00Z", "author_id": 7,

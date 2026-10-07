@@ -462,11 +462,62 @@ class NewClientAutomationTests(unittest.TestCase):
     def test_trabawho_report_lists_actual_suno_pages(self):
         rows = [assignment(1, 11, "a", 1, acknowledged=True)]
         rows[0]["chat_id"] = -1002894511895
-        rows[0]["payload"]["new_client_page"] = "Azshinari"
+        rows[0]["payload"]["new_client_page"] = "Hiraya Studio"
+        rows[0]["payload"]["new_client_contact_page_id"] = "suno:cxgynadprukyeuqbchbs:hiraya"
         with patch("new_client_automation.new_client_actions", return_value=rows):
             lines = new_client_report_lines(-1002894511895, dt.date(2026, 9, 19))
         self.assertIn("By Suno page:", lines)
-        self.assertIn("• Azshinari: 1", lines)
+        self.assertIn("• Hiraya Studio: 1", lines)
+
+    def test_one_team_read_failure_does_not_stop_another_teams_assignments(self):
+        other_chat = -1003962888977
+        def read(config):
+            if config["name"] == "Veo Jel":
+                raise RuntimeError("private database details")
+            return [("Manawari Studios", [contact("healthy", "2026-01-01")])]
+        with patch("new_client_automation.new_client_actions", return_value=[]), patch(
+            "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
+        ), patch("new_client_automation._page_contacts", side_effect=read), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ) as enqueue:
+            with self.assertRaisesRegex(RuntimeError, "New-client source read failed"):
+                queue_new_client_assignments(NOW, {CHAT, other_chat})
+        self.assertEqual(enqueue.call_count, 1)
+        self.assertEqual(enqueue.call_args.kwargs["chat_id"], other_chat)
+
+    def test_status_read_error_does_not_hide_healthy_team_or_claim_empty_supply(self):
+        other_chat = -1003962888977
+        def read(config):
+            if config["name"] == "Veo Jel":
+                raise RuntimeError("private database details")
+            return [("Manawari Studios", [contact("healthy", "2026-01-01")])]
+        with patch("new_client_automation.new_client_actions", return_value=[]), patch(
+            "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
+        ), patch("new_client_automation._page_contacts", side_effect=read):
+            status = {row["chat_id"]: row for row in new_client_status({CHAT, other_chat}, NOW)}
+        self.assertFalse(status[CHAT]["source_available"])
+        self.assertEqual(status[CHAT]["members"][0]["state"], "source_read_error")
+        self.assertTrue(status[other_chat]["source_available"])
+        self.assertEqual(status[other_chat]["available_complete_clients"], {"Manawari Studios": 1})
+
+    def test_trabawho_old_database_does_not_inflate_status_or_accept_working_reply(self):
+        suno_chat = -1002894511895
+        old = assignment(1, 11, "a", 1, status="pending", assigned_at=NOW)
+        old["chat_id"] = suno_chat
+        old["payload"].update(new_client_contact_page_id="suno:pnhzpeyzpwsmwcuafgpw",
+                              new_client_work_date="2026-09-19", new_client_thread_id=7673)
+        update = {"message": {"chat": {"id": suno_chat}, "from": {"id": 11},
+                  "message_thread_id": 7673, "text": "WORKING " + old["payload"]["new_client_token"]}}
+        with patch("new_client_automation.new_client_actions", return_value=[old]), patch(
+            "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
+        ), patch("suno_store.suno_configured", return_value=True), patch(
+            "new_client_automation._page_contacts", return_value=[]
+        ), patch("new_client_automation.update_new_client_action") as mutate:
+            result = new_client_status({suno_chat}, NOW)[0]
+            self.assertFalse(confirm_new_client_reply(update, {suno_chat}))
+        self.assertEqual(result["assigned_today"], 0)
+        self.assertEqual(result["members"][0]["offers_today"], 0)
+        mutate.assert_not_called()
 
 
 VEO_CHAT = -1003647732254

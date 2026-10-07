@@ -12,6 +12,7 @@ from cloud_store import (
     song_jobs, song_job_state, song_notices, song_reply_messages, mark_song_ack_queued,
 )
 from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID
+from suno_store import suno_assignment_matches_project
 
 
 DONE = re.compile(r"\s*(?:SONG\s+SENT|DONE)(?:\s+([A-F0-9]{8}))?\s*[.!]?\s*", re.I)
@@ -29,7 +30,7 @@ def ensure_song_jobs(now: dt.datetime) -> None:
             continue
         payload = assignment.get("payload") or {}
         started = payload.get("new_client_acknowledged_at")
-        if not started or not payload.get("new_client_token"):
+        if not started or not payload.get("new_client_token") or not suno_assignment_matches_project(assignment):
             continue
         start = timestamp(started)
         create_song_job(TRABAWHO_CHAT_ID, int(assignment["id"]), {

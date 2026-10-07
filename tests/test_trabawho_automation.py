@@ -6,7 +6,7 @@ from unittest.mock import patch
 from daily_automation import AVAILABILITY_GROUPS, GROUPS, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
 from new_client_automation import _enrich_history_contact_identities, _page_contacts, queue_new_client_assignments
 from trabawho_automation import (
-    availability_checkin_text, plan_text, plan_totals, progress_text,
+    _assignment_counts, availability_checkin_text, plan_text, plan_totals, progress_text,
     queue_trabawho_automation, trabawho_poll_work_date,
 )
 from test_wsgi import call_app
@@ -89,7 +89,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
         text = availability_checkin_text(TODAY, [
             {"user_id": 11, "user_name": "Alex", "active": True},
             {"user_id": 12, "user_name": "Bea", "active": False},
-        ], {})
+        ], {11: 0})
         self.assertIn("Alex", text)
         self.assertIn("Bea", text)
         self.assertIn("marked Active today", text)
@@ -100,7 +100,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
     def test_progress_shows_remaining_clients_without_internal_formula(self):
         text = progress_text(TODAY, {"active_workers": 1}, 1)
         self.assertIn("1 of 2 planned", text)
-        self.assertIn("1 left to go", text)
+        self.assertIn("1 left to assign", text)
         self.assertNotIn("× 2", text)
         self.assertNotIn("₱", text)
 
@@ -138,7 +138,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
         lookup.assert_not_called()
 
     def test_completed_suno_contact_is_offered_in_new_client_topic_to_todays_active_member(self):
-        contact = {"id": "suno-1", "page_id": "suno:pnhzpeyzpwsmwcuafgpw", "psid": "customer-1",
+        contact = {"id": "suno-1", "page_id": "suno:cxgynadprukyeuqbchbs:hiraya", "psid": "customer-1",
                    "name": "Client", "collected_details": {"song": "Birthday"}}
         with patch("new_client_automation.new_client_actions", return_value=[]), patch(
             "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
@@ -153,6 +153,45 @@ class TrabawhoAutomationTests(unittest.TestCase):
         self.assertEqual(action["payload"]["new_client_work_date"], TODAY.isoformat())
         self.assertIn("Birthday", action["payload"]["text"])
         self.assertIn("WORKING", action["payload"]["text"])
+
+    def test_checkin_does_not_blame_members_without_delivered_assignments(self):
+        text = availability_checkin_text(TODAY, [
+            {"user_id": 11, "user_name": "Waiting for a client", "active": True},
+            {"user_id": 12, "user_name": "Already working", "active": True},
+        ], {12: 1})
+        self.assertNotIn("working response", text)
+        self.assertNotIn("tg://user?id=11", text)
+        self.assertNotIn("tg://user?id=12", text)
+
+    def test_large_checkin_fits_telegram_limit_without_cutting_html_mentions(self):
+        voters = [{"user_id": i, "user_name": "<Long & name>" * 20, "active": i % 2 == 0}
+                  for i in range(1, 201)]
+        text = availability_checkin_text(TODAY, voters, {i: 0 for i in range(1, 201)})
+        self.assertLess(len(text), 4096)
+        self.assertEqual(text.count('<a href="'), text.count("</a>"))
+        self.assertIn("other teammates", text)
+
+    def test_progress_counts_only_delivered_current_source_and_unique_clients(self):
+        def offer(i, **changes):
+            return {"id": i, "status": "pending", "sent_at": NOW.isoformat(), "payload": {
+                "new_client_token": "ABCD1234", "new_client_work_date": TODAY.isoformat(),
+                "new_client_contact_page_id": "suno:cxgynadprukyeuqbchbs:hiraya",
+                "new_client_contact_identity": f"client-{i}", "new_client_assignee_id": 11,
+                **changes,
+            }}
+        wrong = offer(1, new_client_contact_page_id="suno:pnhzpeyzpwsmwcuafgpw")
+        cancelled = offer(2); cancelled["status"] = "cancelled"
+        queued = offer(3); queued["sent_at"] = None
+        valid = offer(4)
+        duplicate = offer(5, new_client_contact_identity="client-4", new_client_acknowledged_at=NOW.isoformat())
+        with patch("trabawho_automation.new_client_actions", return_value=[wrong, cancelled, queued, valid, duplicate]):
+            self.assertEqual(_assignment_counts(TODAY), (1, {11: 1}))
+
+    def test_filled_assignment_plan_does_not_claim_sales_or_delivery_completion(self):
+        text = progress_text(TODAY, {"active_workers": 1}, 2)
+        self.assertIn("assignment plan is filled", text)
+        self.assertNotIn("target is complete", text)
+        self.assertIn("tracked separately", text)
 
     def test_todays_active_vote_assigns_suno_without_veo_credentials(self):
         update = {"poll_answer": {"poll_id": "today", "user": {"id": 11}, "option_ids": [0]}}

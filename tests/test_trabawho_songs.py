@@ -32,6 +32,7 @@ def message(text="SONG SENT ABCD1234", **kwargs):
 class SongTests(unittest.TestCase):
     def test_working_starts_one_deadline_not_an_unaccepted_offer(self):
         assignments = [{"id": 10, "payload": {"new_client_token": "ABCD1234", "new_client_acknowledged_at": NOW.isoformat(),
+            "new_client_contact_page_id": "suno:cxgynadprukyeuqbchbs:hiraya",
             "new_client_assignee_id": 7, "new_client_assignee_name": "Alex", "new_client_contact_name": "Client"}},
             {"id": 11, "payload": {"new_client_token": "AAAABBBB"}}]
         with patch("trabawho_songs.song_jobs", return_value=[]), patch(
@@ -40,6 +41,18 @@ class SongTests(unittest.TestCase):
             songs.ensure_song_jobs(NOW)
         self.assertEqual(create.call_count, 1)
         self.assertEqual(create.call_args.args[2]["song_deadline_at"], (NOW + dt.timedelta(hours=24)).isoformat())
+
+    def test_wrong_database_acknowledgement_does_not_create_a_song_deadline(self):
+        assignments = [{"id": 10, "payload": {
+            "new_client_token": "ABCD1234", "new_client_acknowledged_at": NOW.isoformat(),
+            "new_client_contact_page_id": "suno:pnhzpeyzpwsmwcuafgpw",
+            "new_client_assignee_id": 7,
+        }}]
+        with patch("trabawho_songs.song_jobs", return_value=[]), patch(
+            "trabawho_songs.new_client_actions", return_value=assignments
+        ), patch("trabawho_songs.create_song_job") as create:
+            songs.ensure_song_jobs(NOW)
+        create.assert_not_called()
 
     def test_existing_job_does_not_reset_deadline_or_write_every_minute(self):
         with patch("trabawho_songs.song_jobs", return_value=[job()]), patch(

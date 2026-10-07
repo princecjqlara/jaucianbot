@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from cloud_store import daily_poll_answers, daily_poll_counts, enqueue_scheduled_action, new_client_actions, request
 from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
+from suno_store import suno_assignment_matches_project
 
 
 FRIENDLY_PLAN_VERSION = "friendly-v1"
@@ -45,8 +46,21 @@ def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
 
 def _mention(user: dict) -> str:
     user_id = user.get("user_id")
-    name = html.escape(user.get("user_name") or str(user_id or "team member"))
+    name = html.escape((user.get("user_name") or str(user_id or "team member"))[:64])
     return f'<a href="tg://user?id={int(user_id)}">{name}</a>' if user_id else name
+
+
+def _mentions(users: list[dict]) -> str:
+    mentions = []
+    size = 0
+    for user in users:
+        mention = _mention(user)
+        if size + len(mention) + 2 > 1000:
+            break
+        mentions.append(mention)
+        size += len(mention) + 2
+    remaining = len(users) - len(mentions)
+    return ", ".join(mentions) + (f" and {remaining} other teammates" if remaining else "")
 
 
 def _assignment_counts(work_date: dt.date) -> tuple[int, dict[int, int]]:
@@ -56,19 +70,25 @@ def _assignment_counts(work_date: dt.date) -> tuple[int, dict[int, int]]:
         payload = row.get("payload") or {}
         if not payload.get("new_client_token") or payload.get("new_client_work_date") != work_date.isoformat():
             continue
+        if not suno_assignment_matches_project(row):
+            continue
+        if row.get("status") == "cancelled" and not payload.get("new_client_acknowledged_at"):
+            continue
+        if not (row.get("sent_at") or payload.get("_first_delivery_at") or payload.get("new_client_acknowledged_at")):
+            continue
         contact_key = payload.get("new_client_contact_identity") or payload.get("new_client_contact_id")
         if contact_key:
             assigned_keys.add(str(contact_key))
         user_id = payload.get("new_client_assignee_id")
-        if user_id is not None and payload.get("new_client_acknowledged_at"):
-            by_user[int(user_id)] += 1
+        if user_id is not None:
+            by_user[int(user_id)] += int(bool(payload.get("new_client_acknowledged_at")))
     return len(assigned_keys), dict(by_user)
 
 
 def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_by_user: dict[int, int]) -> str:
     active = [row for row in answers if row.get("active")]
     inactive = [row for row in answers if not row.get("active")]
-    waiting = [row for row in active if int(row.get("user_id")) not in assigned_by_user]
+    waiting = [row for row in active if assigned_by_user.get(int(row.get("user_id"))) == 0]
     lines = [
         "💛 TRABAWHO AVAILABILITY CHECK-IN",
         f"📅 {work_date.strftime('%A, %B %d, %Y')} (PHT)", "",
@@ -76,13 +96,13 @@ def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_
     ]
     if waiting:
         lines += [
-            "A quick note for " + ", ".join(_mention(user) for user in waiting) + ": "
+            "A quick note for " + _mentions(waiting) + ": "
             "you marked Active today, and we haven't seen a working response from you yet. "
             "Please check New Client when you're ready—no pressure.",
         ]
     if inactive:
         lines += [
-            "Thanks for updating us, " + ", ".join(_mention(user) for user in inactive) + ": "
+            "Thanks for updating us, " + _mentions(inactive) + ": "
             "you marked Not Active today. If your plans change, you can update the poll anytime.",
         ]
     lines += [
@@ -110,15 +130,16 @@ def progress_text(work_date: dt.date, count_row: dict | None, assigned: int) -> 
     quota = active * 2
     remaining = max(quota - assigned, 0)
     if remaining:
-        status = f"Client progress: {assigned} of {quota} planned • {remaining} left to go."
+        status = f"Clients assigned: {assigned} of {quota} planned • {remaining} left to assign."
         encouragement = "Keep an eye on New Client and let's keep the momentum going together! 🌟"
     else:
-        status = f"Client progress: {assigned} of {quota} planned • today's target is complete!"
-        encouragement = "Wonderful work, team! Please keep supporting any open clients. 🎉"
+        status = f"Clients assigned: {assigned} of {quota} planned • today's assignment plan is filled!"
+        encouragement = "Thank you, team! Please keep supporting your clients through delivery. 💛"
     return "\n".join([
         "📣 TRABAWHO TEAM PROGRESS", f"📅 {date_label} (PHT)", "",
         status,
         encouragement,
+        "Sales and completed deliveries are tracked separately in Daily Reports.",
         "This is a quick team update; the organized details remain in Daily Reports.",
     ])
 

@@ -25,18 +25,18 @@ def build_trabawho_summary(work_date: dt.date, now: dt.datetime) -> str:
         active = int(count["active_workers"])
         teammate = "teammate" if active == 1 else "teammates"
         status = f"{active} {teammate} marked Active for this day."
-        next_step = "Client assignments will be shared fairly among the Active team."
+        next_step = "Thank you to everyone who was available and supported the team."
     else:
-        status = "No Active responses yet."
-        next_step = "Please vote in the poll so we can prepare the day's assignments."
+        status = "No tracked Active poll responses were recorded for this day."
+        next_step = "Please remember to vote in the current poll for your next workday."
     return "\n".join([
-        "🌟 TRABAWHO TEAM UPDATE",
+        "🌟 TRABAWHO DAILY RECAP",
         f"📅 {date_label} (PHT)", "",
         "Hi team! 👋",
         status,
         next_step,
-        "Please keep an eye on the New Client topic and reply when your client comes in.",
-        "Let's have a smooth and successful day together! 💛",
+        "Please follow through on any open clients and confirm songs after delivery.",
+        "Thank you for your effort, team. Let's make the next day a good one! 💛",
         "Full sales and performance details are available in Daily Reports.",
     ])
 

@@ -20,6 +20,16 @@ REQUIRED_SETTINGS = (
 DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 
 
+def suno_assignment_matches_project(action: dict) -> bool:
+    """Keep old assignments from other databases out of the Suno workflow."""
+    expected = os.environ.get("SUNO_EXPECTED_PROJECT_REF", "").strip()
+    host = urllib.parse.urlsplit(os.environ.get("SUNO_SUPABASE_URL", "")).hostname
+    project = expected or (host.removesuffix(".supabase.co") if host else SOURCE_ID.split(":", 1)[1])
+    prefix = f"suno:{project}"
+    page = (action.get("payload") or {}).get("new_client_contact_page_id") or ""
+    return page == prefix or str(page).startswith(prefix + ":")
+
+
 def suno_configured() -> bool:
     host = urllib.parse.urlsplit(os.environ.get("SUNO_SUPABASE_URL", "")).hostname
     expected = os.environ.get("SUNO_EXPECTED_PROJECT_REF", "").strip()

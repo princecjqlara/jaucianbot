@@ -87,6 +87,13 @@ def is_new_client_action(action: dict) -> bool:
     return bool((action.get("payload") or {}).get("new_client_token"))
 
 
+def new_client_action_matches_source(action: dict) -> bool:
+    if GROUPS.get(int(action.get("chat_id", 0)), {}).get("client_source") == "suno":
+        from suno_store import suno_assignment_matches_project
+        return suno_assignment_matches_project(action)
+    return True
+
+
 def _mention(user_id: int, name: str) -> str:
     return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
@@ -429,7 +436,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     eligible = allowed.intersection(GROUPS)
     if not eligible:
         return 0
-    history = new_client_actions(eligible)
+    history = [row for row in new_client_actions(eligible) if new_client_action_matches_source(row)]
     _enrich_history_contact_identities(history)
     _reconcile_archived_confirmations(history, now)
     _release_stale_assignments(history, now)
@@ -453,12 +460,17 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     # Fetch independent team pages together so a slow CRM read for one page does
     # not add its entire latency to every other team's assignment check.
     with ThreadPoolExecutor(max_workers=len(groups_with_members)) as pool:
-        page_contacts = dict(zip(groups_with_members, pool.map(
-            _page_contacts, (GROUPS[chat_id] for chat_id in groups_with_members),
-        )))
+        reads = {chat_id: pool.submit(_page_contacts, GROUPS[chat_id]) for chat_id in groups_with_members}
+        page_contacts = {}
+        read_failures = []
+        for chat_id, read in reads.items():
+            try:
+                page_contacts[chat_id] = read.result()
+            except Exception:
+                read_failures.append(chat_id)
     for chat_id in sorted(eligible):
         members = group_members[chat_id]
-        if not members:
+        if not members or chat_id not in page_contacts:
             continue
         member_ids = {int(user["user_id"]) for user in members}
         today = [
@@ -637,7 +649,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             else:
                 # A concurrent dispatcher reserved this contact. Refresh before
                 # considering another member in the same round.
-                latest = new_client_actions({chat_id})
+                latest = [row for row in new_client_actions({chat_id}) if new_client_action_matches_source(row)]
                 _enrich_history_contact_identities(latest)
                 for row in latest:
                     if is_new_client_action(row):
@@ -646,6 +658,8 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                     item for item in candidates
                     if not item[2].intersection(used_contact_keys)
                 ]
+    if read_failures:
+        raise RuntimeError("New-client source read failed for " + ", ".join(map(str, read_failures)))
     return queued
 
 
@@ -654,7 +668,7 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
         return True
     if GROUPS[int(action["chat_id"])].get("client_source") == "suno":
         from suno_store import suno_configured
-        if not suno_configured():
+        if not suno_configured() or not new_client_action_matches_source(action):
             return False
     local_now = now.astimezone(MANILA)
     payload = action["payload"]
@@ -693,6 +707,7 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     matches = [
         row for row in new_client_actions({chat_id})
         if is_new_client_action(row)
+        and new_client_action_matches_source(row)
         and (
             row.get("status") != "cancelled"
             or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
@@ -717,7 +732,7 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
     pages = Counter()
     people: dict[int, tuple[str, int]] = {}
     for row in new_client_actions({chat_id}):
-        if not is_new_client_action(row):
+        if not is_new_client_action(row) or not new_client_action_matches_source(row):
             continue
         payload = row["payload"]
         if _acknowledged_date(payload) != work_date:
@@ -740,7 +755,7 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
 
 def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
     work_date = now.astimezone(MANILA).date()
-    history = new_client_actions(allowed.intersection(GROUPS))
+    history = [row for row in new_client_actions(allowed.intersection(GROUPS)) if new_client_action_matches_source(row)]
     _enrich_history_contact_identities(history)
     used_contact_keys = _reserved_contact_keys(history)
     result = []
@@ -761,7 +776,12 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                     ), "available_complete_clients": {}, "members": [],
                 })
                 continue
-        page_contacts = _page_contacts(GROUPS[chat_id])
+        source_available = True
+        try:
+            page_contacts = _page_contacts(GROUPS[chat_id])
+        except Exception:
+            page_contacts = []
+            source_available = False
         ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
@@ -788,6 +808,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             reason = (
                 "awaiting_working_reply" if user_id in open_members else
                 "reply_cooldown" if user_id in paused else
+                "source_read_error" if not source_available else
                 "no_available_complete_clients" if not sum(available.values()) else
                 "waiting_for_team_round" if not ready_rotation and assignment_counts[user_id] > minimum else
                 "ready_for_assignment"
@@ -804,6 +825,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
             "configured": True,
+            "source_available": source_available,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
             "active_today": len(members),
             "reply_deadline_minutes": _timeout_minutes(chat_id),
