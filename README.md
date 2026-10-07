@@ -138,6 +138,13 @@ the approved Daily Reports group. Internally, quota is `active members × 2` and
 the planned ads budget is `active members × 2 × ₱150`; these settings do not apply
 Veo's DD/CD targets, commission rules, or freebie topics.
 
+At the daily check-in times, Trabawho's general topic receives a gentle
+availability reminder. It mentions people who selected Active but have not yet
+received a client, thanks people who selected Not Active, and reminds anyone who
+has not voted to choose an option. The announcements topic receives a friendly
+client-progress update showing how many planned assignments are complete and how
+many remain. These messages do not include salary or ads calculations.
+
 Suno uses its own server-only `SUNO_SUPABASE_URL` and
 `SUNO_SUPABASE_SERVICE_ROLE_KEY`; the archive and Veo CRM retain their existing
 credentials. Define the Suno table, ID/name/details columns, and the completion

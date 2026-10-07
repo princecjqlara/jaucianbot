@@ -5,7 +5,10 @@ from unittest.mock import patch
 
 from daily_automation import AVAILABILITY_GROUPS, GROUPS, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
 from new_client_automation import _enrich_history_contact_identities, _page_contacts, queue_new_client_assignments
-from trabawho_automation import plan_text, plan_totals, queue_trabawho_automation, trabawho_poll_work_date
+from trabawho_automation import (
+    availability_checkin_text, plan_text, plan_totals, progress_text,
+    queue_trabawho_automation, trabawho_poll_work_date,
+)
 from test_wsgi import call_app
 
 
@@ -22,6 +25,9 @@ class TrabawhoAutomationTests(unittest.TestCase):
             mock = patch("app." + name, return_value=0)
             mock.start()
             self.addCleanup(mock.stop)
+        followups = patch("trabawho_automation.queue_trabawho_followups", return_value=0)
+        followups.start()
+        self.addCleanup(followups.stop)
 
     def test_topics_and_group_workflows_are_separate_from_veo_sales_and_freebies(self):
         self.assertEqual((TRABAWHO["general"], TRABAWHO["announcements"], TRABAWHO["active"], TRABAWHO["contact_thread"]), (1, 16, 7581, 7673))
@@ -78,6 +84,25 @@ class TrabawhoAutomationTests(unittest.TestCase):
         ), patch("trabawho_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 2)
         self.assertEqual(enqueue.call_args.kwargs["payload"]["trabawho_plan_format"], "friendly-v1")
+
+    def test_checkin_is_gentle_and_mentions_active_and_not_active_voters(self):
+        text = availability_checkin_text(TODAY, [
+            {"user_id": 11, "user_name": "Alex", "active": True},
+            {"user_id": 12, "user_name": "Bea", "active": False},
+        ], {})
+        self.assertIn("Alex", text)
+        self.assertIn("Bea", text)
+        self.assertIn("marked Active today", text)
+        self.assertIn("marked Not Active today", text)
+        self.assertIn("If you haven't voted yet", text)
+        self.assertIn("no pressure", text)
+
+    def test_progress_shows_remaining_clients_without_internal_formula(self):
+        text = progress_text(TODAY, {"active_workers": 1}, 1)
+        self.assertIn("1 of 2 planned", text)
+        self.assertIn("1 left to go", text)
+        self.assertNotIn("× 2", text)
+        self.assertNotIn("₱", text)
 
     def test_unapproved_group_never_queues_actions(self):
         with patch("trabawho_automation.daily_poll_counts") as counts:

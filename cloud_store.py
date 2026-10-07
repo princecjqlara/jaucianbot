@@ -395,6 +395,16 @@ def daily_poll_active_users(poll_id: str) -> list[dict]:
     return request("daily_poll_answers?" + filters) or []
 
 
+def daily_poll_answers(poll_id: str) -> list[dict]:
+    """Return every recorded response, including people who chose Not Active."""
+    filters = urllib.parse.urlencode({
+        "select": "user_id,user_name,active,updated_at",
+        "poll_id": f"eq.{poll_id}",
+        "order": "user_name.asc,user_id.asc",
+    })
+    return request("daily_poll_answers?" + filters) or []
+
+
 def activity_messages(
     chat_id: int,
     start_utc: dt.datetime,
