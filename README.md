@@ -156,6 +156,10 @@ mapping is absent. It never guesses a client table or treats partial details as
 complete. A Suno connection failure is reported separately and does not stop Veo
 queues or due deliveries.
 
+Trabawho assignments read only this Suno Supabase source. They do not read Veo's
+CRM pages. The `pages.name` relation is shown as `Suno page: ...` in assignments,
+so a Suno page with a name similar to a Veo page remains clearly separated.
+
 Trabawho follows ready-member rotation with a 30-minute WORKING reply deadline
 and a 30-minute cooldown after a missed reply. Assignments use topic `7673` and
 stable Suno customer identities. Its client checks have a separate one-minute

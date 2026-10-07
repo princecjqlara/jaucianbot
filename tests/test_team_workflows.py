@@ -81,6 +81,13 @@ class TeamWorkflowTests(unittest.TestCase):
         text, _ = _assignment_text(user, "Suno", contact, "ABCD1234", 1, chat_id=TRABAWHO_CHAT_ID)
         self.assertIn("SONG SENT ABCD1234", text)
 
+    def test_trabawho_assignment_identifies_suno_page_separately_from_veo_pages(self):
+        user = {"user_id": 7, "user_name": "Alex"}
+        contact = {"id": "client", "name": "Client", "collected_details": {"request": "song"}}
+        text, _ = _assignment_text(user, "Azshinari", contact, "ABCD1234", 1, chat_id=TRABAWHO_CHAT_ID)
+        self.assertIn("Suno page: Azshinari", text)
+        self.assertNotIn("Page: Azshinari", text)
+
     def test_startup_cli_uses_existing_shared_dispatcher(self):
         response = io.BytesIO(b'{"ok":true,"sent":1}')
         with patch.dict("os.environ", {"INSIGHTS_BASE_URL": "https://example.invalid", "INSIGHTS_API_KEY": "test"}, clear=True), patch(

@@ -398,9 +398,10 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "Your reply lets the bot continue the round robin. You can receive another client only after "
         "every Active member has received the same number of assignments."
     )
+    page_label = "Suno page" if GROUPS[chat_id].get("client_source") == "suno" else "Page"
     details = (
         f"New client: {html.escape(contact['name'])}\n"
-        f"Page: {html.escape(page)}\n"
+        f"{page_label}: {html.escape(page)}\n"
         f"CRM contact ID: <code>{html.escape(contact['id'])}</code>"
         f"{stage_line}\n\n"
         f"Complete details from Supabase:\n{_detail_lines(contact)}\n\n"
@@ -721,8 +722,11 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
         user_id = int(payload["new_client_assignee_id"])
         name, count = people.get(user_id, (payload.get("new_client_assignee_name") or str(user_id), 0))
         people[user_id] = (name, count + 1)
-    lines = ["", "👤 NEW CLIENTS ACKNOWLEDGED", f"Team total: {sum(pages.values())}", "By page:"]
-    lines.extend(f"• {page}: {pages[page]}" for page in GROUPS[chat_id]["crm_pages"])
+    page_heading = "By Suno page:" if GROUPS[chat_id].get("client_source") == "suno" else "By page:"
+    configured_pages = list(GROUPS[chat_id]["crm_pages"])
+    page_names = configured_pages + sorted(set(pages) - set(configured_pages), key=str.casefold)
+    lines = ["", "👤 NEW CLIENTS ACKNOWLEDGED", f"Team total: {sum(pages.values())}", page_heading]
+    lines.extend(f"• {page}: {pages[page]}" for page in page_names)
     lines.append("By person:")
     lines.extend(f"• {name}: {count}" for name, count in sorted(people.values(), key=lambda item: (-item[1], item[0].casefold())))
     if not people:
