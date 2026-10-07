@@ -7,6 +7,7 @@ from suno_store import SOURCE_ID, completed_suno_contacts, suno_configured, suno
 
 
 SETTINGS = {
+    "SUNO_ASSIGNMENTS_ENABLED": "true",
     "SUNO_SUPABASE_URL": "https://suno.example",
     "SUNO_SUPABASE_SERVICE_ROLE_KEY": "test-suno-key",
     "SUNO_CLIENTS_TABLE": "clients",

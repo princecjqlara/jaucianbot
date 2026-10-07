@@ -22,6 +22,8 @@ DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 
 def suno_configured() -> bool:
     return bool(
+        os.environ.get("SUNO_ASSIGNMENTS_ENABLED", "").strip().lower() == "true"
+        and
         os.environ.get("SUNO_SUPABASE_URL", "").startswith("https://")
         and os.environ.get("SUNO_SUPABASE_SERVICE_ROLE_KEY")
         and all(os.environ.get(name, "").strip() for name in REQUIRED_SETTINGS)
