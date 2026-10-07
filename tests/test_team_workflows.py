@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import remote_query
 from daily_automation import GROUPS, DAILY_REPORTS_CHAT_ID, TRABAWHO_CHAT_ID
-from new_client_automation import _assignment_text
+from new_client_automation import _assignment_text, new_client_delivery_allowed
 from test_wsgi import call_app
 
 
@@ -15,6 +15,14 @@ NOW = dt.datetime(2026, 10, 8, 2, tzinfo=dt.timezone.utc)
 
 
 class TeamWorkflowTests(unittest.TestCase):
+    def test_disabled_suno_source_suppresses_queued_assignment_reminders(self):
+        action = {"chat_id": TRABAWHO_CHAT_ID, "payload": {"new_client_token": "ABCD1234"}}
+        with patch("suno_store.suno_configured", return_value=False), patch(
+            "new_client_automation.new_client_action_state"
+        ) as state:
+            self.assertFalse(new_client_delivery_allowed(action, NOW))
+        state.assert_not_called()
+
     def test_mixed_dispatch_preserves_all_veo_workflows_and_adds_trabawho(self):
         allowed = set(GROUPS) | {TRABAWHO_CHAT_ID, DAILY_REPORTS_CHAT_ID}
         with patch.dict("os.environ", {"ALLOWED_CHAT_IDS": ",".join(map(str, allowed)), "CRM_SUPABASE_SERVICE_ROLE_KEY": "test"}, clear=True), patch(

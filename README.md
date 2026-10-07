@@ -159,6 +159,11 @@ queues or due deliveries.
 Trabawho assignments read only this Suno Supabase source. They do not read Veo's
 CRM pages. The `pages.name` relation is shown as `Suno page: ...` in assignments,
 so a Suno page with a name similar to a Veo page remains clearly separated.
+The verified Suno project is `cxgynadprukyeuqbchbs`; production pins it with
+`SUNO_EXPECTED_PROJECT_REF`. `SUNO_ASSIGNMENTS_ENABLED=true` enables assignments
+after verification. Disabled sources suppress queued assignment reminders as
+well. Contact identities include the Suno project and actual page ID, and states
+with outstanding `missing_details` are excluded from complete clients.
 
 Trabawho follows ready-member rotation with a 30-minute WORKING reply deadline
 and a 30-minute cooldown after a missed reply. Assignments use topic `7673` and

@@ -8,7 +8,7 @@ from suno_store import SOURCE_ID, completed_suno_contacts, suno_configured, suno
 
 SETTINGS = {
     "SUNO_ASSIGNMENTS_ENABLED": "true",
-    "SUNO_SUPABASE_URL": "https://suno.example",
+    "SUNO_SUPABASE_URL": "https://cxgynadprukyeuqbchbs.supabase.co",
     "SUNO_SUPABASE_SERVICE_ROLE_KEY": "test-suno-key",
     "SUNO_CLIENTS_TABLE": "clients",
     "SUNO_CLIENT_ID_COLUMN": "id",
@@ -55,6 +55,24 @@ class SunoStoreTests(unittest.TestCase):
             result = completed_suno_contacts()
         self.assertEqual(result[0]["psid"], "customer-7")
         self.assertEqual(result[0]["last_interaction_at"], row["created_at"])
+
+    def test_verified_project_guard_rejects_a_different_database(self):
+        settings = {**SETTINGS, "SUNO_EXPECTED_PROJECT_REF": "cxgynadprukyeuqbchbs",
+                    "SUNO_SUPABASE_URL": "https://wrong-project.supabase.co"}
+        with patch.dict("os.environ", settings, clear=True), patch("urllib.request.urlopen") as opened:
+            self.assertFalse(suno_configured())
+            with self.assertRaisesRegex(RuntimeError, "verified project"):
+                suno_request("pages?select=name")
+        opened.assert_not_called()
+
+    def test_contact_identity_is_scoped_to_database_and_actual_page(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states"}
+        rows = [client(page_id="hiraya", missing_details=[]),
+                client("partial", page_id="hiraya", missing_details=["song occasion"])]
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            result = completed_suno_contacts()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["page_id"], "suno:cxgynadprukyeuqbchbs:hiraya")
 
     def test_verified_chatbot_state_relation_mapping_reads_contact_identity_and_name(self):
         settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",

@@ -98,7 +98,7 @@ TRABAWHO = {
     "receipts": 4,
     "songs": 7692,
     "client_source": "suno",
-    "crm_pages": {"Suno": "suno:pnhzpeyzpwsmwcuafgpw"},
+    "crm_pages": {},  # Source pages are read from the separate Suno database.
     "new_client_timeout_minutes": 30,
     "new_client_ready_rotation": True,
     "new_client_retry_cooldown_minutes": 30,

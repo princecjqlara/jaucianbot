@@ -652,6 +652,10 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
 def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     if not is_new_client_action(action):
         return True
+    if GROUPS[int(action["chat_id"])].get("client_source") == "suno":
+        from suno_store import suno_configured
+        if not suno_configured():
+            return False
     local_now = now.astimezone(MANILA)
     payload = action["payload"]
     if payload.get("new_client_work_date") != local_now.date().isoformat():

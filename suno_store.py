@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 
-SOURCE_ID = "suno:pnhzpeyzpwsmwcuafgpw"
+SOURCE_ID = "suno:cxgynadprukyeuqbchbs"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 PATH_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)?$")
 REQUIRED_SETTINGS = (
@@ -21,11 +21,14 @@ DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 
 
 def suno_configured() -> bool:
+    host = urllib.parse.urlsplit(os.environ.get("SUNO_SUPABASE_URL", "")).hostname
+    expected = os.environ.get("SUNO_EXPECTED_PROJECT_REF", "").strip()
     return bool(
         os.environ.get("SUNO_ASSIGNMENTS_ENABLED", "").strip().lower() == "true"
         and
         os.environ.get("SUNO_SUPABASE_URL", "").startswith("https://")
         and os.environ.get("SUNO_SUPABASE_SERVICE_ROLE_KEY")
+        and (not expected or host == f"{expected}.supabase.co")
         and all(os.environ.get(name, "").strip() for name in REQUIRED_SETTINGS)
     )
 
@@ -35,6 +38,9 @@ def suno_request(path: str):
     key = os.environ.get("SUNO_SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not url.startswith("https://") or not key:
         raise RuntimeError("Suno Supabase credentials are not configured")
+    expected = os.environ.get("SUNO_EXPECTED_PROJECT_REF", "").strip()
+    if expected and urllib.parse.urlsplit(url).hostname != f"{expected}.supabase.co":
+        raise RuntimeError("Suno Supabase project does not match the verified project")
     request = urllib.request.Request(
         url + "/rest/v1/" + path,
         headers={"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"},
@@ -73,6 +79,8 @@ def completed_suno_contacts() -> list[dict]:
     if any(value and not PATH_IDENTIFIER.fullmatch(value) for value in optional.values()):
         raise RuntimeError("Invalid Suno optional column mapping")
     direct_columns = {id_col, details_col, complete_col}
+    if table == "chatbot_contact_states":
+        direct_columns.update({"page_id", "missing_details"})
     relation_fields: dict[str, set[str]] = {}
     for setting in (name_col, *filter(None, optional.values())):
         if "." in setting:
@@ -84,6 +92,8 @@ def completed_suno_contacts() -> list[dict]:
     for relation, fields in sorted(relation_fields.items()):
         select_columns.append(f"{relation}!inner({','.join(sorted(fields))})")
     contacts: dict[str, dict] = {}
+    project = (urllib.parse.urlsplit(os.environ.get("SUNO_SUPABASE_URL", "")).hostname or "").removesuffix(".supabase.co")
+    source_id = f"suno:{project}"
     offset = 0
     while True:
         rows = suno_request(table + "?" + urllib.parse.urlencode({
@@ -109,6 +119,7 @@ def completed_suno_contacts() -> list[dict]:
                 or client_id is None or not str(client_id).strip()
                 or not isinstance(name, str) or not name.strip()
                 or not isinstance(details, dict) or not details
+                or bool(row.get("missing_details"))
             ):
                 continue
             client_id = str(client_id)
@@ -117,7 +128,7 @@ def completed_suno_contacts() -> list[dict]:
             if identity is None or not str(identity).strip():
                 continue
             contacts[client_id] = {
-                "id": client_id, "page_id": SOURCE_ID, "psid": str(identity),
+                "id": client_id, "page_id": f"{source_id}:{row['page_id']}" if row.get("page_id") else source_id, "psid": str(identity),
                 "name": name.strip(), "collected_details": details,
                 "page_name": (str(mapped_value(page_name_col)).strip()
                                if page_name_col and mapped_value(page_name_col) else None),
