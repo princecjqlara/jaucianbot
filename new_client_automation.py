@@ -742,9 +742,22 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
     result = []
     for chat_id in sorted(allowed.intersection(GROUPS)):
         actions = [row for row in history if int(row["chat_id"]) == chat_id and is_new_client_action(row)]
-        page_contacts = _page_contacts(GROUPS[chat_id])
         members = _active_members(chat_id, work_date)
         today = [row for row in actions if row["payload"].get("new_client_work_date") == work_date.isoformat()]
+        if GROUPS[chat_id].get("client_source") == "suno":
+            from suno_store import suno_configured
+            if not suno_configured():
+                result.append({
+                    "team": GROUPS[chat_id]["name"], "chat_id": chat_id,
+                    "configured": False, "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
+                    "active_today": len(members), "reply_deadline_minutes": _timeout_minutes(chat_id),
+                    "ready_today": 0, "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30),
+                    "paused_members": [], "assigned_today": len(today), "acknowledged_today": sum(
+                        bool(row["payload"].get("new_client_acknowledged_at")) for row in today
+                    ), "available_complete_clients": {}, "members": [],
+                })
+                continue
+        page_contacts = _page_contacts(GROUPS[chat_id])
         ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
@@ -786,6 +799,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         result.append({
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
+            "configured": True,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
             "active_today": len(members),
             "reply_deadline_minutes": _timeout_minutes(chat_id),
