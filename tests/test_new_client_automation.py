@@ -459,6 +459,15 @@ class NewClientAutomationTests(unittest.TestCase):
         self.assertIn("Team total: 2", lines)
         self.assertIn("• User 11: 2", lines)
 
+    def test_trabawho_report_lists_actual_suno_pages(self):
+        rows = [assignment(1, 11, "a", 1, acknowledged=True)]
+        rows[0]["chat_id"] = -1002894511895
+        rows[0]["payload"]["new_client_page"] = "Azshinari"
+        with patch("new_client_automation.new_client_actions", return_value=rows):
+            lines = new_client_report_lines(-1002894511895, dt.date(2026, 9, 19))
+        self.assertIn("By Suno page:", lines)
+        self.assertIn("• Azshinari: 1", lines)
+
 
 VEO_CHAT = -1003647732254
 
