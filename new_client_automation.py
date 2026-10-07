@@ -50,10 +50,11 @@ def _utc_time(value) -> dt.datetime | None:
         return None
 
 
-def _paused_members(today: list[dict], members: list[dict]) -> set[int]:
-    """Pause missed deliveries until a newer Active vote or WORKING reply."""
+def _pause_deadlines(today: list[dict], members: list[dict], now: dt.datetime) -> dict[int, dt.datetime]:
+    """Briefly pause missed deliveries; an Active vote or WORKING reply resumes early."""
     timeouts: dict[int, dt.datetime] = {}
     acknowledgments: dict[int, dt.datetime] = {}
+    deadlines: dict[int, dt.datetime] = {}
     for row in today:
         payload = row["payload"]
         user_id = int(payload["new_client_assignee_id"])
@@ -64,7 +65,11 @@ def _paused_members(today: list[dict], members: list[dict]) -> set[int]:
             cancelled = _utc_time(payload.get("new_client_cancelled_at"))
             if cancelled:
                 timeouts[user_id] = max(timeouts.get(user_id, cancelled), cancelled)
-    paused = set()
+                retry_at = cancelled + dt.timedelta(minutes=int(
+                    GROUPS[int(row["chat_id"])].get("new_client_retry_cooldown_minutes", 30)
+                ))
+                deadlines[user_id] = max(deadlines.get(user_id, retry_at), retry_at)
+    paused = {}
     for user in members:
         user_id = int(user["user_id"])
         missed = timeouts.get(user_id)
@@ -73,8 +78,8 @@ def _paused_members(today: list[dict], members: list[dict]) -> set[int]:
         resumed = max(filter(None, (
             _utc_time(user.get("updated_at")), acknowledgments.get(user_id),
         )), default=None)
-        if resumed is None or resumed <= missed:
-            paused.add(user_id)
+        if (resumed is None or resumed <= missed) and now < deadlines[user_id]:
+            paused[user_id] = deadlines[user_id]
     return paused
 
 
@@ -377,7 +382,9 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
     rotation_text = (
         "Assignments rotate among ready Active members, prioritizing those with fewer clients and "
         "then those who have waited longest. Members awaiting a reply or paused after a missed assignment are skipped. "
-        "If you miss the reply deadline, select Not Active and then Active in today's poll when you are available again."
+        f"If you miss the reply deadline, you automatically rejoin after a "
+        f"{GROUPS[chat_id].get('new_client_retry_cooldown_minutes', 30)}-minute cooldown while Active. "
+        "Select Not Active and then Active in today's poll to rejoin sooner when available."
         if ready_rotation else
         "Your reply lets the bot continue the round robin. You can receive another client only after "
         "every Active member has received the same number of assignments."
@@ -423,8 +430,18 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             for key in _action_contact_keys(row):
                 prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = 0
+    group_members = {chat_id: _active_members(chat_id, work_date) for chat_id in sorted(eligible)}
+    groups_with_members = [chat_id for chat_id in sorted(eligible) if group_members[chat_id]]
+    if not groups_with_members:
+        return 0
+    # Fetch independent team pages together so a slow CRM read for one page does
+    # not add its entire latency to every other team's assignment check.
+    with ThreadPoolExecutor(max_workers=len(groups_with_members)) as pool:
+        page_contacts = dict(zip(groups_with_members, pool.map(
+            _page_contacts, (GROUPS[chat_id] for chat_id in groups_with_members),
+        )))
     for chat_id in sorted(eligible):
-        members = _active_members(chat_id, work_date)
+        members = group_members[chat_id]
         if not members:
             continue
         member_ids = {int(user["user_id"]) for user in members}
@@ -454,25 +471,38 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 for row in today
                 if row["payload"].get("new_client_acknowledged_at") or row.get("status") != "cancelled"
             )
-            paused = _paused_members(today, members)
+            paused = _pause_deadlines(today, members, now)
             members = [user for user in members if int(user["user_id"]) not in paused]
             member_ids = {int(user["user_id"]) for user in members}
-            last_assigned: dict[int, dt.datetime] = {}
-            for row in today:
-                payload = row["payload"]
-                assigned = _utc_time(payload.get("new_client_assigned_at"))
-                if assigned and (payload.get("new_client_acknowledged_at") or row.get("status") != "cancelled"):
-                    user_id = int(payload["new_client_assignee_id"])
-                    last_assigned[user_id] = max(last_assigned.get(user_id, assigned), assigned)
-            epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
-            members.sort(key=lambda user: (
-                assignment_counts[int(user["user_id"])],
-                last_assigned.get(int(user["user_id"]), epoch), int(user["user_id"]),
-            ))
+        # Carry fairness across days when the client supply is smaller than the
+        # team. Starting alphabetically each morning can starve the same members.
+        recent_counts: Counter[int] = Counter()
+        last_assigned: dict[int, dt.datetime] = {}
+        for row in history:
+            if not is_new_client_action(row) or int(row["chat_id"]) != chat_id:
+                continue
+            payload = row["payload"]
+            if not payload.get("new_client_acknowledged_at") and row.get("status") == "cancelled":
+                continue
+            user_id = int(payload["new_client_assignee_id"])
+            assigned = _utc_time(payload.get("new_client_assigned_at"))
+            if assigned:
+                last_assigned[user_id] = max(last_assigned.get(user_id, assigned), assigned)
+                if assigned >= now - dt.timedelta(days=7):
+                    recent_counts[user_id] += 1
+        epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+        def rotation_order(user_id: int):
+            return (
+                assignment_counts[user_id], recent_counts[user_id],
+                last_assigned.get(user_id, epoch), user_id,
+            )
+
+        members.sort(key=lambda user: rotation_order(int(user["user_id"])))
         candidates = sorted(
             (
                 (page, contact, _candidate_contact_keys(page, contact))
-                for page, rows in _page_contacts(GROUPS[chat_id])
+                for page, rows in page_contacts[chat_id]
                 for contact in rows
                 if not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
             ),
@@ -503,11 +533,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                                 *(prior_assignees.get(key, set()) for key in keys)
                             )
                         ),
-                        key=lambda member_id: (
-                            assignment_counts[member_id],
-                            last_assigned.get(member_id, epoch) if ready_rotation else member_id,
-                            member_id,
-                        ),
+                        key=rotation_order,
                         default=None,
                     )
                 ),
@@ -700,18 +726,52 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         page_contacts = _page_contacts(GROUPS[chat_id])
         members = _active_members(chat_id, work_date)
         today = [row for row in actions if row["payload"].get("new_client_work_date") == work_date.isoformat()]
-        paused = _paused_members(today, members) if GROUPS[chat_id].get("new_client_ready_rotation") else set()
+        ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+        paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
             for row in today if row.get("status") != "cancelled" and not row["payload"].get("new_client_acknowledged_at")
         }
+        available = {
+            page: sum(
+                not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
+                for contact in contacts
+            )
+            for page, contacts in page_contacts
+        }
+        assignment_counts = Counter(
+            int(row["payload"]["new_client_assignee_id"])
+            for row in today
+            if not ready_rotation or row["payload"].get("new_client_acknowledged_at") or row.get("status") != "cancelled"
+        )
+        minimum = min((assignment_counts[int(user["user_id"])] for user in members), default=0)
+        member_status = []
+        for user in members:
+            user_id = int(user["user_id"])
+            rows = [row for row in today if int(row["payload"]["new_client_assignee_id"]) == user_id]
+            reason = (
+                "awaiting_working_reply" if user_id in open_members else
+                "reply_cooldown" if user_id in paused else
+                "no_available_complete_clients" if not sum(available.values()) else
+                "waiting_for_team_round" if not ready_rotation and assignment_counts[user_id] > minimum else
+                "ready_for_assignment"
+            )
+            member_status.append({
+                "user_id": user_id, "name": user.get("user_name"),
+                "offers_today": len(rows),
+                "delivered_today": sum(bool(row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in rows),
+                "acknowledged_today": sum(bool(row["payload"].get("new_client_acknowledged_at")) for row in rows),
+                "state": reason,
+                "retry_at_utc": paused[user_id].isoformat() if user_id in paused else None,
+            })
         result.append({
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
             "active_today": len(members),
             "reply_deadline_minutes": _timeout_minutes(chat_id),
-            "ready_today": sum(int(user["user_id"]) not in paused.union(open_members) for user in members),
+            "ready_today": sum(int(user["user_id"]) not in set(paused).union(open_members) for user in members),
+            "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30) if ready_rotation else None,
             "paused_members": [
                 {"user_id": user["user_id"], "name": user.get("user_name")}
                 for user in members if int(user["user_id"]) in paused
@@ -721,13 +781,8 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 _acknowledged_date(row["payload"]) == work_date
                 for row in actions
             ),
-            "available_complete_clients": {
-                page: sum(
-                    not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
-                    for contact in contacts
-                )
-                for page, contacts in page_contacts
-            },
+            "available_complete_clients": available,
+            "members": member_status,
         })
     return result
 

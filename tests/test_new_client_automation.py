@@ -166,6 +166,34 @@ class NewClientAutomationTests(unittest.TestCase):
             self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 0)
         enqueue.assert_not_called()
 
+    def test_scarce_clients_rotate_across_days_instead_of_restarting_by_name(self):
+        members = [{"user_id": 11, "user_name": "Alex"}, {"user_id": 22, "user_name": "Zoe"}]
+        prior = assignment(1, 11, "yesterday", 1, acknowledged=True, assigned_at=NOW-dt.timedelta(days=1))
+        prior["payload"]["new_client_work_date"] = "2026-09-18"
+        p1, p2, p3, p4 = self.active_patches(members, [prior], [contact("only-client", "2026-01-01")])
+        with p1, p2, p3, p4, patch("new_client_automation.enqueue_scheduled_action", return_value=True) as enqueue:
+            self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 1)
+        self.assertEqual(enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
+
+    def test_team_crm_reads_run_concurrently_and_keep_contacts_in_their_team(self):
+        import threading
+        from daily_automation import GROUPS
+        chats = {CHAT, -1003647732254}
+        barrier = threading.Barrier(2)
+
+        def read_pages(config):
+            barrier.wait(timeout=2)
+            return [(next(iter(config["crm_pages"])), [contact(config["name"], "2026-01-01")])]
+
+        with patch("new_client_automation.new_client_actions", return_value=[]), patch(
+            "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
+        ), patch("new_client_automation._page_contacts", side_effect=read_pages), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ) as enqueue:
+            self.assertEqual(queue_new_client_assignments(NOW, chats), 2)
+        for call in enqueue.call_args_list:
+            self.assertEqual(call.kwargs["payload"]["new_client_contact_id"], GROUPS[call.kwargs["chat_id"]]["name"])
+
     def test_unconfirmed_contact_is_reassigned_after_one_hour(self):
         members = [{"user_id": 11, "user_name": "Alex"}, {"user_id": 22, "user_name": "Bea"}]
         stale = assignment(
@@ -529,6 +557,14 @@ class VeoRotationTests(unittest.TestCase):
         self.assertEqual(self.queue(), 1)
         self.assertEqual(self.enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
 
+    def test_scarce_supply_favors_member_with_fewer_clients_over_previous_days(self):
+        prior = veo_assignment(1, 11, "yesterday", 1, acknowledged=True, assigned_at=NOW-dt.timedelta(days=1))
+        prior["payload"]["new_client_work_date"] = "2026-09-18"
+        self.history.append(prior)
+        self.contacts.append(contact("fresh", "2026-01-01"))
+        self.assertEqual(self.queue(), 1)
+        self.assertEqual(self.enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
+
     def test_failed_offer_does_not_count_against_member_after_renewed_active_vote(self):
         timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
         timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=5)).isoformat()
@@ -537,6 +573,67 @@ class VeoRotationTests(unittest.TestCase):
         self.contacts.append(contact("fresh", "2026-01-01"))
         self.assertEqual(self.queue(), 1)
         self.assertEqual(self.enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 11)
+
+    def test_missed_reply_automatically_resumes_at_cooldown_boundary_and_catches_up(self):
+        timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+        timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=30)).isoformat()
+        self.history.extend([timed_out, veo_assignment(2, 22, "done", 1, acknowledged=True)])
+        self.contacts.extend([contact("missed", "2026-01-01"), contact("fresh", "2026-01-02")])
+        self.assertEqual(self.queue(), 2)
+        first, second = [call.kwargs["payload"] for call in self.enqueue.call_args_list]
+        self.assertEqual((first["new_client_assignee_id"], first["new_client_contact_id"]), (11, "fresh"))
+        self.assertEqual((second["new_client_assignee_id"], second["new_client_contact_id"]), (22, "missed"))
+        self.assertIn("30-minute cooldown", first["text"])
+
+    def test_member_stays_paused_until_cooldown_expires(self):
+        timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+        timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=29, seconds=59)).isoformat()
+        self.history.append(timed_out)
+        self.contacts.append(contact("fresh", "2026-01-01"))
+        self.assertEqual(self.queue(), 1)
+        self.assertEqual(self.enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
+
+    def test_new_missed_reply_restarts_cooldown(self):
+        for action_id, elapsed in ((1, 60), (2, 5)):
+            timed_out = veo_assignment(action_id, 11, f"missed-{action_id}", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+            timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=elapsed)).isoformat()
+            self.history.append(timed_out)
+        self.contacts.append(contact("fresh", "2026-01-01"))
+        self.assertEqual(self.queue(), 1)
+        self.assertEqual(self.enqueue.call_args.kwargs["payload"]["new_client_assignee_id"], 22)
+
+    def test_status_explains_cooldown_and_shows_exact_retry_time_without_writes(self):
+        timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+        timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=5)).isoformat()
+        self.history.append(timed_out)
+        self.contacts.append(contact("fresh", "2026-01-01"))
+        status = new_client_status({VEO_CHAT}, NOW)[0]
+        alex, bea = status["members"]
+        self.assertEqual(alex["state"], "reply_cooldown")
+        self.assertEqual(alex["retry_at_utc"], (NOW+dt.timedelta(minutes=25)).isoformat())
+        self.assertEqual(alex["offers_today"], 1)
+        self.assertEqual(alex["acknowledged_today"], 0)
+        self.assertEqual(bea["state"], "ready_for_assignment")
+        self.update.assert_not_called(); self.enqueue.assert_not_called()
+
+    def test_status_explains_empty_pool_and_pending_reply_after_cooldown(self):
+        timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+        timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=30)).isoformat()
+        self.history.extend([timed_out, veo_assignment(2, 22, "open", 1, status="pending", assigned_at=NOW)])
+        status = new_client_status({VEO_CHAT}, NOW)[0]
+        self.assertEqual(status["paused_members"], [])
+        self.assertEqual(status["members"][0]["state"], "no_available_complete_clients")
+        self.assertEqual(status["members"][1]["state"], "awaiting_working_reply")
+        self.assertEqual(status["members"][1]["delivered_today"], 1)
+
+    def test_valid_working_reply_resumes_member_before_cooldown_expires(self):
+        timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")
+        timed_out["payload"]["new_client_cancelled_at"] = (NOW-dt.timedelta(minutes=5)).isoformat()
+        self.history.extend([timed_out, veo_assignment(2, 11, "done", 1, acknowledged=True)])
+        self.contacts.append(contact("fresh", "2026-01-01"))
+        status = new_client_status({VEO_CHAT}, NOW)[0]
+        self.assertEqual(status["paused_members"], [])
+        self.assertEqual(status["members"][0]["state"], "ready_for_assignment")
 
     def test_timeout_contact_is_rescued_before_older_fresh_contact(self):
         timed_out = veo_assignment(1, 11, "missed", 1, cancelled_reason="working_not_confirmed_within_30_minutes")

@@ -215,13 +215,17 @@ def record_automation_marker(chat_id: int, dedupe_key: str, now: dt.datetime) ->
     ))
 
 
-def claim_automation_slot(allowed: set[int], now: dt.datetime) -> bool:
-    """Limit periodic assignment scans across all instances to one per five minutes."""
+def claim_automation_slot(
+    allowed: set[int], now: dt.datetime, *, workflow: str = "", interval_seconds: int = 300,
+) -> bool:
+    """Limit a workflow's periodic scans across instances using one durable checkpoint."""
     if not allowed:
         return False
-    slot = dt.datetime.fromtimestamp(int(now.timestamp()) // 300 * 300, dt.timezone.utc).isoformat()
+    if interval_seconds <= 0:
+        raise ValueError("Automation interval must be positive")
+    slot = dt.datetime.fromtimestamp(int(now.timestamp()) // interval_seconds * interval_seconds, dt.timezone.utc).isoformat()
     scope = ",".join(str(chat_id) for chat_id in sorted(allowed))
-    dedupe_key = f"automation-clock:{scope}"
+    dedupe_key = f"automation-clock:{workflow + ':' if workflow else ''}{scope}"
     payload = {"automation_slot": slot}
     created = request("scheduled_actions?on_conflict=dedupe_key&select=id", {
         "chat_id": min(allowed), "action_type": "message", "payload": payload,

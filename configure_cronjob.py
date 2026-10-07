@@ -1,4 +1,4 @@
-"""Create or update the cron-job.org health check for the cloud archive."""
+"""Create or update the cron-job.org health check or one-minute dispatcher."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from local_env import load_local_env
 
 API_ROOT = "https://api.cron-job.org"
 JOB_TITLE = "Telegram group insights health"
+DISPATCH_JOB_TITLE = "Telegram group insights dispatcher"
 
 
 def api_request(api_key: str, method: str, path: str, payload: dict | None = None):
@@ -74,10 +75,20 @@ def job_payload(base_url: str, insights_api_key: str) -> dict:
     }
 
 
-def configure(api_key: str, base_url: str, insights_api_key: str) -> tuple[str, int]:
-    desired = job_payload(base_url, insights_api_key)
+def dispatch_job_payload(base_url: str) -> dict:
+    desired = job_payload(base_url, "")
+    desired.update(title=DISPATCH_JOB_TITLE, url=base_url.rstrip("/") + "/api/cron/dispatch")
+    desired["schedule"]["minutes"] = [-1]
+    desired["extendedData"]["headers"] = {}
+    return desired
+
+
+def configure(api_key: str, base_url: str, insights_api_key: str, *, dispatch: bool = False) -> tuple[str, int]:
+    desired = dispatch_job_payload(base_url) if dispatch else job_payload(base_url, insights_api_key)
     jobs = api_request(api_key, "GET", "/jobs").get("jobs", [])
-    existing = next((job for job in jobs if job.get("title") == JOB_TITLE), None)
+    existing = next((job for job in jobs if (
+        job.get("url") == desired["url"] if dispatch else job.get("title") == JOB_TITLE
+    )), None)
     if existing:
         job_id = int(existing["jobId"])
         api_request(api_key, "PATCH", f"/jobs/{job_id}", {"job": desired})
@@ -89,6 +100,7 @@ def configure(api_key: str, base_url: str, insights_api_key: str) -> tuple[str, 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base_url", help="Production Vercel URL, such as https://example.vercel.app")
+    parser.add_argument("--dispatch", action="store_true", help="Configure the client dispatcher every minute instead of the health check")
     args = parser.parse_args()
 
     if not args.base_url.startswith("https://"):
@@ -96,15 +108,16 @@ def main() -> None:
 
     load_local_env()
     insights_api_key = os.environ.get("INSIGHTS_API_KEY", "")
-    if not insights_api_key:
+    if not insights_api_key and not args.dispatch:
         raise SystemExit("INSIGHTS_API_KEY is missing from .env.local")
 
     api_key = os.environ.get("CRONJOB_API_KEY") or getpass.getpass("cron-job.org API key: ")
     if not api_key:
         raise SystemExit("A cron-job.org API key is required")
 
-    action, job_id = configure(api_key, args.base_url, insights_api_key)
-    print(f"Cron health check {action}; job ID {job_id}; runs every 15 minutes.")
+    action, job_id = configure(api_key, args.base_url, insights_api_key, dispatch=args.dispatch)
+    cadence = "dispatcher every minute" if args.dispatch else "health check every 15 minutes"
+    print(f"Cron {action}; job ID {job_id}; runs {cadence}.")
 
 
 if __name__ == "__main__":

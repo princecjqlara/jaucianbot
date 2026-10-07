@@ -80,6 +80,37 @@ class ArchiveBandwidthTests(unittest.TestCase):
         self.assertEqual(request.call_args.args[1]["payload"]["automation_slot"],
                          (NOW + dt.timedelta(minutes=5)).isoformat())
 
+    def test_new_client_clock_advances_every_minute_independently_of_freebies(self):
+        with patch("cloud_store.request", side_effect=[[{"id": 1}], [], [{"id": 1}], [{"id": 2}]]) as request:
+            self.assertTrue(cloud_store.claim_automation_slot({CHAT}, NOW, workflow="new-client", interval_seconds=60))
+            self.assertTrue(cloud_store.claim_automation_slot({CHAT}, NOW+dt.timedelta(minutes=1), workflow="new-client", interval_seconds=60))
+            self.assertTrue(cloud_store.claim_automation_slot({CHAT}, NOW))
+        first, _, update, freebie = request.call_args_list
+        self.assertNotEqual(first.args[1]["dedupe_key"], freebie.args[1]["dedupe_key"])
+        self.assertEqual(first.args[1]["status"], "cancelled")
+        self.assertEqual(update.args[1]["payload"]["automation_slot"], (NOW+dt.timedelta(minutes=1)).isoformat())
+
+    def test_duplicate_new_client_dispatch_in_same_minute_is_throttled(self):
+        with patch("cloud_store.request", side_effect=[[], []]) as request:
+            self.assertFalse(cloud_store.claim_automation_slot({CHAT}, NOW+dt.timedelta(seconds=59), workflow="new-client", interval_seconds=60))
+        self.assertEqual(request.call_args.args[1]["payload"]["automation_slot"], NOW.isoformat())
+
+    def test_new_clients_are_checked_while_freebie_scan_is_throttled(self):
+        with patch.dict("os.environ", {"ALLOWED_CHAT_IDS": str(CHAT), "CRM_SUPABASE_SERVICE_ROLE_KEY": "configured"}), patch(
+            "app.claim_automation_slot", side_effect=[True, False]
+        ) as clock, patch("app.run_due_daily_automation", return_value=0), patch(
+            "app.queue_new_client_assignments", return_value=1
+        ) as clients, patch("app.queue_freebie_assignments") as freebies, patch(
+            "app.deliver_due_actions", return_value=(1, 1, 0)
+        ) as deliver:
+            status, body = call_app("/api/cron/dispatch")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["queued"], 1)
+        clients.assert_called_once()
+        freebies.assert_not_called()
+        deliver.assert_called_once()
+        self.assertEqual(clock.call_args_list[0].kwargs, {"workflow": "new-client", "interval_seconds": 60})
+
     def test_working_reply_lookup_excludes_prompts_and_paginates(self):
         with patch("cloud_store.request", side_effect=[
             [{"message_id": i} for i in range(100)], [{"message_id": 100}],

@@ -41,7 +41,7 @@ from worker_activity import worker_activity_report
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-07.1"
+AUTOMATION_VERSION = "2026-10-08.1"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -359,18 +359,22 @@ def dispatch_route(environ, start_response):
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")
         assignment_groups = allowed.intersection(GROUPS)
-        if (os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY")
-                and (not assignment_groups or claim_automation_slot(assignment_groups, dt.datetime.now(dt.timezone.utc)))):
-            try:
-                queued += queue_freebie_assignments(dt.datetime.now(dt.timezone.utc), allowed)
-            except Exception as freebie_error:
-                queue_errors.append("freebie")
-                print(f"Freebie queue failed: {type(freebie_error).__name__}")
-            try:
-                queued += queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), allowed)
-            except Exception as assignment_error:
-                queue_errors.append("new_client")
-                print(f"New-client queue failed: {type(assignment_error).__name__}")
+        if os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY"):
+            now = dt.datetime.now(dt.timezone.utc)
+            if not assignment_groups or claim_automation_slot(
+                assignment_groups, now, workflow="new-client", interval_seconds=60,
+            ):
+                try:
+                    queued += queue_new_client_assignments(now, allowed)
+                except Exception as assignment_error:
+                    queue_errors.append("new_client")
+                    print(f"New-client queue failed: {type(assignment_error).__name__}")
+            if not assignment_groups or claim_automation_slot(assignment_groups, now):
+                try:
+                    queued += queue_freebie_assignments(now, allowed)
+                except Exception as freebie_error:
+                    queue_errors.append("freebie")
+                    print(f"Freebie queue failed: {type(freebie_error).__name__}")
         processed, sent, failed = deliver_due_actions(allowed, limit=25)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
