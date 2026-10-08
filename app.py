@@ -37,6 +37,7 @@ from freebie_automation import (
 from new_client_automation import (
     confirm_new_client_reply, is_new_client_action, new_client_delivery_allowed,
     new_client_status, queue_new_client_assignments,
+    new_client_ack_delivery_allowed,
 )
 from telegram_sender import send_scheduled_action
 from worker_activity import worker_activity_report
@@ -47,7 +48,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-08.16"
+AUTOMATION_VERSION = "2026-10-08.17"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -325,6 +326,10 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if action["payload"].get("new_client_ack_assignment_id") is not None and not new_client_ack_delivery_allowed(action):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("superseded assignment acknowledgment was not finalized")
+                continue
             if action["payload"].get("volunteer_parent_id") is not None:
                 state = client_volunteers.delivery_state(action, now)
                 if state == "defer":

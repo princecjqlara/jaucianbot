@@ -155,6 +155,20 @@ every minute, including overnight; expiry is handled on the next successful run.
 Trabawho's 26% Suno threshold remains separate from Veo's completed-brief rule.
 The older behavior described below applies when the new settings are disabled.
 
+Ownership always follows the newest assignment for the same stable client in
+that team. After reassignment, a WORKING reply to an older offer cannot take the
+client back. The previous editor receives a friendly reply naming the current
+editor and asking them to wait for their next turn. The first eligible volunteer
+still wins within a single current volunteer window; a later volunteer reply
+cannot replace that winner.
+
+Reconciliation repairs incorrect older confirmations, preserves their timestamps
+for audit, and accepts a valid archived reply to the latest offer. Pending
+acknowledgments and outstanding song jobs for revoked ownership are stopped.
+If an old reply incorrectly cancelled the latest offer and its editor has not
+answered, the latest offer resumes with the same client details and token and a
+fresh 20-minute window measured from its updated delivery.
+
 ### Trabawho / Suno
 
 Trabawho (`-1002894511895`) has a separate Suno workflow. General chat is topic

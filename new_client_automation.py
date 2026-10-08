@@ -18,6 +18,8 @@ from cloud_store import (
     new_client_actions,
     new_client_reply_messages,
     update_new_client_action,
+    retire_new_client_action,
+    restore_new_client_action,
 )
 from crm_store import completed_detail_contacts, contact_identity_map
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA
@@ -31,6 +33,7 @@ REASSIGN_REASON = "working_not_confirmed_within_one_hour"
 REASSIGN_REASON_30 = "working_not_confirmed_within_30_minutes"
 REASSIGN_REASONS = {REASSIGN_REASON, REASSIGN_REASON_30, volunteers.EXPIRED}
 DUPLICATE_REASON = "contact_already_acknowledged"
+SUPERSEDED_REASON = "assignment_superseded"
 REMINDER_MINUTES = 60
 
 
@@ -203,6 +206,97 @@ def _reply_to_message_id(message: dict) -> int | None:
     return int(value) if value is not None else None
 
 
+def _current_assignments(history: list[dict]) -> dict[int, dict]:
+    """The newest offer for a stable client owns every earlier attempt."""
+    rows = [row for row in history if is_new_client_action(row)]
+    parents = {int(row["id"]): int(row["id"]) for row in rows}
+    def root(value):
+        while parents[value] != value:
+            parents[value] = parents[parents[value]]
+            value = parents[value]
+        return value
+    by_key = {}
+    for row in rows:
+        keys = {(int(row["chat_id"]), key) for key in _action_contact_keys(row)}
+        for key in keys:
+            if key in by_key:
+                parents[root(int(row["id"]))] = root(by_key[key])
+            by_key[key] = int(row["id"])
+    newest = {}
+    for row in rows:
+        family = root(int(row["id"]))
+        if family not in newest or int(row["id"]) > int(newest[family]["id"]):
+            newest[family] = row
+    return {int(row["id"]): newest[root(int(row["id"]))] for row in rows}
+
+
+def _reply_targets_offer(message: dict, row: dict) -> bool:
+    payload = row["payload"]
+    thread = message.get("thread_id", message.get("message_thread_id"))
+    if thread is not None and int(thread) != int(payload["new_client_thread_id"]):
+        return False
+    text = message.get("text") or ""
+    token = WORKING_RE.search(text) or volunteers.CLAIM_RE.search(text)
+    if token:
+        return token.group(1).upper() == payload["new_client_token"].upper()
+    if not (WORKING_REPLY_RE.fullmatch(text) or volunteers.REPLY_RE.fullmatch(text)):
+        return False
+    reply_id = _reply_to_message_id(message)
+    if reply_id is None:
+        return False
+    if row.get("telegram_message_id") is not None and reply_id == int(row["telegram_message_id"]):
+        return True
+    return bool(payload.get("new_client_response_minutes") and payload.get("new_client_phase") in {"volunteer", "expired", "claimed", "superseded"}
+                and any(item.get("telegram_message_id") == reply_id for item in volunteers.notices(row)))
+
+
+def _queue_turn_notice(previous: dict, current: dict, message: dict, now: dt.datetime) -> bool:
+    author = message.get("from") or {}
+    user_id = message.get("author_id") or author.get("id")
+    if not user_id or _message_time(message, now) < now - dt.timedelta(days=2):
+        return False
+    payload = current["payload"]
+    previous_name = previous["payload"].get("new_client_assignee_name") if int(user_id) == int(previous["payload"]["new_client_assignee_id"]) else None
+    name = message.get("author_name") or " ".join(filter(None, (author.get("first_name"), author.get("last_name")))) or previous_name or str(user_id)
+    member = _mention(int(user_id), name)
+    owner = _mention(int(payload["new_client_assignee_id"]), payload.get("new_client_assignee_name") or str(payload["new_client_assignee_id"]))
+    client = html.escape(payload.get("new_client_contact_name") or "this client")
+    page = html.escape(payload.get("new_client_page") or "the client page")
+    if int(user_id) == int(payload["new_client_assignee_id"]):
+        instruction = "Your current offer is the newer assignment. Please use its latest WORKING token so we can track it correctly."
+    else:
+        instruction = (f"This client is now assigned to {owner}, who will handle this one. "
+                       "Please wait for your next turn—we'll mention you when another client is ready. 💛")
+    notice = {"text": f"Hi {member}, thanks for being ready to help! 👋\nClient: {client}\nPage: {page}\n\n{instruction}",
+              "parse_mode": "HTML", "message_thread_id": payload["new_client_thread_id"], "disable_notification": False}
+    if message.get("message_id"):
+        notice["reply_parameters"] = {"message_id": int(message["message_id"]), "allow_sending_without_reply": True}
+    return enqueue_scheduled_action(chat_id=int(current["chat_id"]), action_type="message", payload=notice,
+        scheduled_for=now, dedupe_key=f"new-client-wait:{current['id']}:{user_id}")
+
+
+def _retire_superseded_claims(history: list[dict], now: dt.datetime) -> None:
+    current = _current_assignments(history)
+    for row in history:
+        latest = current.get(int(row["id"]), row)
+        if latest["id"] == row["id"] or not (row["payload"].get("new_client_acknowledged_at") or row["payload"].get("new_client_superseded_by")):
+            continue
+        if row["payload"].get("new_client_retirement_complete") and row["payload"].get("new_client_superseded_by") == latest["id"]:
+            continue
+        assigned = _assigned_at(latest["payload"])
+        if not assigned or assigned < now - dt.timedelta(days=2):
+            continue
+        changed = retire_new_client_action(int(row["id"]), int(row["chat_id"]), int(latest["id"]), now)
+        if changed:
+            original = dict(row["payload"])
+            row.update(payload=changed["payload"], status="cancelled")
+            _queue_turn_notice(row, latest, {
+                "author_id": original["new_client_assignee_id"], "author_name": original.get("new_client_assignee_name"),
+                "message_id": original.get("new_client_ack_message_id"),
+                "sent_utc": original.get("new_client_acknowledged_at") or original.get("new_client_revoked_acknowledged_at"),
+            }, now)
+
+
 def _confirms_assignment(message: dict, row: dict) -> bool:
     payload = row["payload"]
     author_id = message.get("author_id")
@@ -230,8 +324,12 @@ def _confirms_assignment(message: dict, row: dict) -> bool:
     )
 
 
-def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) -> bool:
+def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime, *, history: list[dict] | None = None) -> bool:
+    if history is not None and _current_assignments(history).get(int(row["id"]), row)["id"] != row["id"]:
+        return False
     payload = dict(row["payload"])
+    if row.get("_new_client_contact_identity"):
+        payload["new_client_contact_identity"] = row["_new_client_contact_identity"]
     if payload.get("new_client_response_minutes"):
         author = message.get("from") or {}
         author_id = int(message.get("author_id") or author.get("id"))
@@ -244,7 +342,7 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) ->
     payload["new_client_ack_message_id"] = message.get("message_id")
     include_cancelled = (
         row.get("status") == "cancelled"
-        and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
+        and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN, DUPLICATE_REASON})
     )
     if not update_new_client_action(
         int(row["id"]), payload, status="cancelled", include_cancelled=include_cancelled,
@@ -267,6 +365,7 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) ->
             "parse_mode": "HTML",
             "disable_notification": False,
             "message_thread_id": payload["new_client_thread_id"],
+            "new_client_ack_assignment_id": int(row["id"]),
         },
         scheduled_for=dt.datetime.now(dt.timezone.utc),
         dedupe_key=f"new-client-ack:{row['id']}",
@@ -289,14 +388,16 @@ def _message_time(message: dict, fallback: dt.datetime) -> dt.datetime:
 
 
 def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> None:
-    """Make the earliest valid WORKING reply authoritative across retries."""
+    """Only the newest offer can accept replies; volunteer replies still race once."""
+    _retire_superseded_claims(history, now)
+    current = _current_assignments(history)
     candidates = [
         row for row in history
         if is_new_client_action(row)
         and not row["payload"].get("new_client_acknowledged_at")
         and (
             row.get("status") != "cancelled"
-            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN, DUPLICATE_REASON, SUPERSEDED_REASON})
         )
         and _assigned_at(row["payload"])
         and _assigned_at(row["payload"]) >= now - dt.timedelta(days=2)
@@ -304,7 +405,7 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
     claimed_keys = set().union(*(
         _action_contact_keys(row)
         for row in history
-        if is_new_client_action(row) and row["payload"].get("new_client_acknowledged_at")
+        if is_new_client_action(row) and row["payload"].get("new_client_acknowledged_at") and current[int(row["id"])]["id"] == row["id"]
     )) if history else set()
     groups: dict[tuple[int, int], list[dict]] = {}
     for row in candidates:
@@ -321,13 +422,26 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
         for message in sorted(messages, key=lambda item: (_message_time(item, now), item.get("message_id", 0))):
             message_time = _message_time(message, now)
             for row in rows:
+                latest = current[int(row["id"])]
+                if latest["id"] != row["id"]:
+                    if _reply_targets_offer(message, row):
+                        _queue_turn_notice(row, latest, message, now)
+                        break
+                    continue
                 keys = _action_contact_keys(row)
                 assigned = _assigned_at(row["payload"])
                 if keys.intersection(claimed_keys) or message_time < assigned:
                     continue
-                if _confirms_assignment(message, row) and _record_confirmation(row, message, message_time):
+                if _confirms_assignment(message, row) and _record_confirmation(row, message, message_time, history=history):
                     claimed_keys.update(keys)
                     break
+    for latest in {int(row["id"]): row for row in current.values()}.values():
+        if (latest.get("status") == "cancelled" and not latest["payload"].get("new_client_acknowledged_at")
+                and latest["payload"].get("new_client_cancelled_reason") == DUPLICATE_REASON
+                and latest["payload"].get("new_client_work_date") == now.astimezone(MANILA).date().isoformat()):
+            restored = restore_new_client_action(int(latest["id"]), int(latest["chat_id"]), now)
+            if restored:
+                latest.update(payload=restored["payload"], status="pending", sent_at=None)
     if not claimed_keys:
         return
     for row in history:
@@ -389,7 +503,7 @@ def _reserved_contact_keys(history: list[dict]) -> set[str]:
         if (
             row.get("status") == "cancelled"
             and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({
-                "assignment_day_ended", "assignee_inactive_before_first_delivery",
+                "assignment_day_ended", "assignee_inactive_before_first_delivery", SUPERSEDED_REASON,
             })
             and not row["payload"].get("new_client_acknowledged_at")
         ):
@@ -766,13 +880,23 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     text = message.get("text") or ""
     if not any((WORKING_RE.search(text), WORKING_REPLY_RE.fullmatch(text), volunteers.CLAIM_RE.search(text), volunteers.REPLY_RE.fullmatch(text))):
         return False
+    history = [row for row in new_client_actions({chat_id}) if is_new_client_action(row) and new_client_action_matches_source(row)]
+    _enrich_history_contact_identities(history)
+    _retire_superseded_claims(history, dt.datetime.now(dt.timezone.utc))
+    current = _current_assignments(history)
+    author_id = message.get("author_id") or (message.get("from") or {}).get("id")
+    targeted = [row for row in history if _reply_targets_offer(message, row)]
+    for row in targeted:
+        latest = current[int(row["id"])]
+        if latest["id"] != row["id"] or (row["payload"].get("new_client_acknowledged_at") and int(author_id or 0) != int(row["payload"]["new_client_assignee_id"])):
+            _queue_turn_notice(row, latest, message, dt.datetime.now(dt.timezone.utc))
+            return True
     matches = [
-        row for row in new_client_actions({chat_id})
-        if is_new_client_action(row)
-        and new_client_action_matches_source(row)
+        row for row in history
+        if current[int(row["id"])]["id"] == row["id"]
         and (
             row.get("status") != "cancelled"
-            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN, DUPLICATE_REASON})
         )
         and not row["payload"].get("new_client_acknowledged_at")
         and _confirms_assignment(message, row)
@@ -784,10 +908,20 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
         message.get("date") or dt.datetime.now(dt.timezone.utc).timestamp(),
         dt.timezone.utc,
     )
-    if not _record_confirmation(row, message, acknowledged):
+    if not _record_confirmation(row, message, acknowledged, history=history):
         return False
     queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
     return True
+
+
+def new_client_ack_delivery_allowed(action: dict) -> bool:
+    assignment_id = action["payload"].get("new_client_ack_assignment_id")
+    if assignment_id is None:
+        return True
+    history = [row for row in new_client_actions({int(action["chat_id"])}) if new_client_action_matches_source(row)]
+    row = next((item for item in history if int(item["id"]) == int(assignment_id)), None)
+    return bool(row and row["payload"].get("new_client_acknowledged_at") and
+                _current_assignments(history)[int(assignment_id)]["id"] == int(assignment_id))
 
 
 def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:

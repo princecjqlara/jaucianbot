@@ -113,7 +113,7 @@ class ArchiveBandwidthTests(unittest.TestCase):
 
     def test_working_reply_lookup_excludes_prompts_and_paginates(self):
         with patch("cloud_store.request", side_effect=[
-            [{"message_id": i} for i in range(100)], [{"message_id": 100}],
+            [{"message_id": i, "text": "WORKING AABBCCDD"} for i in range(100)], [{"message_id": 100, "text": "TAKE AABBCCDD"}],
         ]) as request:
             result = cloud_store.new_client_reply_messages(CHAT, 4180, NOW, NOW,
                                                           author_ids={22, 11})

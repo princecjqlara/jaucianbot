@@ -151,6 +151,11 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
     if route not in TABLES or method not in {"GET", "POST", "PATCH"}:
         raise ValueError("Unsupported archive operation")
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    latest_guard = params.pop("new_client_latest_guard", None)
+    if latest_guard is not None and (latest_guard != ["true"] or route != "scheduled_actions" or method != "PATCH"
+                                    or not isinstance(payload, dict) or not payload.get("payload", {}).get("new_client_acknowledged_at")
+                                    or "id" not in params):
+        raise ValueError("Latest-client guard requires a bounded ownership confirmation")
     selection, join = _selection(params.get("select", ["*"])[0])
     where, values = _where(params)
     table = sql.Identifier("public", route)
@@ -185,6 +190,23 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
             changes.append(Jsonb(value) if isinstance(value, dict) else value)
         statement = sql.SQL("UPDATE {} AS a SET {}").format(table, sql.SQL(",").join(assignments)) + where
         values = changes + values
+        if latest_guard:
+            details = payload["payload"]
+            identity = details.get("new_client_contact_identity")
+            name = re.sub(r"[^a-z0-9]", "", (details.get("new_client_contact_name") or "").casefold())
+            statement += sql.SQL(""" AND NOT EXISTS (
+                SELECT 1 FROM public.scheduled_actions AS newer
+                WHERE newer.chat_id = a.chat_id AND newer.id > a.id
+                  AND newer.dedupe_key LIKE 'new-client:%'
+                  AND (newer.payload->>'new_client_contact_id' = %s
+                    OR newer.payload->>'new_client_contact_identity' = %s
+                    OR (%s::text IS NULL AND COALESCE(newer.payload->>'new_client_contact_identity', '') = ''
+                        AND lower(newer.payload->>'new_client_page') = %s
+                        AND regexp_replace(lower(newer.payload->>'new_client_contact_name'), '[^a-z0-9]', '', 'g') = %s
+                        AND %s <> ''))
+            )""")
+            values += [details.get("new_client_contact_id"), identity, identity,
+                       (details.get("new_client_page") or "").casefold(), name, name]
     else:
         rows = payload if isinstance(payload, list) else [payload]
         if not rows or any(not isinstance(row, dict) or not row for row in rows):

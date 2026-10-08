@@ -388,7 +388,7 @@ class NewClientAutomationTests(unittest.TestCase):
             self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 0)
         enqueue.assert_not_called()
 
-    def test_late_reply_cancels_duplicate_reassignment_for_same_contact(self):
+    def test_late_reply_keeps_latest_reassignment_for_same_contact(self):
         original = assignment(
             10, 11, "old-row", 1, status="cancelled",
             assigned_at=NOW - dt.timedelta(hours=2), psid="same-person",
@@ -421,16 +421,12 @@ class NewClientAutomationTests(unittest.TestCase):
         ) as enqueue:
             self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 0)
 
-        self.assertEqual(update_action.call_count, 2)
-        self.assertEqual(update_action.call_args_list[0].args[0], 10)
-        self.assertTrue(update_action.call_args_list[0].kwargs["include_cancelled"])
-        self.assertEqual(update_action.call_args_list[1].args[0], 11)
-        self.assertEqual(
-            update_action.call_args_list[1].args[1]["new_client_cancelled_reason"],
-            "contact_already_acknowledged",
-        )
+        update_action.assert_not_called()
+        self.assertNotIn("new_client_acknowledged_at", original["payload"])
+        self.assertEqual(duplicate["status"], "pending")
         self.assertEqual(enqueue.call_count, 1)
-        self.assertTrue(enqueue.call_args.kwargs["dedupe_key"].startswith("new-client-ack:"))
+        self.assertTrue(enqueue.call_args.kwargs["dedupe_key"].startswith("new-client-wait:"))
+        self.assertIn("wait for your next turn", enqueue.call_args.kwargs["payload"]["text"])
 
     def test_assignment_expires_after_its_philippine_day(self):
         action = assignment(4, 11, "client", 1, status="processing")

@@ -111,7 +111,7 @@ class CloudStorageTests(unittest.TestCase):
         self.assertEqual(params["sent_utc"], [
             "gte.2026-09-27T07:00:00+00:00", "lte.2026-09-27T08:00:00+00:00",
         ])
-        self.assertEqual(params["text"], ["ilike.*working*"])
+        self.assertNotIn("text", params)  # TAKE and MINE replies must also be recovered.
 
     def test_new_client_update_can_include_timed_out_cancelled_action(self):
         with patch("cloud_store.request", return_value=[]) as request:

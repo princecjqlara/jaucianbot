@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -526,6 +527,8 @@ NEW_CLIENT_HISTORY_KEYS = (
     "_first_delivery_at",
     "new_client_response_minutes", "new_client_volunteer_minutes", "new_client_phase",
     "new_client_original_assignee_id",
+    "new_client_superseded_by", "new_client_revoked_acknowledged_at",
+    "new_client_retirement_complete",
 )
 
 
@@ -577,6 +580,8 @@ def _update_assignment(action_id: int, payload: dict, status: str,
     merged = {**(current[0].get("payload") or {}), **payload}
     if current[0].get("updated_at"):
         filters["updated_at"] = "eq." + current[0]["updated_at"]
+    if confirmation_key == "new_client_acknowledged_at" and payload.get(confirmation_key) and os.environ.get("ARCHIVE_TRANSPORT", "http").strip() == "postgres":
+        filters["new_client_latest_guard"] = "true"
     rows = request(
         "scheduled_actions?" + urllib.parse.urlencode({**filters, "select": "id"}),
         {"payload": merged, "status": status, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
@@ -611,11 +616,13 @@ SONG_JOB_KEYS = (
     "song_contact_name", "song_started_at", "song_deadline_at", "song_completed_at",
     "song_completion_message_id",
     "song_ack_queued_at",
+    "song_cancelled_at", "song_cancelled_reason",
 )
 
 
 def song_jobs(chat_id: int) -> list[dict]:
-    return _assignment_history({chat_id}, "trabawho-song-job", SONG_JOB_KEYS)
+    return [job for job in _assignment_history({chat_id}, "trabawho-song-job", SONG_JOB_KEYS)
+            if not job["payload"].get("song_cancelled_at")]
 
 
 def song_notices(chat_id: int) -> list[dict]:
@@ -646,7 +653,7 @@ def song_job_state(job_id: int, chat_id: int) -> dict | None:
         "select": "id,chat_id,payload", "id": f"eq.{job_id}", "chat_id": f"eq.{chat_id}",
         "dedupe_key": "like.trabawho-song-job:*", "limit": 1,
     })) or []
-    return rows[0] if rows else None
+    return rows[0] if rows and not rows[0]["payload"].get("song_cancelled_at") else None
 
 
 def song_reply_messages(chat_id: int, thread_id: int, since: dt.datetime,
@@ -672,14 +679,13 @@ def new_client_reply_messages(
     chat_id: int, thread_id: int, since: dt.datetime, before: dt.datetime,
     *, author_ids: set[int] | None = None,
 ) -> list[dict]:
-    """Read archived WORKING replies that can confirm a new-client assignment."""
+    """Read archived WORKING/TAKE/MINE replies scoped to the team's editors."""
     filters = [
-        ("select", "message_id,sent_utc,author_id,text,thread_id,reply_to_message_id"),
+        ("select", "message_id,sent_utc,author_id,author_name,text,thread_id,reply_to_message_id"),
         ("chat_id", f"eq.{chat_id}"),
         ("thread_id", f"eq.{thread_id}"),
         ("sent_utc", f"gte.{since.isoformat()}"),
         ("sent_utc", f"lte.{before.isoformat()}"),
-        ("text", "ilike.*working*"),
         ("order", "sent_utc.asc,message_id.asc"),
         ("limit", READ_PAGE_SIZE),
     ]
@@ -692,7 +698,7 @@ def new_client_reply_messages(
         rows = request("messages?" + urllib.parse.urlencode(filters + [("offset", len(result))])) or []
         result.extend(rows)
         if len(rows) < READ_PAGE_SIZE:
-            return result
+            return [row for row in result if re.search(r"\b/?(?:working|take|mine)\b", row.get("text") or "", re.I)]
 
 
 def update_new_client_action(
@@ -701,6 +707,75 @@ def update_new_client_action(
     """Atomically update one unacknowledged new-client assignment."""
     statuses = "pending,processing,failed,cancelled" if include_cancelled else "pending,processing,failed"
     return _update_assignment(action_id, payload, status, statuses, "new_client_acknowledged_at")
+
+
+def retire_new_client_action(action_id: int, chat_id: int, latest_id: int, now: dt.datetime) -> dict | None:
+    """Keep an audit of revoked ownership and stop its pending acknowledgments/jobs."""
+    filters = {"id": f"eq.{action_id}", "chat_id": f"eq.{chat_id}", "dedupe_key": "like.new-client:*"}
+    current = request("scheduled_actions?" + urllib.parse.urlencode({**filters, "select": "payload,updated_at", "limit": 1})) or []
+    if not current:
+        return None
+    stored = current[0]["payload"]
+    if stored.get("new_client_superseded_by") != latest_id:
+        if not stored.get("new_client_acknowledged_at"):
+            return None
+        revised = dict(stored, new_client_revoked_acknowledged_at=stored["new_client_acknowledged_at"],
+                       new_client_acknowledged_at=None, new_client_superseded_by=latest_id,
+                       new_client_cancelled_reason="assignment_superseded", new_client_cancelled_at=now.isoformat(),
+                       new_client_phase="superseded")
+        changed = request("scheduled_actions?" + urllib.parse.urlencode({
+            **filters, "select": "id", "updated_at": f"eq.{current[0]['updated_at']}",
+        }), {"payload": revised, "status": "cancelled", "updated_at": now.isoformat()},
+            method="PATCH", prefer="return=representation")
+        if not changed:
+            return None
+        stored = revised
+    request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id", "chat_id": f"eq.{chat_id}", "dedupe_key": f"eq.new-client-ack:{action_id}",
+        "status": "in.(pending,processing,failed)",
+    }), {"status": "cancelled", "updated_at": now.isoformat()}, method="PATCH", prefer="return=representation")
+    jobs = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id", "chat_id": f"eq.{chat_id}", "dedupe_key": "like.trabawho-song-job:*",
+        "payload->>song_assignment_id": f"eq.{action_id}", "limit": 1,
+    })) or []
+    for job in jobs:
+        _update_assignment(int(job["id"]), {"song_cancelled_at": now.isoformat(),
+                           "song_cancelled_reason": "assignment_superseded"},
+                           "cancelled", "cancelled", "song_completed_at")
+    revision = now.isoformat() if stored is not current[0]["payload"] else current[0]["updated_at"]
+    completed = dict(stored, new_client_retirement_complete=True)
+    finalized = request("scheduled_actions?" + urllib.parse.urlencode({
+        **filters, "select": "id", "updated_at": f"eq.{revision}",
+    }), {"payload": completed, "updated_at": now.isoformat()}, method="PATCH", prefer="return=representation")
+    if finalized:
+        stored = completed
+    return {"id": action_id, "payload": stored}
+
+
+def restore_new_client_action(action_id: int, chat_id: int, now: dt.datetime) -> dict | None:
+    """Resume the latest offer if an earlier late reply incorrectly cancelled it."""
+    filters = {"id": f"eq.{action_id}", "chat_id": f"eq.{chat_id}", "dedupe_key": "like.new-client:*",
+               "status": "eq.cancelled", "payload->>new_client_acknowledged_at": "is.null",
+               "payload->>new_client_cancelled_reason": "eq.contact_already_acknowledged"}
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({**filters, "select": "payload,updated_at", "limit": 1})) or []
+    if not rows:
+        return None
+    original = rows[0]["payload"]
+    text = original["text"]
+    details = text.split("Please reply within ", 1)[0]
+    song_footer = "\n\nAfter WORKING," + text.split("\n\nAfter WORKING,", 1)[1] if "\n\nAfter WORKING," in text else ""
+    text = ("💛 Quick clarification: this latest assignment remains with you.\n\n" + details +
+            "Please reply within 20 minutes of this updated assignment. If you can't take it, we'll invite "
+            "available teammates for 10 minutes, then offer it to the next member. Thank you!" + song_footer)
+    revised = dict(original, text=text, new_client_reminder_text=text, new_client_phase="direct",
+                   new_client_response_minutes=20, new_client_volunteer_minutes=10,
+                   new_client_cancelled_reason=None, new_client_cancelled_at=None,
+                   _first_delivery_at=None, new_client_resumed_at=now.isoformat())
+    changed = request("scheduled_actions?" + urllib.parse.urlencode({
+        **filters, "select": "id", "updated_at": f"eq.{rows[0]['updated_at']}",
+    }), {"payload": revised, "status": "pending", "scheduled_for": now.isoformat(), "updated_at": now.isoformat(),
+         "sent_at": None, "attempts": 0, "repeat_interval_minutes": 20}, method="PATCH", prefer="return=representation")
+    return {"id": action_id, "payload": revised} if changed else None
 
 
 def new_client_action_state(action_id: int) -> dict | None:
