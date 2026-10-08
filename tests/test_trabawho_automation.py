@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from daily_automation import AVAILABILITY_GROUPS, GROUPS, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
-from new_client_automation import _enrich_history_contact_identities, _page_contacts, queue_new_client_assignments
+from new_client_automation import _enrich_history_contact_identities, _page_contacts, new_client_status, queue_new_client_assignments
 from trabawho_automation import (
     _assignment_counts, availability_checkin_text, plan_text, plan_totals, progress_text,
     queue_trabawho_automation, trabawho_poll_work_date,
@@ -162,6 +162,40 @@ class TrabawhoAutomationTests(unittest.TestCase):
         self.assertNotIn("working response", text)
         self.assertNotIn("tg://user?id=11", text)
         self.assertNotIn("tg://user?id=12", text)
+
+    def test_partial_lead_assignment_shows_collected_and_missing_details(self):
+        contact = {"id": "qualified", "page_id": "suno:cxgynadprukyeuqbchbs:hiraya", "psid": "customer",
+                   "name": "Client", "page_name": "Hiraya Studio", "details_complete": False,
+                   "details_collected_count": 2, "details_required_count": 4, "details_percent": 50.0,
+                   "missing_details": ["Agreed package", "Deadline <date>"],
+                   "collected_details": {"Song purpose": "Business jingle", "Lyrics language": "Tagalog"}}
+        with patch("new_client_automation.new_client_actions", return_value=[]), patch(
+            "new_client_automation._active_members", return_value=[{"user_id": 11, "user_name": "Alex"}]
+        ), patch("suno_store.completed_suno_contacts", return_value=[contact]), patch(
+            "new_client_automation.enqueue_scheduled_action", return_value=True
+        ) as enqueue, patch("suno_store.suno_configured", return_value=True):
+            self.assertEqual(queue_new_client_assignments(NOW, {CHAT}), 1)
+            status = new_client_status({CHAT}, NOW)[0]
+        payload = enqueue.call_args.kwargs["payload"]
+        self.assertIn("Suno page: Hiraya Studio", payload["text"])
+        self.assertIn("Collected client details", payload["text"])
+        self.assertIn("Still to confirm with the client", payload["text"])
+        self.assertIn("Details collected: 2 of 4 (50%)", payload["text"])
+        self.assertIn("Deadline &lt;date&gt;", payload["text"])
+        self.assertNotIn("Complete details from Supabase", payload["text"])
+        self.assertFalse(payload["new_client_details_complete"])
+        self.assertEqual(status["available_clients"], {"Hiraya Studio": 1})
+        self.assertEqual(status["available_complete_clients"], {"Hiraya Studio": 0})
+        self.assertEqual(status["available_partial_clients"], {"Hiraya Studio": 1})
+
+    def test_trabawho_threshold_does_not_change_veo_reader_or_eligibility(self):
+        veo_chat = -1004461399292
+        with patch.dict("os.environ", {"SUNO_MIN_DETAILS_PERCENT": "26"}), patch(
+            "new_client_automation.completed_detail_contacts", return_value=[]
+        ) as veo, patch("suno_store.completed_suno_contacts") as suno:
+            self.assertEqual(_page_contacts(AVAILABILITY_GROUPS[veo_chat]), [("Onset Media Agency", [])])
+        veo.assert_called_once_with(AVAILABILITY_GROUPS[veo_chat]["crm_pages"]["Onset Media Agency"])
+        suno.assert_not_called()
 
     def test_large_checkin_fits_telegram_limit_without_cutting_html_mentions(self):
         voters = [{"user_id": i, "user_name": "<Long & name>" * 20, "active": i % 2 == 0}

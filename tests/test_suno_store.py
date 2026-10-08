@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 from unittest.mock import patch
 
-from suno_store import SOURCE_ID, completed_suno_contacts, suno_assignment_matches_project, suno_configured, suno_request
+from suno_store import SOURCE_ID, completed_suno_contacts, details_progress, suno_assignment_matches_project, suno_configured, suno_request
 
 
 SETTINGS = {
@@ -109,6 +109,76 @@ class SunoStoreTests(unittest.TestCase):
             self.assertEqual(len(completed_suno_contacts()), 1001)
         query = urllib.parse.parse_qs(request.call_args.args[0].split("?", 1)[1])
         self.assertEqual(query["offset"], ["1000"])
+
+    def test_percentage_handoff_is_explicit_and_preserves_missing_fields(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_CLIENT_ID_COLUMN": "contact_id", "SUNO_CLIENT_NAME_COLUMN": "contacts.name",
+                    "SUNO_CLIENT_DETAILS_COLUMN": "collected_details", "SUNO_COMPLETION_COLUMN": "stop_reason",
+                    "SUNO_COMPLETION_VALUE": "details_collected", "SUNO_CLIENT_IDENTITY_COLUMN": "contacts.psid"}
+        row = {"contact_id": "qualified", "status": "active", "stop_reason": None, "page_id": "hiraya",
+               "collected_details": {"Customer name": "Client", "Song purpose": "Business jingle"},
+               "missing_details": ["Agreed package"],
+               "contacts": {"name": "Client", "psid": "123", "pipeline_stage": "qualified"},
+               "pages": {"name": "Hiraya Studio"}}
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=[row]):
+            self.assertEqual(completed_suno_contacts(), [])
+        with patch.dict("os.environ", {**settings, "SUNO_MIN_DETAILS_PERCENT": "26"}, clear=True), patch(
+            "suno_store.suno_request", return_value=[row]
+        ) as request:
+            result = completed_suno_contacts()
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]["details_complete"])
+        self.assertIsNone(result[0]["stop_reason"])
+        self.assertEqual(result[0]["missing_details"], ["Agreed package"])
+        self.assertEqual(result[0]["page_name"], "Hiraya Studio")
+        self.assertEqual(result[0]["details_percent"], 66.7)
+        query = urllib.parse.parse_qs(request.call_args.args[0].split("?", 1)[1])
+        self.assertNotIn("stop_reason", query)
+        self.assertIn("pipeline_stage", query["select"][0])
+
+    def test_percentage_mode_accepts_collecting_but_excludes_refused_opted_out_and_low_progress(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        def state(i, **changes):
+            return {"id": str(i), "name": "Client", "details": {"Customer name": "Client", "song": "Birthday"},
+                    "status": "active", "stop_reason": None, "missing_details": ["package", "mood", "language", "duration"],
+                    "contacts": {"pipeline_stage": "qualified"}, **changes}
+        rows = [state(1), state(2, contacts={"pipeline_stage": "collecting_details"}),
+                state(3, status="stopped", stop_reason="refusal"),
+                state(4, status="stopped", stop_reason="opt_out"),
+                state(5, details={"Customer name": "Client"}, missing_details=[f"missing-{i}" for i in range(19)]),
+                state(6, details={"Customer name": "Client", "song": " "}, missing_details=[f"missing-{i}" for i in range(18)]),
+                state(7, contacts={"pipeline_stage": "opted_out"})]
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            self.assertEqual([row["id"] for row in completed_suno_contacts()], ["1", "2"])
+
+    def test_26_percent_boundary_uses_exact_counts_not_rounded_percentage(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        def state(i, collected, total):
+            return {"id": str(i), "name": "Client", "status": "active", "stop_reason": None,
+                    "details": {f"field-{n}": "answer" for n in range(collected)},
+                    "missing_details": [f"field-{n}" for n in range(collected, total)],
+                    "contacts": {"pipeline_stage": "collecting_details"}}
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=[
+            state(1, 5, 20), state(2, 6, 20), state(3, 13, 50), state(4, 13, 51),
+        ]):
+            self.assertEqual([row["id"] for row in completed_suno_contacts()], ["2", "3"])
+
+    def test_progress_dedupes_names_and_does_not_count_blank_or_still_missing_values(self):
+        self.assertEqual(details_progress({"Customer name": "A", "LANGUAGE": "Tagalog", " mood ": " ",
+                                           "Package": "old", "language": "Tagalog"}, [" package ", "Mood", "Duration"]), (2, 5))
+
+    def test_invalid_threshold_fails_before_query(self):
+        for value in ("0", "101", "invalid"):
+            with patch.dict("os.environ", {**SETTINGS, "SUNO_MIN_DETAILS_PERCENT": value}, clear=True), patch(
+                "suno_store.suno_request"
+            ) as query:
+                with self.assertRaisesRegex(RuntimeError, "Invalid Suno details percentage"):
+                    completed_suno_contacts()
+            query.assert_not_called()
 
     def test_invalid_mapping_is_rejected_before_request(self):
         with patch.dict("os.environ", {**SETTINGS, "SUNO_CLIENTS_TABLE": "clients?select=*"}, clear=True), patch("suno_store.suno_request") as request:

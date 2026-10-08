@@ -20,6 +20,19 @@ REQUIRED_SETTINGS = (
 DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 
 
+def details_progress(details: dict, missing: list) -> tuple[int, int]:
+    """Count unique required fields; blank or still-missing values are unfinished."""
+    normalized = {str(field).strip().casefold(): value for field, value in details.items() if str(field).strip()}
+    missing_keys = {str(field).strip().casefold() for field in missing if str(field).strip()}
+    required = set(normalized).union(missing_keys)
+    collected = sum(
+        field not in missing_keys and value not in (None, "", [], {})
+        and (not isinstance(value, str) or bool(value.strip()))
+        for field, value in normalized.items()
+    )
+    return collected, len(required)
+
+
 def suno_assignment_matches_project(action: dict) -> bool:
     """Keep old assignments from other databases out of the Suno workflow."""
     expected = os.environ.get("SUNO_EXPECTED_PROJECT_REF", "").strip()
@@ -65,10 +78,10 @@ def suno_request(path: str):
 
 
 def completed_suno_contacts() -> list[dict]:
-    """Require an explicitly mapped completion outcome and non-empty details object.
+    """Read completed briefs, or Suno handoffs meeting the configured percentage.
 
-    No table or completion rule is guessed. This prevents partially collected
-    Suno conversations from becoming assignments when a schema is unverified.
+    Completion stays the default; partial handoffs require a separate setting
+    and retain missing fields rather than claiming the brief is complete.
     """
     settings = {name: os.environ.get(name, "").strip() for name in REQUIRED_SETTINGS}
     if not all(settings.values()):
@@ -79,6 +92,13 @@ def completed_suno_contacts() -> list[dict]:
     table, id_col, name_col, details_col, complete_col, complete_value = (
         settings[name] for name in REQUIRED_SETTINGS
     )
+    try:
+        minimum_percent = int(os.environ.get("SUNO_MIN_DETAILS_PERCENT", "100"))
+    except ValueError:
+        raise RuntimeError("Invalid Suno details percentage") from None
+    if not 1 <= minimum_percent <= 100:
+        raise RuntimeError("Invalid Suno details percentage")
+    allow_partial = table == "chatbot_contact_states" and minimum_percent < 100
     optional = {
         name: os.environ.get(name, "").strip()
         for name in ("SUNO_CLIENT_IDENTITY_COLUMN", "SUNO_CLIENT_DATE_COLUMN")
@@ -91,6 +111,8 @@ def completed_suno_contacts() -> list[dict]:
     direct_columns = {id_col, details_col, complete_col}
     if table == "chatbot_contact_states":
         direct_columns.update({"page_id", "missing_details"})
+        if allow_partial:
+            direct_columns.add("status")
     relation_fields: dict[str, set[str]] = {}
     for setting in (name_col, *filter(None, optional.values())):
         if "." in setting:
@@ -98,6 +120,8 @@ def completed_suno_contacts() -> list[dict]:
             relation_fields.setdefault(relation, set()).add(field)
         else:
             direct_columns.add(setting)
+    if allow_partial:
+        relation_fields.setdefault("contacts", set()).add("pipeline_stage")
     select_columns = list(dict.fromkeys(sorted(direct_columns)))
     for relation, fields in sorted(relation_fields.items()):
         select_columns.append(f"{relation}!inner({','.join(sorted(fields))})")
@@ -106,10 +130,13 @@ def completed_suno_contacts() -> list[dict]:
     source_id = f"suno:{project}"
     offset = 0
     while True:
-        rows = suno_request(table + "?" + urllib.parse.urlencode({
-            "select": ",".join(select_columns), complete_col: f"eq.{complete_value}",
+        filters = {
+            "select": ",".join(select_columns),
             "order": f"{id_col}.asc", "limit": 1000, "offset": offset,
-        })) or []
+        }
+        if not allow_partial:
+            filters[complete_col] = f"eq.{complete_value}"
+        rows = suno_request(table + "?" + urllib.parse.urlencode(filters)) or []
         for row in rows:
             outcome = row.get(complete_col)
             outcome = str(outcome).lower() if isinstance(outcome, bool) else str(outcome)
@@ -124,12 +151,23 @@ def completed_suno_contacts() -> list[dict]:
                     value = value[0] if value else {}
                 return value.get(field) if isinstance(value, dict) else None
             name = mapped_value(name_col)
+            complete = outcome == complete_value and not row.get("missing_details")
+            missing = row.get("missing_details")
+            collected_count, required_count = details_progress(details, missing) if (
+                isinstance(details, dict) and isinstance(missing, list)
+            ) else (0, 0)
+            partial = (
+                allow_partial and row.get("status") == "active"
+                and row.get(complete_col) is None
+                and mapped_value("contacts.pipeline_stage") not in {"opted_out", "not_qualified"}
+                and required_count > 0
+                and collected_count * 100 >= minimum_percent * required_count
+            )
             if (
-                outcome != complete_value
+                not (complete or partial)
                 or client_id is None or not str(client_id).strip()
                 or not isinstance(name, str) or not name.strip()
                 or not isinstance(details, dict) or not details
-                or bool(row.get("missing_details"))
             ):
                 continue
             client_id = str(client_id)
@@ -143,7 +181,11 @@ def completed_suno_contacts() -> list[dict]:
                 "page_name": (str(mapped_value(page_name_col)).strip()
                                if page_name_col and mapped_value(page_name_col) else None),
                 "last_interaction_at": mapped_value(optional["SUNO_CLIENT_DATE_COLUMN"]) if optional["SUNO_CLIENT_DATE_COLUMN"] else None,
-                "stop_reason": "details_collected",
+                "stop_reason": "details_collected" if complete else None,
+                "pipeline_stage": mapped_value("contacts.pipeline_stage") if allow_partial else None,
+                "details_complete": bool(complete), "missing_details": missing or [],
+                "details_collected_count": collected_count, "details_required_count": required_count,
+                "details_percent": round(100 * collected_count / required_count, 1) if required_count else None,
             }
         if len(rows) < 1000:
             return list(contacts.values())

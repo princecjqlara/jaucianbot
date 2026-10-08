@@ -406,12 +406,25 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "every Active member has received the same number of assignments."
     )
     page_label = "Suno page" if GROUPS[chat_id].get("client_source") == "suno" else "Page"
+    partial = GROUPS[chat_id].get("client_source") == "suno" and contact.get("details_complete") is False
+    detail_heading = "Collected client details" if partial else "Complete details from Supabase"
+    missing = contact.get("missing_details") or []
+    missing_text = (
+        "Still to confirm with the client:\n"
+        + "\n".join(f"• {html.escape(str(field))}" for field in missing)
+        + "\nPlease collect the remaining information before finalizing the song.\n\n"
+    ) if partial and missing else ""
+    progress_line = (
+        f"Details collected: {contact['details_collected_count']} of {contact['details_required_count']} "
+        f"({contact['details_percent']:g}%)\n"
+    ) if partial and contact.get("details_percent") is not None else ""
     details = (
         f"New client: {html.escape(contact['name'])}\n"
         f"{page_label}: {html.escape(page)}\n"
         f"CRM contact ID: <code>{html.escape(contact['id'])}</code>"
         f"{stage_line}\n\n"
-        f"Complete details from Supabase:\n{_detail_lines(contact)}\n\n"
+        f"{progress_line}{detail_heading}:\n{_detail_lines(contact)}\n\n"
+        f"{missing_text}"
         "Please review the CRM conversation and start working on this client. "
         "As soon as you are working on it, reply to this message with: "
         f"<code>WORKING {token}</code>\n\n"
@@ -612,6 +625,9 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
                 "new_client_pipeline_stage": contact.get("pipeline_stage"),
                 "new_client_collected_details": contact["collected_details"],
+                "new_client_details_complete": contact.get("details_complete", True),
+                "new_client_missing_details": contact.get("missing_details") or [],
+                "new_client_details_percent": contact.get("details_percent"),
                 "new_client_work_date": work_date.isoformat(),
                 "new_client_round": round_number,
                 "new_client_assignment_attempt": attempt_number,
@@ -795,6 +811,13 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             )
             for page, contacts in page_contacts
         }
+        available_complete = {
+            page: sum(
+                contact.get("details_complete", True)
+                and not _candidate_contact_keys(page, contact).intersection(used_contact_keys)
+                for contact in contacts
+            ) for page, contacts in page_contacts
+        }
         assignment_counts = Counter(
             int(row["payload"]["new_client_assignee_id"])
             for row in today
@@ -840,7 +863,9 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 _acknowledged_date(row["payload"]) == work_date
                 for row in actions
             ),
-            "available_complete_clients": available,
+            "available_clients": available,
+            "available_complete_clients": available_complete,
+            "available_partial_clients": {page: available[page] - available_complete[page] for page in available},
             "members": member_status,
         })
     return result
