@@ -17,19 +17,19 @@ REPLY_RE = re.compile(r"^\s*/?(?:take|mine)[.!]?\s*$", re.I)
 
 
 def enabled() -> bool:
-    return os.environ.get("NEW_CLIENT_VOLUNTEER_ENABLED", "").lower() == "true"
+    return os.environ.get("NEW_CLIENT_VOLUNTEER_ENABLED", "").strip().lower() == "true"
 
 
 def notices(row: dict) -> list[dict]:
     return request("scheduled_actions?" + urllib.parse.urlencode({
-        "select": "id,status,sent_at,telegram_message_id,attempts",
+        "select": "id,status,sent_at,telegram_message_id,attempts,delivered:payload->>_first_delivery_at",
         "dedupe_key": f"like.volunteer-notice:{row['id']}:*", "order": "id.asc",
     })) or []
 
 
 def start(row: dict) -> dt.datetime | None:
     from new_client_automation import _utc_time
-    times = [_utc_time(item.get("sent_at")) for item in notices(row)]
+    times = [_utc_time(item.get("delivered") or item.get("sent_at")) for item in notices(row)]
     return min(filter(None, times), default=None)
 
 

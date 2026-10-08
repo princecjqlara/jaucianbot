@@ -47,7 +47,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-08.15"
+AUTOMATION_VERSION = "2026-10-08.16"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -362,6 +362,8 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                     continue
             message = send_scheduled_action(action)
             message_id = int(message["message_id"])
+            if message.get("date") and not action["payload"].get("_first_delivery_at"):
+                action["payload"]["_first_delivery_at"] = dt.datetime.fromtimestamp(message["date"], dt.timezone.utc).isoformat()
             if hourly_date and not hourly_availability.register_poll(action, message, now):
                 raise RuntimeError("hourly poll was not registered")
             if is_daily_poll:

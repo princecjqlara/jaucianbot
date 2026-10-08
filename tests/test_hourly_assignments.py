@@ -135,6 +135,12 @@ class HourlyTests(unittest.TestCase):
             self.assertEqual(app.deliver_due_actions({CHAT}), (1, 1, 0))
         self.assertEqual(order, ["register", "finish"])
 
+    def test_delivery_anchor_uses_telegram_timestamp_for_instant_replies(self):
+        action = {"id": 1, "chat_id": CHAT, "action_type": "message", "payload": {"text": "hello"}}
+        with patch.object(app, "claim_scheduled_actions", return_value=[action]), patch.object(app, "send_scheduled_action", return_value={"message_id": 9, "date": int(NOW.timestamp())}), patch.object(app, "finish_scheduled_action", return_value=True) as finish, patch.object(app, "save_update"):
+            self.assertEqual(app.deliver_due_actions({CHAT}), (1, 1, 0))
+        self.assertEqual(finish.call_args.kwargs["claim"]["payload"]["_first_delivery_at"], NOW.isoformat())
+
     def test_old_active_poll_is_suppressed_after_hourly_transition(self):
         action = {"id": 1, "chat_id": CHAT, "action_type": "poll", "payload": {"daily_poll_date": "2026-10-09"}}
         with patch.object(app, "claim_scheduled_actions", return_value=[action]), patch.object(app, "finish_scheduled_action", return_value=True), patch.object(app, "send_scheduled_action") as send:
@@ -201,6 +207,11 @@ class VolunteerTests(unittest.TestCase):
             volunteers.release(row, NOW + dt.timedelta(minutes=45))
         update.assert_not_called()
         self.assertIn("id:client", clients._reserved_contact_keys([row]))
+
+    def test_volunteer_clock_uses_telegram_delivery_time_not_finalize_delay(self):
+        with patch.object(volunteers, "notices", return_value=[{
+            "sent_at": (NOW + dt.timedelta(seconds=3)).isoformat(), "delivered": NOW.isoformat()}]):
+            self.assertEqual(volunteers.start(offer()), NOW)
 
     def test_ten_minutes_from_notice_then_release_for_next_round(self):
         row = offer()

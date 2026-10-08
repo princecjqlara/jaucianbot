@@ -527,7 +527,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
             for row in today
-            if row.get("status") != "cancelled"
+            if (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer")
             and not row["payload"].get("new_client_acknowledged_at")
         }
         ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
@@ -848,7 +848,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
-            for row in today if row.get("status") != "cancelled" and not row["payload"].get("new_client_acknowledged_at")
+            for row in today if (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer") and not row["payload"].get("new_client_acknowledged_at")
         }
         available = {
             page: sum(
