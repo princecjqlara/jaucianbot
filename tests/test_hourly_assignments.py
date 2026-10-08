@@ -332,7 +332,9 @@ class VolunteerTests(unittest.TestCase):
             clients._reconcile_archived_confirmations([row], NOW + dt.timedelta(minutes=29))
         self.assertEqual(row["payload"]["new_client_assignee_id"], 22)
         self.assertEqual(row["payload"]["new_client_phase"], "claimed")
-        enqueue.assert_called_once()
+        self.assertEqual([call.kwargs["dedupe_key"] for call in enqueue.call_args_list],
+                         ["new-client-ack:100", "new-client-wait:100:11"])
+        self.assertIn("wait for your next turn", enqueue.call_args.kwargs["payload"]["text"])
 
     def test_new_protocol_cycles_without_legacy_cooldown(self):
         row = offer()

@@ -20,6 +20,7 @@ from cloud_store import (
     update_new_client_action,
     retire_new_client_action,
     restore_new_client_action,
+    mark_new_client_ack_queued,
 )
 from crm_store import completed_detail_contacts, contact_identity_map
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA
@@ -281,7 +282,9 @@ def _retire_superseded_claims(history: list[dict], now: dt.datetime) -> None:
         latest = current.get(int(row["id"]), row)
         if latest["id"] == row["id"] or not (row["payload"].get("new_client_acknowledged_at") or row["payload"].get("new_client_superseded_by")):
             continue
-        if row["payload"].get("new_client_retirement_complete") and row["payload"].get("new_client_superseded_by") == latest["id"]:
+        if (row["payload"].get("new_client_retirement_complete")
+                and row["payload"].get("new_client_superseded_by") == latest["id"]
+                and not row["payload"].get("new_client_acknowledged_at")):
             continue
         assigned = _assigned_at(latest["payload"])
         if not assigned or assigned < now - dt.timedelta(days=2):
@@ -340,6 +343,7 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime, *,
         payload["new_client_phase"] = "claimed"
     payload["new_client_acknowledged_at"] = acknowledged.isoformat()
     payload["new_client_ack_message_id"] = message.get("message_id")
+    payload["new_client_ack_pending"] = True
     include_cancelled = (
         row.get("status") == "cancelled"
         and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN, DUPLICATE_REASON})
@@ -350,6 +354,14 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime, *,
         return False
     row["status"] = "cancelled"
     row["payload"] = payload
+    _queue_confirmation_ack(row, dt.datetime.now(dt.timezone.utc))
+    # The durable flag is cleared by reconciliation after the outbox exists.
+    row["payload"]["new_client_ack_pending"] = False
+    return True
+
+
+def _queue_confirmation_ack(row: dict, now: dt.datetime) -> None:
+    payload = row["payload"]
     member = _mention(
         int(payload["new_client_assignee_id"]),
         payload.get("new_client_assignee_name") or str(payload["new_client_assignee_id"]),
@@ -367,10 +379,9 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime, *,
             "message_thread_id": payload["new_client_thread_id"],
             "new_client_ack_assignment_id": int(row["id"]),
         },
-        scheduled_for=dt.datetime.now(dt.timezone.utc),
+        scheduled_for=now,
         dedupe_key=f"new-client-ack:{row['id']}",
     )
-    return True
 
 
 def _message_time(message: dict, fallback: dt.datetime) -> dt.datetime:
@@ -391,12 +402,22 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
     """Only the newest offer can accept replies; volunteer replies still race once."""
     _retire_superseded_claims(history, now)
     current = _current_assignments(history)
+    for row in history:
+        if (current[int(row["id"])]["id"] == row["id"]
+                and row["payload"].get("new_client_acknowledged_at")
+                and row["payload"].get("new_client_ack_pending")):
+            _queue_confirmation_ack(row, now)
+            if mark_new_client_ack_queued(int(row["id"]), now):
+                row["payload"]["new_client_ack_pending"] = False
     candidates = [
         row for row in history
         if is_new_client_action(row)
-        and not row["payload"].get("new_client_acknowledged_at")
+        and (not row["payload"].get("new_client_acknowledged_at")
+             or (row["payload"].get("new_client_response_minutes")
+                 and current[int(row["id"])]["id"] == row["id"]))
         and (
             row.get("status") != "cancelled"
+            or row["payload"].get("new_client_acknowledged_at")
             or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN, DUPLICATE_REASON, SUPERSEDED_REASON})
         )
         and _assigned_at(row["payload"])
@@ -430,6 +451,14 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
                     continue
                 keys = _action_contact_keys(row)
                 assigned = _assigned_at(row["payload"])
+                if row["payload"].get("new_client_acknowledged_at"):
+                    author_id = message.get("author_id") or (message.get("from") or {}).get("id")
+                    if (author_id and int(author_id) != int(row["payload"]["new_client_assignee_id"])
+                            and message_time >= _utc_time(row["payload"]["new_client_acknowledged_at"])
+                            and _reply_targets_offer(message, row)):
+                        _queue_turn_notice(row, row, message, now)
+                        break
+                    continue
                 if keys.intersection(claimed_keys) or message_time < assigned:
                     continue
                 if _confirms_assignment(message, row) and _record_confirmation(row, message, message_time, history=history):
@@ -909,6 +938,18 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
         dt.timezone.utc,
     )
     if not _record_confirmation(row, message, acknowledged, history=history):
+        # A competing webhook or newer offer may have won the atomic update.
+        fresh = [item for item in new_client_actions({chat_id})
+                 if is_new_client_action(item) and new_client_action_matches_source(item)]
+        _enrich_history_contact_identities(fresh)
+        target = next((item for item in fresh if item["id"] == row["id"]), None)
+        if target:
+            latest = _current_assignments(fresh)[int(target["id"])]
+            if (latest["id"] != target["id"] or
+                    (latest["payload"].get("new_client_acknowledged_at")
+                     and int(author_id or 0) != int(latest["payload"]["new_client_assignee_id"]))):
+                _queue_turn_notice(target, latest, message, dt.datetime.now(dt.timezone.utc))
+                return True
         return False
     queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
     return True

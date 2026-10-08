@@ -529,6 +529,8 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_original_assignee_id",
     "new_client_superseded_by", "new_client_revoked_acknowledged_at",
     "new_client_retirement_complete",
+    "new_client_ack_pending", "new_client_ack_queued_at",
+    "new_client_offer_generation",
 )
 
 
@@ -709,6 +711,13 @@ def update_new_client_action(
     return _update_assignment(action_id, payload, status, statuses, "new_client_acknowledged_at")
 
 
+def mark_new_client_ack_queued(action_id: int, now: dt.datetime) -> dict | None:
+    """Clear the recovery flag only after the deduplicated confirmation exists."""
+    return _update_assignment(action_id, {
+        "new_client_ack_pending": False, "new_client_ack_queued_at": now.isoformat(),
+    }, "cancelled", "cancelled", "new_client_ack_queued_at")
+
+
 def retire_new_client_action(action_id: int, chat_id: int, latest_id: int, now: dt.datetime) -> dict | None:
     """Keep an audit of revoked ownership and stop its pending acknowledgments/jobs."""
     filters = {"id": f"eq.{action_id}", "chat_id": f"eq.{chat_id}", "dedupe_key": "like.new-client:*"}
@@ -716,13 +725,13 @@ def retire_new_client_action(action_id: int, chat_id: int, latest_id: int, now: 
     if not current:
         return None
     stored = current[0]["payload"]
-    if stored.get("new_client_superseded_by") != latest_id:
+    if stored.get("new_client_superseded_by") != latest_id or stored.get("new_client_acknowledged_at"):
         if not stored.get("new_client_acknowledged_at"):
             return None
         revised = dict(stored, new_client_revoked_acknowledged_at=stored["new_client_acknowledged_at"],
                        new_client_acknowledged_at=None, new_client_superseded_by=latest_id,
                        new_client_cancelled_reason="assignment_superseded", new_client_cancelled_at=now.isoformat(),
-                       new_client_phase="superseded")
+                       new_client_phase="superseded", new_client_retirement_complete=False)
         changed = request("scheduled_actions?" + urllib.parse.urlencode({
             **filters, "select": "id", "updated_at": f"eq.{current[0]['updated_at']}",
         }), {"payload": revised, "status": "cancelled", "updated_at": now.isoformat()},
@@ -770,6 +779,7 @@ def restore_new_client_action(action_id: int, chat_id: int, now: dt.datetime) ->
     revised = dict(original, text=text, new_client_reminder_text=text, new_client_phase="direct",
                    new_client_response_minutes=20, new_client_volunteer_minutes=10,
                    new_client_cancelled_reason=None, new_client_cancelled_at=None,
+                   new_client_offer_generation=int(original.get("new_client_offer_generation") or 0) + 1,
                    _first_delivery_at=None, new_client_resumed_at=now.isoformat())
     changed = request("scheduled_actions?" + urllib.parse.urlencode({
         **filters, "select": "id", "updated_at": f"eq.{rows[0]['updated_at']}",

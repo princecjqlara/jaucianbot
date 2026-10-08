@@ -21,9 +21,11 @@ def enabled() -> bool:
 
 
 def notices(row: dict) -> list[dict]:
+    generation = int(row["payload"].get("new_client_offer_generation") or 0)
+    suffix = f"generation-{generation}:*" if generation else "*"
     return request("scheduled_actions?" + urllib.parse.urlencode({
         "select": "id,status,sent_at,telegram_message_id,attempts,delivered:payload->>_first_delivery_at",
-        "dedupe_key": f"like.volunteer-notice:{row['id']}:*", "order": "id.asc",
+        "dedupe_key": f"like.volunteer-notice:{row['id']}:{suffix}", "order": "id.asc",
     })) or []
 
 
@@ -37,6 +39,8 @@ def open_window(row: dict, now: dt.datetime) -> None:
     from new_client_automation import _active_members, _mention
     from daily_automation import MANILA
     payload = row["payload"]
+    generation = int(payload.get("new_client_offer_generation") or 0)
+    prefix = f"volunteer-notice:{row['id']}:" + (f"generation-{generation}:" if generation else "")
     users = current_members(_active_members(int(row["chat_id"]), now.astimezone(MANILA).date()), now)
     header = (f"👋 Who would like this client?\n"
               f"Client: {html.escape(payload.get('new_client_contact_name') or 'Client')}\n"
@@ -57,12 +61,13 @@ def open_window(row: dict, now: dt.datetime) -> None:
         enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message",
             payload={"text": header + (mentions or "Select your available hours in today's poll to join in.") + footer,
                      "parse_mode": "HTML", "message_thread_id": payload["new_client_thread_id"],
-                     "disable_notification": False, "volunteer_parent_id": int(row["id"])},
-            scheduled_for=now, dedupe_key=f"volunteer-notice:{row['id']}:{part}")
+                     "disable_notification": False, "volunteer_parent_id": int(row["id"]),
+                     "volunteer_generation": generation},
+            scheduled_for=now, dedupe_key=f"{prefix}{part}")
     changed = dict(payload, new_client_phase="volunteer", new_client_cancelled_reason=OPEN,
                    new_client_cancelled_at=now.isoformat(),
                    new_client_original_assignee_id=payload["new_client_assignee_id"])
-    if update_new_client_action(int(row["id"]), changed, status="cancelled"):
+    if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
         row.update(payload=changed, status="cancelled")
 
 
@@ -82,6 +87,8 @@ def delivery_state(action: dict, now: dt.datetime) -> str:
     if not new_client_action_matches_source(row):
         return "suppress"
     payload = row["payload"]
+    if int(action["payload"].get("volunteer_generation") or 0) != int(payload.get("new_client_offer_generation") or 0):
+        return "suppress"
     if payload.get("new_client_acknowledged_at") or payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat():
         return "suppress"
     if payload.get("new_client_phase") == "direct":
@@ -140,6 +147,8 @@ def release(row: dict, now: dt.datetime) -> bool:
     elif payload.get("new_client_phase") == "volunteer":
         began = start(row)
         items = notices(row) if began is None else []
+        if began is None and not items:
+            open_window(row, now)
         exhausted = items and all(item["status"] == "failed" and int(item.get("attempts") or 0) >= 5 for item in items)
         if (began and now >= began + dt.timedelta(minutes=10)) or exhausted:
             reason = EXPIRED
