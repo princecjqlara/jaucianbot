@@ -10,6 +10,7 @@ from trabawho_automation import (
     queue_trabawho_automation, trabawho_poll_work_date,
 )
 from test_wsgi import call_app
+from telegram_sender import send_scheduled_action
 
 
 CHAT = TRABAWHO_CHAT_ID
@@ -196,6 +197,17 @@ class TrabawhoAutomationTests(unittest.TestCase):
             self.assertEqual(_page_contacts(AVAILABILITY_GROUPS[veo_chat]), [("Onset Media Agency", [])])
         veo.assert_called_once_with(AVAILABILITY_GROUPS[veo_chat]["crm_pages"]["Onset Media Agency"])
         suno.assert_not_called()
+
+    def test_general_topic_routing_fix_is_limited_to_trabawho(self):
+        for chat_id, topic, expected_topic in [(CHAT, 1, None), (CHAT, 7673, 7673), (-1004461399292, 1, 1)]:
+            with patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as send:
+                send_scheduled_action({"chat_id": chat_id, "action_type": "message", "payload": {
+                    "text": "Team update", "message_thread_id": topic,
+                }})
+            if expected_topic is None:
+                self.assertNotIn("message_thread_id", send.call_args.args[1])
+            else:
+                self.assertEqual(send.call_args.args[1]["message_thread_id"], expected_topic)
 
     def test_large_checkin_fits_telegram_limit_without_cutting_html_mentions(self):
         voters = [{"user_id": i, "user_name": "<Long & name>" * 20, "active": i % 2 == 0}

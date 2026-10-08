@@ -7,6 +7,8 @@ import os
 import urllib.error
 import urllib.request
 
+from daily_automation import TRABAWHO_CHAT_ID
+
 
 class TelegramError(RuntimeError):
     pass
@@ -47,7 +49,10 @@ def send_scheduled_action(action: dict) -> dict:
         "chat_id": action["chat_id"],
         "disable_notification": bool(source.get("disable_notification", False)),
     }
-    if source.get("message_thread_id") is not None:
+    # Trabawho's General topic opens at /1, but Telegram rejects thread_id=1
+    # when posting there. Omitting it targets General; named topics keep IDs.
+    is_trabawho_general = int(action["chat_id"]) == TRABAWHO_CHAT_ID and source.get("message_thread_id") == 1
+    if source.get("message_thread_id") is not None and not is_trabawho_general:
         common["message_thread_id"] = source["message_thread_id"]
     if action_type == "message":
         text = None
