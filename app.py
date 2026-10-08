@@ -27,7 +27,9 @@ from cloud_store import (
     save_poll_answer,
     save_update,
 )
-from daily_automation import GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
+from daily_automation import GROUPS, AVAILABILITY_GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
+import hourly_availability
+import client_volunteers
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
@@ -45,7 +47,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-08.14"
+AUTOMATION_VERSION = "2026-10-08.15"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -323,6 +325,15 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if action["payload"].get("volunteer_parent_id") is not None:
+                state = client_volunteers.delivery_state(action, now)
+                if state == "defer":
+                    defer_scheduled_action(action)
+                    continue
+                if state == "suppress":
+                    if not finish_scheduled_action(action["id"], success=True, claim=action):
+                        raise RuntimeError("closed volunteer notice was not finalized")
+                    continue
             if is_song_notice(action) and not song_notice_delivery_allowed(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("suppressed song reminder was not finalized")
@@ -335,14 +346,24 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                 continue
             daily_poll_date = action["payload"].get("daily_poll_date")
             is_daily_poll = action["action_type"] == "poll" and bool(daily_poll_date)
+            hourly_date = action["payload"].get("hourly_poll_date")
+            if hourly_date and hourly_availability.registered(int(action["chat_id"]), hourly_date, action["payload"]["hourly_poll_part"]):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("registered hourly poll was not finalized")
+                continue
             if is_daily_poll:
                 work_date = dt.date.fromisoformat(daily_poll_date)
+                if hourly_availability.enabled(work_date):
+                    finish_scheduled_action(action["id"], success=True, claim=action)
+                    continue
                 existing = daily_poll_counts({int(action["chat_id"])}, work_date).get(int(action["chat_id"]))
                 if existing:
                     finish_scheduled_action(action["id"], success=True, claim=action)
                     continue
             message = send_scheduled_action(action)
             message_id = int(message["message_id"])
+            if hourly_date and not hourly_availability.register_poll(action, message, now):
+                raise RuntimeError("hourly poll was not registered")
             if is_daily_poll:
                 if not register_daily_poll(
                     poll_id=message["poll"]["id"],
@@ -374,6 +395,16 @@ def dispatch_route(environ, start_response):
     queue_errors = []
     try:
         allowed = allowed_chat_ids()
+        if os.environ.get("HOURLY_AVAILABILITY_START_DATE"):
+            try:
+                now = dt.datetime.now(dt.timezone.utc)
+                if claim_automation_slot(allowed.intersection(AVAILABILITY_GROUPS), now, workflow="hourly-polls", interval_seconds=300):
+                    today = now.astimezone(MANILA).date()
+                    for work_date in (today, today + dt.timedelta(days=1)):
+                        queued += hourly_availability.queue_polls(work_date, now, AVAILABILITY_GROUPS, allowed)
+            except Exception as hourly_error:
+                queue_errors.append("hourly_polls")
+                print(f"Hourly poll queue failed: {type(hourly_error).__name__}")
         try:
             queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - {TRABAWHO_CHAT_ID})
         except Exception as daily_error:

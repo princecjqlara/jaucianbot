@@ -94,6 +94,10 @@ def save_update(update: dict, allowed: set[int]) -> bool:
 
 
 def save_poll_answer(update: dict, allowed: set[int]) -> bool:
+    from hourly_availability import save_answer
+    hourly = save_answer(update, allowed)
+    if hourly is not None:
+        return hourly
     result = request(
         "rpc/insights_ingest_poll_answer",
         {"p_update": update, "p_allowed_ids": sorted(allowed)},
@@ -382,10 +386,13 @@ def daily_poll_counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
         "p_work_date": work_date.isoformat(),
         "p_allowed_ids": sorted(allowed),
     }) or []
-    return {int(row["chat_id"]): row for row in rows}
+    from hourly_availability import counts
+    return {**{int(row["chat_id"]): row for row in rows}, **counts(allowed, work_date)}
 
 
 def daily_poll_active_users(poll_id: str) -> list[dict]:
+    if poll_id.startswith("hourly:"):
+        return [user for user in daily_poll_answers(poll_id) if user["active"]]
     filters = urllib.parse.urlencode({
         "select": "user_id,user_name,updated_at",
         "poll_id": f"eq.{poll_id}",
@@ -397,6 +404,10 @@ def daily_poll_active_users(poll_id: str) -> list[dict]:
 
 def daily_poll_answers(poll_id: str) -> list[dict]:
     """Return every recorded response, including people who chose Not Active."""
+    if poll_id.startswith("hourly:"):
+        from hourly_availability import answers
+        _, chat_id, date = poll_id.split(":", 2)
+        return answers(int(chat_id), dt.date.fromisoformat(date))
     filters = urllib.parse.urlencode({
         "select": "user_id,user_name,active,updated_at",
         "poll_id": f"eq.{poll_id}",
@@ -487,7 +498,16 @@ def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date)
         rows = request("daily_poll_answers?" + filters) or []
         result.extend(rows)
         if len(rows) < READ_PAGE_SIZE:
-            return result
+            break
+    from hourly_availability import enabled, answers
+    work_date = start_date
+    while work_date <= end_date:
+        if enabled(work_date):
+            result = [row for row in result if row["daily_polls"]["work_date"] != work_date.isoformat()]
+            result.extend(dict(user, daily_polls={"chat_id": chat_id, "work_date": work_date.isoformat()})
+                          for user in answers(chat_id, work_date))
+        work_date += dt.timedelta(days=1)
+    return result
 
 
 FREEBIE_HISTORY_KEYS = (
@@ -504,6 +524,8 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_assigned_at", "new_client_assignment_attempt", "new_client_acknowledged_at",
     "new_client_ack_message_id", "new_client_cancelled_at", "new_client_cancelled_reason",
     "_first_delivery_at",
+    "new_client_response_minutes", "new_client_volunteer_minutes", "new_client_phase",
+    "new_client_original_assignee_id",
 )
 
 

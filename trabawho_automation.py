@@ -33,6 +33,9 @@ def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
     else:
         status = "No teammates are marked Active yet."
         next_step = "Please vote in the poll so we can prepare the day's assignments."
+    from hourly_availability import enabled
+    if enabled(work_date):
+        next_step = "Choose every hour you can work in all three availability polls. Clients rotate among members available that hour."
     return "\n".join([
         f"🌟 TRABAWHO TEAM UPDATE — {label}",
         f"📅 {date_label} (PHT)", "",
@@ -85,8 +88,11 @@ def _assignment_counts(work_date: dt.date) -> tuple[int, dict[int, int]]:
     return len(assigned_keys), dict(by_user)
 
 
-def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_by_user: dict[int, int]) -> str:
+def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_by_user: dict[int, int], *, now: dt.datetime | None = None) -> str:
     active = [row for row in answers if row.get("active")]
+    from hourly_availability import current_members, enabled
+    if now:
+        active = current_members(active, now)
     inactive = [row for row in answers if not row.get("active")]
     waiting = [row for row in active if assigned_by_user.get(int(row.get("user_id"))) == 0]
     lines = [
@@ -109,6 +115,10 @@ def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_
         "If you haven't voted yet, please choose Active or Not Active so we can plan fairly.",
         "Thank you, team. We appreciate you and hope you have a good day! 🌟",
     ]
+    if enabled(work_date):
+        lines = [line.replace("choose Active or Not Active", "select the hours you can work in all three polls")
+                 .replace("you marked Active today", "you're scheduled this hour")
+                 .replace("you marked Not Active today", "you haven't selected any available hours today") for line in lines]
     return "\n".join(lines)
 
 
@@ -158,7 +168,7 @@ def queue_trabawho_followups(now: dt.datetime) -> int:
     queued = 0
     if enqueue_scheduled_action(
         chat_id=TRABAWHO_CHAT_ID, action_type="message",
-        payload={"text": availability_checkin_text(work_date, answers, assigned_by_user),
+        payload={"text": availability_checkin_text(work_date, answers, assigned_by_user, now=now),
                  "parse_mode": "HTML", "message_thread_id": TRABAWHO["general"],
                  "disable_notification": False},
         scheduled_for=now, dedupe_key=checkin_key,
@@ -224,6 +234,12 @@ def queue_trabawho_automation(now: dt.datetime, allowed: set[int]) -> int:
 def trabawho_poll_work_date(poll_id: str, now: dt.datetime, allowed: set[int]) -> dt.date | None:
     if TRABAWHO_CHAT_ID not in allowed:
         return None
+    from hourly_availability import context
+    poll = context(poll_id, {TRABAWHO_CHAT_ID})
+    if poll:
+        work_date = dt.date.fromisoformat(poll["payload"]["work_date"])
+        today = now.astimezone(MANILA).date()
+        return work_date if work_date in (today, today + dt.timedelta(days=1)) else None
     today = now.astimezone(MANILA).date()
     for work_date in (today, today + dt.timedelta(days=1)):
         row = daily_poll_counts({TRABAWHO_CHAT_ID}, work_date).get(TRABAWHO_CHAT_ID)

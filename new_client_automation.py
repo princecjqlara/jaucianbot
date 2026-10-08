@@ -21,18 +21,22 @@ from cloud_store import (
 )
 from crm_store import completed_detail_contacts, contact_identity_map
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA
+from hourly_availability import current_members, enabled as hourly_enabled
+import client_volunteers as volunteers
 
 
 WORKING_RE = re.compile(r"\b/?working\s+([A-F0-9]{8})\b", re.IGNORECASE)
 WORKING_REPLY_RE = re.compile(r"^\s*/?working(?:\s+(?:on\s+it|now))?[.!]?\s*$", re.IGNORECASE)
 REASSIGN_REASON = "working_not_confirmed_within_one_hour"
 REASSIGN_REASON_30 = "working_not_confirmed_within_30_minutes"
-REASSIGN_REASONS = {REASSIGN_REASON, REASSIGN_REASON_30}
+REASSIGN_REASONS = {REASSIGN_REASON, REASSIGN_REASON_30, volunteers.EXPIRED}
 DUPLICATE_REASON = "contact_already_acknowledged"
 REMINDER_MINUTES = 60
 
 
 def _timeout_minutes(chat_id: int) -> int:
+    if volunteers.enabled():
+        return 20
     return int(GROUPS[chat_id].get("new_client_timeout_minutes", 60))
 
 
@@ -61,7 +65,7 @@ def _pause_deadlines(today: list[dict], members: list[dict], now: dt.datetime) -
         acknowledged = _utc_time(payload.get("new_client_acknowledged_at"))
         if acknowledged:
             acknowledgments[user_id] = max(acknowledgments.get(user_id, acknowledged), acknowledged)
-        elif row.get("status") == "cancelled" and payload.get("new_client_cancelled_reason") in REASSIGN_REASONS:
+        elif row.get("status") == "cancelled" and payload.get("new_client_cancelled_reason") in REASSIGN_REASONS - {volunteers.EXPIRED}:
             cancelled = _utc_time(payload.get("new_client_cancelled_at"))
             if cancelled:
                 timeouts[user_id] = max(timeouts.get(user_id, cancelled), cancelled)
@@ -204,12 +208,16 @@ def _confirms_assignment(message: dict, row: dict) -> bool:
     author_id = message.get("author_id")
     if author_id is None:
         author_id = (message.get("from") or {}).get("id")
-    if author_id is None or int(author_id) != int(payload["new_client_assignee_id"]):
+    if author_id is None:
         return False
     thread_id = message.get("thread_id")
     if thread_id is None:
         thread_id = message.get("message_thread_id")
     if thread_id is not None and int(thread_id) != int(payload["new_client_thread_id"]):
+        return False
+    if payload.get("new_client_response_minutes"):
+        return volunteers.accepts(message, row, int(author_id))
+    if int(author_id) != int(payload["new_client_assignee_id"]):
         return False
     text = message.get("text") or ""
     token_match = WORKING_RE.search(text)
@@ -224,11 +232,19 @@ def _confirms_assignment(message: dict, row: dict) -> bool:
 
 def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime) -> bool:
     payload = dict(row["payload"])
+    if payload.get("new_client_response_minutes"):
+        author = message.get("from") or {}
+        author_id = int(message.get("author_id") or author.get("id"))
+        if author_id != int(payload["new_client_assignee_id"]):
+            payload["new_client_assignee_name"] = (message.get("author_name") or " ".join(filter(None, (
+                author.get("first_name"), author.get("last_name")))) or author.get("username") or str(author_id))
+        payload["new_client_assignee_id"] = author_id
+        payload["new_client_phase"] = "claimed"
     payload["new_client_acknowledged_at"] = acknowledged.isoformat()
     payload["new_client_ack_message_id"] = message.get("message_id")
     include_cancelled = (
         row.get("status") == "cancelled"
-        and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+        and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
     )
     if not update_new_client_action(
         int(row["id"]), payload, status="cancelled", include_cancelled=include_cancelled,
@@ -280,7 +296,7 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
         and not row["payload"].get("new_client_acknowledged_at")
         and (
             row.get("status") != "cancelled"
-            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
         )
         and _assigned_at(row["payload"])
         and _assigned_at(row["payload"]) >= now - dt.timedelta(days=2)
@@ -298,9 +314,11 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
         ).append(row)
     for (chat_id, thread_id), rows in groups.items():
         since = min(_assigned_at(row["payload"]) for row in rows)
-        messages = new_client_reply_messages(chat_id, thread_id, since, now,
-                                            author_ids={int(row["payload"]["new_client_assignee_id"]) for row in rows})
-        for message in sorted(messages, key=lambda item: _message_time(item, now)):
+        authors = {int(row["payload"]["new_client_assignee_id"]) for row in rows}
+        if any(row["payload"].get("new_client_response_minutes") for row in rows):
+            authors.update(int(user["user_id"]) for user in _active_members(chat_id, now.astimezone(MANILA).date()))
+        messages = new_client_reply_messages(chat_id, thread_id, since, now, author_ids=authors)
+        for message in sorted(messages, key=lambda item: (_message_time(item, now), item.get("message_id", 0))):
             message_time = _message_time(message, now)
             for row in rows:
                 keys = _action_contact_keys(row)
@@ -315,7 +333,7 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
     for row in history:
         if (
             not is_new_client_action(row)
-            or row.get("status") == "cancelled"
+            or (row.get("status") == "cancelled" and row["payload"].get("new_client_phase") != "volunteer")
             or row["payload"].get("new_client_acknowledged_at")
             or not _action_contact_keys(row).intersection(claimed_keys)
         ):
@@ -323,7 +341,9 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
         cancelled = dict(row["payload"])
         cancelled["new_client_cancelled_at"] = now.isoformat()
         cancelled["new_client_cancelled_reason"] = DUPLICATE_REASON
-        if update_new_client_action(int(row["id"]), cancelled, status="cancelled"):
+        if cancelled.get("new_client_phase") == "volunteer":
+            cancelled["new_client_phase"] = "expired"
+        if update_new_client_action(int(row["id"]), cancelled, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
             row["status"] = "cancelled"
             row["payload"] = cancelled
 
@@ -331,7 +351,9 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
 def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
     """Cancel open assignments after the team's delivered-client wait expires."""
     for row in history:
-        if not is_new_client_action(row) or row.get("status") == "cancelled":
+        if not is_new_client_action(row):
+            continue
+        if volunteers.release(row, now) or row.get("status") == "cancelled":
             continue
         payload = row["payload"]
         if payload.get("new_client_acknowledged_at"):
@@ -347,7 +369,8 @@ def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
                     delivered = delivered.replace(tzinfo=dt.timezone.utc)
             except (TypeError, ValueError):
                 continue
-            if now.astimezone(dt.timezone.utc) < delivered + dt.timedelta(minutes=_timeout_minutes(int(row["chat_id"]))):
+            legacy_minutes = int(GROUPS[int(row["chat_id"])].get("new_client_timeout_minutes", 60))
+            if now.astimezone(dt.timezone.utc) < delivered + dt.timedelta(minutes=legacy_minutes):
                 continue
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
@@ -394,7 +417,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
     member = _mention(user_id, user.get("user_name") or str(user_id))
     stage = contact.get("pipeline_stage")
     stage_line = f"\nPipeline stage: {html.escape(str(stage))}" if stage else ""
-    ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+    ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
     rotation_text = (
         "Assignments rotate among ready Active members, prioritizing those with fewer clients and "
         "then those who have waited longest. Members awaiting a reply or paused after a missed assignment are skipped. "
@@ -405,6 +428,10 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "Your reply lets the bot continue the round robin. You can receive another client only after "
         "every Active member has received the same number of assignments."
     )
+    if volunteers.enabled():
+        rotation_text = ("If you don't confirm within 20 minutes, we'll invite members available this hour to claim it "
+                         "for 10 minutes. If nobody takes it, the next available member gets a fresh 20-minute turn. "
+                         "Choose your available hours in the poll so we can send clients when you're ready. 💛")
     page_label = "Suno page" if GROUPS[chat_id].get("client_source") == "suno" else "Page"
     partial = GROUPS[chat_id].get("client_source") == "suno" and contact.get("details_complete") is False
     detail_heading = "Collected client details" if partial else "Complete details from Supabase"
@@ -429,7 +456,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         "As soon as you are working on it, reply to this message with: "
         f"<code>WORKING {token}</code>\n\n"
         f"Please reply within {_timeout_minutes(chat_id)} minutes of receiving this assignment, "
-        "otherwise it will be reassigned to another member.\n\n"
+        "so we know you're ready to help this client.\n\n"
         f"{rotation_text}"
     )
     if GROUPS[chat_id].get("songs"):
@@ -466,7 +493,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             for key in _action_contact_keys(row):
                 prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = 0
-    group_members = {chat_id: _active_members(chat_id, work_date) for chat_id in sorted(eligible)}
+    group_members = {chat_id: current_members(_active_members(chat_id, work_date), now) for chat_id in sorted(eligible)}
     groups_with_members = [chat_id for chat_id in sorted(eligible) if group_members[chat_id]]
     if not groups_with_members:
         return 0
@@ -503,7 +530,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             if row.get("status") != "cancelled"
             and not row["payload"].get("new_client_acknowledged_at")
         }
-        ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+        ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         if ready_rotation:
             # Failed offers do not count as clients received; queued offers and
             # acknowledged clients do. Keep the attempt count separate for dedupe.
@@ -515,6 +542,17 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             paused = _pause_deadlines(today, members, now)
             members = [user for user in members if int(user["user_id"]) not in paused]
             member_ids = {int(user["user_id"]) for user in members}
+        if not members:
+            continue
+        if volunteers.enabled():
+            latest_by_key = {}
+            for row in sorted(today, key=lambda item: int(item["id"])):
+                for key in _action_contact_keys(row):
+                    latest_by_key[key] = row
+            for key, latest in latest_by_key.items():
+                if latest["payload"].get("new_client_cancelled_reason") == volunteers.EXPIRED:
+                    previous = int(latest["payload"]["new_client_assignee_id"])
+                    prior_assignees[key] = {previous} if len(member_ids) > 1 else set()
         # Carry fairness across days when the client supply is smaller than the
         # team. Starting alphabetically each morning can starve the same members.
         recent_counts: Counter[int] = Counter()
@@ -523,10 +561,12 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             if not is_new_client_action(row) or int(row["chat_id"]) != chat_id:
                 continue
             payload = row["payload"]
-            if not payload.get("new_client_acknowledged_at") and row.get("status") == "cancelled":
-                continue
             user_id = int(payload["new_client_assignee_id"])
             assigned = _utc_time(payload.get("new_client_assigned_at"))
+            if not payload.get("new_client_acknowledged_at") and row.get("status") == "cancelled":
+                if payload.get("new_client_response_minutes") and assigned:
+                    last_assigned[user_id] = max(last_assigned.get(user_id, assigned), assigned)
+                continue
             if assigned:
                 last_assigned[user_id] = max(last_assigned.get(user_id, assigned), assigned)
                 if assigned >= now - dt.timedelta(days=7):
@@ -633,6 +673,8 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "new_client_assignment_attempt": attempt_number,
                 "new_client_assigned_at": now.isoformat(),
             }
+            if volunteers.enabled():
+                payload.update(new_client_response_minutes=20, new_client_volunteer_minutes=10, new_client_phase="direct")
             dedupe_identity = _contact_identity(
                 contact.get("page_id"), contact.get("psid"),
             ) or f"id:{contact['id']}"
@@ -694,7 +736,11 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
         cancelled["new_client_cancelled_reason"] = "assignment_day_ended"
         update_new_client_action(int(action["id"]), cancelled, status="cancelled")
         return False
-    if action.get("sent_at") and not 7 <= local_now.hour < 22:
+    if payload.get("new_client_response_minutes"):
+        volunteers.release(action, now)
+        if action.get("status") == "cancelled":
+            return False
+    if action.get("sent_at") and not hourly_enabled(local_now.date()) and not 7 <= local_now.hour < 22:
         return False
     live = new_client_action_state(int(action["id"]))
     if not live or live["status"] != "processing" or live["payload"].get("new_client_acknowledged_at"):
@@ -702,7 +748,7 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     chat_id = int(action["chat_id"])
     is_active = any(
         int(user["user_id"]) == int(payload["new_client_assignee_id"])
-        for user in _active_members(chat_id, local_now.date())
+        for user in current_members(_active_members(chat_id, local_now.date()), now)
     )
     if not is_active and not action.get("sent_at"):
         cancelled = dict(payload)
@@ -718,7 +764,7 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     if chat_id not in allowed or chat_id not in GROUPS:
         return False
     text = message.get("text") or ""
-    if not WORKING_RE.search(text) and not WORKING_REPLY_RE.fullmatch(text):
+    if not any((WORKING_RE.search(text), WORKING_REPLY_RE.fullmatch(text), volunteers.CLAIM_RE.search(text), volunteers.REPLY_RE.fullmatch(text))):
         return False
     matches = [
         row for row in new_client_actions({chat_id})
@@ -726,7 +772,7 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
         and new_client_action_matches_source(row)
         and (
             row.get("status") != "cancelled"
-            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS
+            or row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({volunteers.OPEN})
         )
         and not row["payload"].get("new_client_acknowledged_at")
         and _confirms_assignment(message, row)
@@ -798,7 +844,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         except Exception:
             page_contacts = []
             source_available = False
-        ready_rotation = GROUPS[chat_id].get("new_client_ready_rotation", False)
+        ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
@@ -830,6 +876,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             rows = [row for row in today if int(row["payload"]["new_client_assignee_id"]) == user_id]
             reason = (
                 "awaiting_working_reply" if user_id in open_members else
+                "outside_selected_hours" if "available_hours" in user and now.astimezone(MANILA).hour not in user["available_hours"] else
                 "reply_cooldown" if user_id in paused else
                 "source_read_error" if not source_available else
                 "no_available_complete_clients" if not sum(available.values()) else
@@ -851,8 +898,10 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "source_available": source_available,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
             "active_today": len(members),
+            "active_now": len(current_members(members, now)),
+            "volunteer_window_minutes": 10 if volunteers.enabled() else None,
             "reply_deadline_minutes": _timeout_minutes(chat_id),
-            "ready_today": sum(int(user["user_id"]) not in set(paused).union(open_members) for user in members),
+            "ready_today": sum(int(user["user_id"]) not in set(paused).union(open_members) for user in current_members(members, now)),
             "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30) if ready_rotation else None,
             "paused_members": [
                 {"user_id": user["user_id"], "name": user.get("user_name")}

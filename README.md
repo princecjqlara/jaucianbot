@@ -123,6 +123,38 @@ The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pag
 
 ## New-client round robin
 
+### Hourly availability and the 20 / 10-minute handoff
+
+With NEW_CLIENT_VOLUNTEER_ENABLED=true, all four Veo teams and Trabawho use
+20-minute direct offers followed by a 10-minute volunteer window. The direct
+timer starts at the first delivery of the client details. If the assigned member
+does not reply WORKING with their token, the bot mentions members scheduled for
+the current hour in New Client. The first eligible TAKE with that token,
+or a direct TAKE reply to the invitation, claims the client through an atomic
+database update. The volunteer timer starts when the invitation is sent.
+An unanswered invitation releases the client to the next available member for
+a fresh 20-minute turn. Rescued contacts take priority over fresh leads.
+When nobody is available, the client waits for an eligible hour. Existing offers
+retain the deadline stated in their original message.
+
+HOURLY_AVAILABILITY_START_DATE sets the first Philippine work date using hourly
+votes; production starts on **2026-10-09**. Each day's availability topic gets
+three dated, nonanonymous polls covering midnight–8 AM, 8 AM–4 PM, and
+4 PM–midnight. Each poll contains eight one-hour slots and a
+“Not available in these hours” option. Select every available hour, using multiple
+votes, or select Not available for that block. That option overrides other
+selections in the same block. Changing or withdrawing a vote updates that block
+without erasing hours selected in another poll.
+
+Assignment and volunteer eligibility follow the current selected PHT hour.
+An original assignee keeps their full 20-minute response window across an hour
+boundary. Daily quotas and reports count each member once across all poll parts.
+The existing webhook and durable schedule table store registrations and answers;
+no second collector or new database table is required. The dispatcher must run
+every minute, including overnight; expiry is handled on the next successful run.
+Trabawho's 26% Suno threshold remains separate from Veo's completed-brief rule.
+The older behavior described below applies when the new settings are disabled.
+
 ### Trabawho / Suno
 
 Trabawho (`-1002894511895`) has a separate Suno workflow. General chat is topic
@@ -228,8 +260,9 @@ Archived confirmations reconcile missed webhook handling before new reminders.
 Deadlines and confirmations reuse durable scheduled-action markers, requiring
 no new database table or collector/webhook setup.
 
-Veo, Veo Jel, Veo Jessa, and Veo Ollie retain their existing polls, quotas,
-daily reports, freebies and client assignments. The Veo daily scheduler excludes
+Veo, Veo Jel, Veo Jessa, and Veo Ollie retain their existing quotas, sales parsing,
+daily reports, CRM sources and freebie completion rules. Their availability and
+new-client timing use the hourly and volunteer settings above. The Veo daily scheduler excludes
 Trabawho; Trabawho source/planning/report failures are caught separately and do
 not stop Veo delivery. A Trabawho poll-lookup failure does not consume a Veo poll
 webhook. The existing authenticated Windows helper supports

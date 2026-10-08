@@ -111,6 +111,10 @@ def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
 
 
 def poll_answer_chat_today(poll_id: str, allowed: set[int], now: dt.datetime) -> int | None:
+    from hourly_availability import context
+    poll = context(poll_id, allowed.intersection(GROUPS))
+    if poll:
+        return int(poll["chat_id"]) if poll["payload"]["work_date"] == now.astimezone(MANILA).date().isoformat() else None
     counts = daily_poll_counts(allowed.intersection(GROUPS), now.astimezone(MANILA).date())
     return next((chat_id for chat_id, row in counts.items() if row.get("poll_id") == poll_id), None)
 
@@ -141,7 +145,8 @@ def queue_freebie_assignments(now: dt.datetime, allowed: set[int]) -> int:
     )
     queued = 0
     for chat_id in sorted(eligible):
-        members = _active_members(chat_id, local_now.date())
+        from hourly_availability import current_members
+        members = current_members(_active_members(chat_id, local_now.date()), now)
         waiting = [user for user in members if (chat_id, int(user["user_id"])) not in open_members]
         if not waiting:
             continue
@@ -213,7 +218,8 @@ def freebie_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     if not is_freebie_action(action):
         return True
     local_now = now.astimezone(MANILA)
-    if action.get("sent_at") and not 7 <= local_now.hour < 22:
+    from hourly_availability import current_members, enabled as hourly_enabled
+    if action.get("sent_at") and not hourly_enabled(local_now.date()) and not 7 <= local_now.hour < 22:
         return False
     live = freebie_action_state(int(action["id"]))
     if not live or live["status"] != "processing" or live["payload"].get("freebie_completed_at"):
@@ -221,7 +227,7 @@ def freebie_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     chat_id = int(action["chat_id"])
     is_active = any(
         int(user["user_id"]) == int(action["payload"]["freebie_assignee_id"])
-        for user in _active_members(chat_id, local_now.date())
+        for user in current_members(_active_members(chat_id, local_now.date()), now)
     )
     if not is_active and not action.get("sent_at"):
         # A vote can change after an assignment is queued but before it is claimed.

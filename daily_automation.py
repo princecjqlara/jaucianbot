@@ -378,6 +378,9 @@ def queue_daily_polls(
     *,
     existing_chats: set[int] | None = None,
 ) -> int:
+    from hourly_availability import enabled, queue_polls
+    if enabled(work_date):
+        return queue_polls(work_date, now, AVAILABILITY_GROUPS, allowed)
     queued = 0
     existing_chats = existing_chats or set()
     for chat_id, config in AVAILABILITY_GROUPS.items():
@@ -541,7 +544,9 @@ def quota_reminder(
                 and len(active_users) == workers):
             no_activity: list[str] = []
             awaiting_review: list[str] = []
-            for user in active_users:
+            from hourly_availability import current_members
+            scheduled_now = dt.datetime.combine(work_date, dt.time(hour), tzinfo=MANILA)
+            for user in current_members(active_users, scheduled_now):
                 if any(same_author(user, row) for row in progress.get("deal_rows") or []):
                     continue
                 name = user.get("user_name") or str(user.get("user_id") or "Unknown employee")
