@@ -6,6 +6,7 @@ import datetime as dt
 import hmac
 import json
 import os
+import re
 from http import HTTPStatus
 from urllib.parse import parse_qs
 
@@ -48,7 +49,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-08.18"
+AUTOMATION_VERSION = "2026-10-08.19"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -445,7 +446,12 @@ def dispatch_route(environ, start_response):
                     queued += queue_new_client_assignments(now, allowed - {TRABAWHO_CHAT_ID})
                 except Exception as assignment_error:
                     queue_errors.append("new_client")
-                    print(f"New-client queue failed: {type(assignment_error).__name__}")
+                    import traceback
+                    frames = traceback.extract_tb(assignment_error.__traceback__)
+                    location = " -> ".join(f"{os.path.basename(frame.filename)}:{frame.lineno}" for frame in frames)
+                    # Database wrappers expose only SQLSTATE, never raw queries or credentials.
+                    safe_detail = str(assignment_error) if re.fullmatch(r"Archive PostgreSQL error \([A-Za-z0-9]+\)", str(assignment_error)) else ""
+                    print(f"New-client queue failed: {type(assignment_error).__name__} {safe_detail} [{location}]")
             if not assignment_groups or claim_automation_slot(assignment_groups, now):
                 try:
                     queued += queue_freebie_assignments(now, allowed)
