@@ -197,7 +197,7 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
             statement += sql.SQL(""" AND NOT EXISTS (
                 SELECT 1 FROM public.scheduled_actions AS newer
                 WHERE newer.chat_id = a.chat_id AND newer.id > a.id
-                  AND newer.dedupe_key LIKE 'new-client:%'
+                  AND newer.dedupe_key LIKE %s
                   AND (newer.payload->>'new_client_contact_id' = %s
                     OR newer.payload->>'new_client_contact_identity' = %s
                     OR (%s::text IS NULL AND COALESCE(newer.payload->>'new_client_contact_identity', '') = ''
@@ -205,7 +205,7 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
                         AND regexp_replace(lower(newer.payload->>'new_client_contact_name'), '[^a-z0-9]', '', 'g') = %s
                         AND %s <> ''))
             )""")
-            values += [details.get("new_client_contact_id"), identity, identity,
+            values += ["new-client:%", details.get("new_client_contact_id"), identity, identity,
                        (details.get("new_client_page") or "").casefold(), name, name]
     else:
         rows = payload if isinstance(payload, list) else [payload]

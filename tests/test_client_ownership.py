@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import cloud_store
 import new_client_automation as clients
 from postgres_archive import compile_request
+from psycopg._queries import _query2pg
 from test_hourly_assignments import CHAT, NOW, offer, message
 
 
@@ -139,6 +140,19 @@ class OwnershipTests(unittest.TestCase):
 
 
 class OwnershipStoreTests(unittest.TestCase):
+    def test_driver_can_parse_guarded_confirmation_without_literal_percent_error(self):
+        details = dict(offer()["payload"], new_client_acknowledged_at=NOW.isoformat())
+        statement, values, _ = compile_request(
+            "scheduled_actions?select=id&id=eq.100&status=in.(pending,cancelled)"
+            "&payload-%3E%3Enew_client_acknowledged_at=is.null&new_client_latest_guard=true",
+            {"payload": details, "status": "cancelled", "updated_at": NOW.isoformat()},
+            method="PATCH", prefer="return=representation")
+        converted, formats, names, parts = _query2pg(statement.as_string().encode(), "utf-8")
+        self.assertEqual(len(formats), len(values))
+        self.assertIn("new-client:%", values)
+        self.assertNotIn(b"new-client:%", converted)
+        self.assertIn(b"newer.dedupe_key LIKE $", converted)
+
     def test_atomic_confirmation_guard_is_parameterized_and_rejects_newer_offer(self):
         details = offer()["payload"]
         details["new_client_acknowledged_at"] = NOW.isoformat()
