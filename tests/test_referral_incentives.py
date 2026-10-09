@@ -182,6 +182,55 @@ class ReceiptTests(unittest.TestCase):
                 self.assertEqual(len(review), 1)
 
 
+class ReportLayoutTests(unittest.TestCase):
+    def test_today_and_cumulative_shares_are_separate_and_recruits_grouped(self):
+        people = [PERSON, dict(PERSON, recruit_id=22, recruit_name="Another Member", recruiter="Farah")]
+        orders = [sale(1, hours=1), sale(2, hours=24), sale(3, hours=25, user=22, gross="500")]
+        as_of = START + dt.timedelta(hours=30)
+        work_date = (START + dt.timedelta(days=1)).astimezone(referrals.MANILA).date()
+        results = referrals.calculate(people, [], orders, work_date, as_of, "gross", "join_or_vote")
+        report = referrals.format_report(results, work_date, as_of, "gross")
+        self.assertIn("Today: ₱75\nRecorded total to date: ₱125\nCommissioned orders today: 2", report)
+        self.assertIn("Linked recruits: 2 • Recruiters with recruits: 2", report)
+        farah, elle = report.split("👤 Farah", 1)[1].split("👤 Elle", 1)
+        self.assertIn("Another Member", farah)
+        self.assertNotIn("New Member", farah)
+        self.assertIn("New Member", elle)
+        self.assertIn("2/8 commissioned sales • 6 remaining", elle)
+
+    def test_bonus_unlock_shows_sixteen_sales_without_extending_cap(self):
+        as_of = START + dt.timedelta(days=100)
+        results = referrals.calculate([PERSON], [], [sale(n, hours=n) for n in range(1, 18)],
+                                      START.date(), as_of, "gross", "join_or_vote")
+        report = referrals.format_report(results, START.date(), as_of, "gross")
+        self.assertIn("Recorded total to date: ₱800", report)
+        self.assertIn("16/16 commissioned sales • 0 remaining", report)
+        self.assertIn("8 extra sales unlocked", report)
+        self.assertNotIn("Bonus window closed", report)
+
+    def test_bonus_deadline_shows_philippine_time_and_expired_base_stays_eligible(self):
+        as_of = START + dt.timedelta(hours=2)
+        results = referrals.calculate([PERSON], [], [sale(1)], START.date(), as_of, "gross", "join_or_vote")
+        report = referrals.format_report(results, START.date(), as_of, "gross")
+        self.assertIn("Oct 12, 09:00 AM PHT", report)
+        report = referrals.format_report(results, START.date(), START + dt.timedelta(hours=72), "gross")
+        self.assertIn("Bonus window closed; the first 8 sales remain eligible", report)
+        self.assertIn("Neither the first 8 nor the unlocked bonus 8 expires", report)
+
+    def test_unverified_registration_and_missing_amounts_stay_visible(self):
+        people = [dict(PERSON, first_voted_at=None, voted_at=None),
+                  dict(PERSON, recruit_id=22, recruit_name="Missing Amount", recruiter="Farah")]
+        order = dict(sale(1, user=22), earnings=None)
+        results = referrals.calculate(people, [], [order], START.date(), START + dt.timedelta(hours=2),
+                                      "earnings", "join_or_vote")
+        report = referrals.format_report(results, START.date(), START + dt.timedelta(hours=2), "earnings", 2, 1)
+        self.assertIn("Registration date or commission basis needs confirmation; shares pending", report)
+        self.assertIn("1 commission amount missing", report)
+        self.assertIn("2 sale/receipt posts", report)
+        self.assertIn("1 post has conflicting seller or amount details", report)
+        self.assertIn("Today: ₱0\nRecorded total to date: ₱0", report)
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, ENV)

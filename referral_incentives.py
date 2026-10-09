@@ -305,6 +305,76 @@ def calculate(referrals: list[dict], joins: list[dict], sales: list[dict],
     return result
 
 
+def format_report(result: list[dict], work_date: dt.date, as_of: dt.datetime,
+                  basis: str, held_count: int = 0, conflict_count: int = 0) -> str:
+    grouped = defaultdict(list)
+    for recruit in result:
+        grouped[recruit["recruiter"]].append(recruit)
+    verified = [r for r in result if r["eligible"]]
+    today_total = sum((r["today_share"] for r in verified), Decimal(0))
+    recorded_total = sum((r["total_share"] for r in verified), Decimal(0))
+    today_orders = sum(r["today_sales"] for r in verified)
+    report = ["🤝 RECRUITER DAILY REPORT", f"{work_date:%B %d, %Y} • Philippine time", "",
+              "Hi team! Thank you for helping our new teammates get started. 💛", "",
+              "💰 SHARES AT A GLANCE", f"Today: {money(today_total)}",
+              f"Recorded total to date: {money(recorded_total)}",
+              f"Commissioned orders today: {today_orders}",
+              f"Linked recruits: {len(result)} • Recruiters with recruits: {len(grouped)}", "",
+              "👥 RECRUITER BREAKDOWN"]
+    names = list(RECRUITERS) + sorted(set(grouped) - set(RECRUITERS))
+    for name in names:
+        recruits = grouped.get(name, [])
+        if not recruits:
+            continue
+        today = sum((r["today_share"] for r in recruits if r["eligible"]), Decimal(0))
+        total = sum((r["total_share"] for r in recruits if r["eligible"]), Decimal(0))
+        report += ["", f"👤 {name}", f"Today: {money(today)} • Recorded total: {money(total)}",
+                   f"Linked recruits: {len(recruits)}"]
+        for recruit in sorted(recruits, key=lambda r: (r["recruit_name"].casefold(), r["recruit_id"])):
+            report += ["", f"• {recruit['recruit_name']}"]
+            if not recruit["eligible"]:
+                report.append("  Registration date or commission basis needs confirmation; shares pending.")
+                continue
+            report += [f"  Today: {money(recruit['today_share'])} • {recruit['today_sales']} "
+                       f"{'order' if recruit['today_sales'] == 1 else 'orders'}",
+                       f"  Recorded total: {money(recruit['total_share'])}",
+                       f"  Progress: {recruit['commissioned_sales']}/{recruit['cap']} commissioned sales"
+                       f" • {max(0, recruit['cap'] - recruit['commissioned_sales'])} remaining"]
+            if recruit["bonus"]:
+                report.append("  Bonus: 8 extra sales unlocked! 🌟")
+            else:
+                deadline = recruit["start"] + dt.timedelta(hours=72)
+                if as_of >= deadline:
+                    report.append("  Bonus window closed; the first 8 sales remain eligible.")
+                else:
+                    local_deadline = deadline.astimezone(MANILA)
+                    report.append(f"  Bonus: finish the first 8 by {local_deadline:%b %d, %I:%M %p} PHT.")
+            if recruit["pending_amounts"]:
+                report.append(f"  Needs review: {recruit['pending_amounts']} "
+                              f"{'commission amount' if recruit['pending_amounts'] == 1 else 'commission amounts'} missing.")
+    if not result:
+        report += ["", "No inviter registrations yet. Shares will appear after verified paid orders are recorded."]
+    unlinked = [name for name in RECRUITERS if not grouped.get(name)]
+    if unlinked:
+        report += ["", "No linked recruits yet: " + ", ".join(unlinked) + "."]
+    if held_count or conflict_count:
+        report += ["", "🔎 NEEDS REVIEW"]
+        if held_count:
+            report.append(f"• {held_count} sale/receipt {'post needs' if held_count == 1 else 'posts need'} "
+                          "clear client, page and payment details.")
+        if conflict_count:
+            report.append(f"• {conflict_count} {'post has' if conflict_count == 1 else 'posts have'} "
+                          "conflicting seller or amount details.")
+        report.append("These posts are held out of shares until confirmed.")
+    report += ["", "📌 SHARE RULES",
+               f"5% of {'paid sale amounts' if basis == 'gross' else 'recorded member earnings'} on the first 8 sales.",
+               "Finish those 8 within 72 hours of joining or your first vote to unlock 8 more.",
+               "Neither the first 8 nor the unlocked bonus 8 expires.", "",
+               "Recorded shares are separate from payout confirmation.",
+               "Keep guiding your recruits and celebrating their progress. Thank you, team! 💛"]
+    return "\n".join(report)
+
+
 def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int], *, lock: bool = True) -> str:
     referrals = [r["payload"] for r in read_records("referral-person:", {RECRUITS_CHAT})]
     joins = [r["payload"] for r in read_records("referral-join:", {RECRUITS_CHAT})]
@@ -339,40 +409,12 @@ def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int], *, loc
     for sale in all_sales:
         owners[sale["reference"]].add((sale["user_id"], sale["gross"]))
     conflicts = [s for s in all_sales if len(owners[s["reference"]]) > 1]
-    grouped = defaultdict(list)
     for recruit in result:
         if lock and recruit["eligible"] and recruit["commissioned_sales"]:
             lock_credit(recruit, now)
-        grouped[recruit["recruiter"]].append(recruit)
-    report += [f"5% of {'sale amounts' if basis == 'gross' else 'recorded member earnings'} • first 8 sales",
-               "8 more sales unlock when the first 8 finish within 72 hours of joining or voting.",
-               "Neither the first 8 nor the unlocked bonus 8 expires.", ""]
-    total = Decimal(0)
-    for name in RECRUITERS:
-        amount = sum((r["today_share"] for r in grouped[name] if r["eligible"]), Decimal(0))
-        total += amount
-        report.append(f"• {name}: {money(amount)} today • {len(grouped[name])} recruit(s)")
-    report += ["", f"Total recorded shares today: {money(total)}", "", "BY RECRUIT"]
-    for recruit in result:
-        if not recruit["eligible"]:
-            detail = "Team joining date or recruiter vote needs confirmation; commission is pending."
-        else:
-            detail = (f"{recruit['commissioned_sales']}/{recruit['cap']} commissioned sales • "
-                      f"{money(recruit['today_share'])} today • {money(recruit['total_share'])} total"
-                      + (" • bonus 8 unlocked 🌟" if recruit["bonus"] else "")
-                      + (f" • {recruit['pending_amounts']} earnings amount(s) pending" if recruit["pending_amounts"] else ""))
-        report.append(f"• {recruit['recruit_name']} → {recruit['recruiter']}: {detail}")
-    if not result:
-        report.append("No recruit-to-recruiter votes have been recorded yet. New members, please answer the recruiter poll.")
     linked = {int(r["recruit_id"]) for r in referrals if r.get("recruiter")}
     held = [r for r in review if r.get("author_id") in linked]
-    if held:
-        report += ["", f"Needs review: {len(held)} recorded sale/receipt post(s). Unverified amounts are held out of shares."]
-    if conflicts:
-        report += ["", f"Order details need review: {len(conflicts)} post(s) have conflicting sellers or amounts; shares are held."]
-    report += ["", "Based on recorded paid client orders; payout confirmation is tracked separately.",
-               "Thank you for helping our teams grow! 💛"]
-    return "\n".join(report)
+    return format_report(result, work_date, end, basis, len(held), len(conflicts))
 
 
 def prepare_report(action: dict, now: dt.datetime, allowed: set[int]) -> None:

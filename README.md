@@ -314,6 +314,12 @@ recruiter chat and topic.
 recorded receipts at delivery and post to Team Recuiters (`-1004389276294`),
 topic `2`, at 23:59 PHT. A dedicated `59 15 * * *` UTC dispatch supplements the
 existing schedules. Both target groups must be in `ALLOWED_CHAT_IDS`.
+Reports lead with today's shares and cumulative recorded shares, then group
+recruits under their inviter. Each recruit shows daily shares, cumulative
+shares, commissioned-sales progress, remaining sales and bonus deadline or
+unlock status. Recruiters without linked recruits appear in one compact list;
+held receipts and conflicting orders have a separate review section. Recorded
+shares remain distinct from confirmed payouts.
 `./remote_windows.ps1 referrals` shows the poll, policy, and report delivery state.
 `./remote_windows.ps1 referrals --audit` runs an authenticated, read-only preview
 against the same live sales sources. It sends no messages, queues no reports,
