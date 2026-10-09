@@ -20,7 +20,7 @@ RECRUITS_THREAD = 510
 SHARES_CHAT = -1004389276294
 SHARES_THREAD = 2
 RECRUITERS = ("Farah", "Athena", "Grace Canites", "Elle", "Shan", "Sen",
-              "Pogi Michael", "Nami", "Melo", "Mark Joshua")
+              "Pogi Michael", "Nami", "Melo", "Mark Joshua", "Eri")
 WORK_TEAMS = set(GROUPS) | {TRABAWHO_CHAT_ID}
 RATE = Decimal("0.05")
 PUBLIC_INSTRUCTIONS = (
@@ -75,7 +75,8 @@ def poll_registered(action_id: int) -> bool:
 
 def register_poll(action: dict, message: dict, now: dt.datetime) -> bool:
     return insert_record(f"referral-poll:{action['id']}", {
-        "referral_poll_id": message["poll"]["id"], "options": list(RECRUITERS),
+        "referral_poll_id": message["poll"]["id"],
+        "options": [option["text"] for option in message["poll"]["options"]],
         "telegram_message_id": message["message_id"],
         "privacy_version": action["payload"].get("referral_privacy_version", 1),
         "thread_id": action["payload"].get("message_thread_id"),
@@ -398,7 +399,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     today = now.astimezone(MANILA).date()
     # Scheduling is daily; pending deliveries and replies still run independently.
     # Include the reporting approval so adding it during a day queues its reports.
-    setup_key = (f"referral-setup:v1:{RECRUITS_THREAD}:"
+    setup_key = (f"referral-setup:v2:{RECRUITS_THREAD}:"
                  f"{SHARES_CHAT if SHARES_CHAT in allowed else 0}:{today.isoformat()}")
     if setup_complete(setup_key):
         return 0
@@ -406,7 +407,8 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     # Replace the old poll because Telegram cannot edit a posted poll question.
     for record in read_records("referral-poll:", {RECRUITS_CHAT}):
         old = record["payload"]
-        if old.get("privacy_version", 1) < 3 or old.get("thread_id") != RECRUITS_THREAD:
+        if (old.get("privacy_version", 1) < 3 or old.get("thread_id") != RECRUITS_THREAD
+                or old.get("options") != list(RECRUITERS)):
             target = int(old["telegram_message_id"])
             queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
                 payload={"text": "Replacing the team registration poll.", "delete_message_id": target},
@@ -431,11 +433,12 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
         payload=instructions, scheduled_for=now, dedupe_key=f"referral-instructions:v4:{RECRUITS_THREAD}"))
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
         payload={"question": "Who invited you to join the team? 👋\nNot starting yet? Please don't vote. "
-                             "Vote just before your first sale, and choose one name.",
+                             "Vote just before your first sale, and choose one name.\n"
+                             "Already voted before? Your registration is saved.",
                  "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,
                  "disable_notification": False, "referral_poll": True, "referral_privacy_version": 3,
                  "message_thread_id": RECRUITS_THREAD},
-        scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v3:{RECRUITS_THREAD}"))
+        scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v4:{RECRUITS_THREAD}"))
     if SHARES_CHAT in allowed:
         # Durable scheduled reports are refreshed from actual sales at delivery time.
         for date in (today - dt.timedelta(days=1), today, today + dt.timedelta(days=1)):
@@ -471,5 +474,6 @@ def status(allowed: set[int], now: dt.datetime) -> dict:
             "policy_confirmed": basis in {"gross", "earnings"} and window == "join_or_vote",
             "polls": [{"message_id": r["payload"]["telegram_message_id"]}
                       for r in polls if r["payload"].get("privacy_version", 1) >= 3
-                      and r["payload"].get("thread_id") == RECRUITS_THREAD],
+                      and r["payload"].get("thread_id") == RECRUITS_THREAD
+                      and r["payload"].get("options") == list(RECRUITERS)],
             "recorded_referrals": len(people), "reports": reports or []}

@@ -214,8 +214,59 @@ class WorkflowTests(unittest.TestCase):
                 self.assertTrue(referrals.save_answer(self.answer([0], number), ALLOWED))
             self.assertEqual(request.call_count, 1)
 
+    def test_eri_vote_is_recorded_without_resetting_existing_first_vote(self):
+        stored = {"id": 1, "updated_at": START.isoformat(), "payload": PERSON}
+        with patch.object(referrals, "poll_context", return_value={"options": list(referrals.RECRUITERS)}), \
+             patch.object(referrals, "insert_record", return_value=False), \
+             patch.object(referrals, "request", side_effect=[[stored], [{"id": 1}]]) as request:
+            self.assertTrue(referrals.save_answer(self.answer([referrals.RECRUITERS.index("Eri")]), ALLOWED))
+        payload = request.call_args.args[1]["payload"]
+        self.assertEqual(payload["recruiter"], "Eri")
+        self.assertEqual(payload["first_voted_at"], START.isoformat())
+
+    def test_poll_registration_uses_sent_options_instead_of_current_roster(self):
+        original_options = list(referrals.RECRUITERS[:-1])
+        message = {"message_id": 522, "poll": {"id": "old-poll",
+                   "options": [{"text": name} for name in original_options]}}
+        action = {"id": 1, "payload": {"referral_privacy_version": 3,
+                  "message_thread_id": referrals.RECRUITS_THREAD}}
+        with patch.object(referrals, "insert_record", return_value=True) as insert:
+            self.assertTrue(referrals.register_poll(action, message, START))
+        self.assertEqual(insert.call_args.args[1]["options"], original_options)
+
+    def test_roster_change_replaces_old_poll_without_touching_saved_referrals(self):
+        records = [{"payload": {"telegram_message_id": mid, "privacy_version": 3,
+                    "thread_id": referrals.RECRUITS_THREAD, "options": options}}
+                   for mid, options in [(522, list(referrals.RECRUITERS[:-1])),
+                                        (540, list(referrals.RECRUITERS))]]
+        with patch.object(referrals, "read_records", side_effect=[records, []]) as read, \
+             patch.object(referrals, "request", return_value=[]), \
+             patch.object(referrals, "insert_record", return_value=True) as insert, \
+             patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue:
+            referrals.queue_automation(START, ALLOWED)
+        actions = [call.kwargs for call in enqueue.call_args_list]
+        deleted = [action["payload"]["delete_message_id"] for action in actions
+                   if "delete_message_id" in action["payload"]]
+        self.assertEqual(deleted, [522])
+        self.assertTrue(any(action["action_type"] == "poll" and "Eri" in action["payload"]["options"]
+                            for action in actions))
+        self.assertEqual([call.args[0] for call in read.call_args_list],
+                         ["referral-poll:", "referral-instructions:"])
+        self.assertTrue(insert.call_args.args[0].startswith("referral-setup:v2:"))
+
+    def test_pending_old_roster_poll_is_suppressed_after_roster_change(self):
+        action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT, "action_type": "poll",
+                  "payload": {"referral_poll": True, "referral_privacy_version": 3,
+                              "message_thread_id": referrals.RECRUITS_THREAD,
+                              "options": list(referrals.RECRUITERS[:-1])}}
+        with patch.object(app, "claim_scheduled_actions", return_value=[action]), \
+             patch.object(app, "finish_scheduled_action", return_value=True), \
+             patch.object(app, "send_scheduled_action") as send:
+            self.assertEqual(app.deliver_due_actions(ALLOWED), (1, 0, 0))
+        send.assert_not_called()
+
     def test_invalid_and_self_referral_votes_do_not_create_records(self):
-        for choice in [[True], [-1], [10], [0, 1]]:
+        for choice in [[True], [-1], [len(referrals.RECRUITERS)], [0, 1]]:
             with patch.object(referrals, "poll_context", return_value={"options": list(referrals.RECRUITERS)}), \
                  patch.object(referrals, "insert_record") as insert:
                 self.assertFalse(referrals.save_answer(self.answer(choice), ALLOWED))
@@ -329,6 +380,7 @@ class WorkflowTests(unittest.TestCase):
     def test_registered_poll_is_not_resent_on_finalize_retry(self):
         action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT,
                   "action_type": "poll", "payload": {"referral_poll": True, "referral_privacy_version": 3,
+                                                   "options": list(referrals.RECRUITERS),
                                                    "message_thread_id": referrals.RECRUITS_THREAD}}
         with patch.object(app, "claim_scheduled_actions", return_value=[action]), \
              patch.object(referrals, "poll_registered", return_value=True), \
@@ -362,7 +414,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(calls[2]["payload"]["delete_message_id"], 518)
         self.assertEqual(calls[3]["payload"]["text"], referrals.PUBLIC_INSTRUCTIONS)
         self.assertEqual(calls[3]["payload"]["message_thread_id"], referrals.RECRUITS_THREAD)
-        self.assertEqual(calls[4]["dedupe_key"], "referral-recruiter-poll:v3:510")
+        self.assertEqual(calls[4]["dedupe_key"], "referral-recruiter-poll:v4:510")
 
     def test_old_pending_disclosure_cannot_be_sent_after_privacy_update(self):
         actions = [

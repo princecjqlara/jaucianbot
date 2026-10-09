@@ -289,8 +289,11 @@ teams when startup is explicitly requested.
 
 Recruiter incentives use a non-anonymous, single-answer poll in Veo Recruits
 (`-1003555676168`, topic `510`). Members who have not started should wait;
-they vote just before their first sale and select their inviter from the ten
-configured names. The recruiter receives 5% of recorded paid sale amounts on
+they vote just before their first sale and select their inviter from the eleven
+configured names, including Eri (`@exoxo4`). When the roster changes, the
+poll is replaced in the same topic; stored attribution and first-vote dates
+remain intact. Each poll retains its own option order for decoding answers.
+The recruiter receives 5% of recorded paid sale amounts on
 the recruit's first 8 identifiable orders, with no expiry. Completing those
 8 within 72 hours of the earliest recorded work-team join or first recruiter
 vote unlocks 8 additional commissioned orders (16 total), also with no expiry.

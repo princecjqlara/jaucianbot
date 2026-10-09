@@ -50,7 +50,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-09.09"
+AUTOMATION_VERSION = "2026-10-09.10"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -362,7 +362,8 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                 action.get("dedupe_key") == "referral-rules:v1"
                 or action["payload"].get("referral_poll") and (
                     action["payload"].get("referral_privacy_version", 1) < 3
-                    or action["payload"].get("message_thread_id") != referral_incentives.RECRUITS_THREAD)
+                    or action["payload"].get("message_thread_id") != referral_incentives.RECRUITS_THREAD
+                    or action["payload"].get("options") != list(referral_incentives.RECRUITERS))
                 or (action.get("dedupe_key") or "").startswith("referral-instructions:")
                    and action["payload"].get("message_thread_id") != referral_incentives.RECRUITS_THREAD
             ):
