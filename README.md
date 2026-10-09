@@ -287,6 +287,33 @@ webhook. The existing authenticated Windows helper supports
 `./remote_windows.ps1 dispatch` to run the shared dispatcher for all approved
 teams when startup is explicitly requested.
 
+Recruiter incentives use a non-anonymous, single-answer poll in Veo Recruits
+(`-1003555676168`, General). New members select their recruiter from the ten
+configured names. The recruiter receives 5% of recorded paid sale amounts on
+the recruit's first 8 identifiable orders, with no expiry. Completing those
+8 within 72 hours of the earliest recorded work-team join or first recruiter
+vote unlocks 8 additional commissioned orders (16 total), also with no expiry.
+Withdrawing or changing a vote never restarts that clock. Recruiter credit is
+locked after the first commissioned sale is calculated in a report.
+
+`REFERRAL_INCENTIVES_ENABLED=true`, `REFERRAL_START_DATE`,
+`REFERRAL_COMMISSION_BASIS=gross`, and
+`REFERRAL_WINDOW_START=join_or_vote` enable this workflow. Reports refresh from
+recorded receipts at delivery and post to Team Recuiters (`-1004389276294`),
+topic `2`, at 23:59 PHT. A dedicated `59 15 * * *` UTC dispatch supplements the
+existing schedules. Both target groups must be in `ALLOWED_CHAT_IDS`.
+`./remote_windows.ps1 referrals` shows the poll, policy, and report delivery state.
+
+Counts carry across the four configured Veo teams and Trabawho by Telegram
+user ID. Order IDs, or page-scoped client names when an ID is absent, prevent
+reposts from consuming another commissioned sale. Include an order ID for
+separate repeat orders from one client. Tips, extras, deposits/close-deal
+summaries, image-only receipts, unclear amounts and conflicting seller credit
+are excluded or held for review. Reported shares are recorded commissions,
+not confirmation that payment has been made. Historical joins outside the
+collector's coverage cannot be inferred; the first recorded vote supplies the
+start date when no earlier joining event is available.
+
 Separately, the new-client dispatcher reads Supabase contacts whose chatbot has `stop_reason = details_collected` and a non-empty collected-details object. That final chatbot outcome is authoritative even when an older state retains stale entries in `missing_details`. It assigns those contacts in the new-client topics: Veo Jel `4180`, Veo `27622`, Veo Jessa `3725`, and Veo Ollie `5758`.
 
 Only members who selected Active for that Philippine day participate. The bot gives each Active member one client before anyone can move ahead to the next round. A member replies `WORKING ABCD1234` as soon as they start handling the assigned client; a direct `WORKING` reply to the assignment is also accepted. That acknowledgment stops reminders and makes the member eligible when the round robin reaches them again. Before timing out an assignment, the bot reconciles archived replies so a confirmation cannot be missed and reassigned. If no valid `WORKING` reply arrives within one hour, the assignment is cancelled and the same contact is reassigned to a different Active member. If the original member replies after that timeout, the earliest valid `WORKING` reply wins and any duplicate open assignment is cancelled. Contacts are tracked by their stable page-scoped PSID, with legacy fallbacks, so changing contact details or replacing a CRM row does not create a new assignment. A faster member cannot receive a third client while another Active member has received only one. Acknowledged contacts are never assigned again.

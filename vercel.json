@@ -17,6 +17,7 @@
     {"path": "/api/cron/dispatch", "schedule": "0 11 * * *"},
     {"path": "/api/cron/dispatch", "schedule": "0 12 * * *"},
     {"path": "/api/cron/dispatch", "schedule": "0 13 * * *"},
-    {"path": "/api/cron/dispatch", "schedule": "0 16 * * *"}
+    {"path": "/api/cron/dispatch", "schedule": "0 16 * * *"},
+    {"path": "/api/cron/dispatch", "schedule": "59 15 * * *"}
   ]
 }

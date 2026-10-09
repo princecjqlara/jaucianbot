@@ -426,7 +426,8 @@ class DailyAutomationTests(unittest.TestCase):
         config = json.loads((Path(__file__).resolve().parents[1] / "vercel.json").read_text())
         self.assertEqual(
             {(job["path"], job["schedule"]) for job in config["crons"]},
-            {("/api/cron/dispatch", f"0 {hour} * * *") for hour in (*range(14), 16, 23)},
+            {("/api/cron/dispatch", f"0 {hour} * * *") for hour in (*range(14), 16, 23)}
+            | {("/api/cron/dispatch", "59 15 * * *")},
         )
 
 

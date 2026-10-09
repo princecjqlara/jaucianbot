@@ -19,6 +19,7 @@ def main() -> None:
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
+    commands.add_parser("referrals")
     commands.add_parser("dispatch", help="Run the shared dispatcher for all approved teams")
     messages = commands.add_parser("messages")
     messages.add_argument("--group", type=int)
@@ -64,6 +65,8 @@ def main() -> None:
         path = "/api/freebies/status"
     elif args.command == "new-clients":
         path = "/api/new-clients/status"
+    elif args.command == "referrals":
+        path = "/api/referrals/status"
     elif args.command == "dispatch":
         path = "/api/cron/dispatch"
     elif args.command == "messages":

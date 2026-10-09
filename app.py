@@ -31,6 +31,7 @@ from cloud_store import (
 from daily_automation import GROUPS, AVAILABILITY_GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
 import hourly_availability
 import client_volunteers
+import referral_incentives
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
     freebie_status, poll_answer_chat_today, queue_freebie_assignments,
@@ -49,7 +50,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-09.02"
+AUTOMATION_VERSION = "2026-10-09.03"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -138,6 +139,17 @@ def new_clients_status_route(environ, start_response):
         print(f"New-client status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, "groups": groups})
+
+
+def referrals_status_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        data = referral_incentives.status(allowed_chat_ids(), dt.datetime.now(dt.timezone.utc))
+    except Exception as error:
+        print(f"Referral status failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, **data})
 
 
 def messages_route(environ, start_response):
@@ -327,6 +339,12 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if action["payload"].get("referral_report_date"):
+                referral_incentives.prepare_report(action, now, allowed)
+            if action["payload"].get("referral_poll") and referral_incentives.poll_registered(int(action["id"])):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("registered referral poll was not finalized")
+                continue
             if action["payload"].get("new_client_ack_assignment_id") is not None and not new_client_ack_delivery_allowed(action):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("superseded assignment acknowledgment was not finalized")
@@ -372,6 +390,8 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                 action["payload"]["_first_delivery_at"] = dt.datetime.fromtimestamp(message["date"], dt.timezone.utc).isoformat()
             if hourly_date and not hourly_availability.register_poll(action, message, now):
                 raise RuntimeError("hourly poll was not registered")
+            if action["payload"].get("referral_poll") and not referral_incentives.register_poll(action, message, now):
+                raise RuntimeError("referral poll was not registered")
             if is_daily_poll:
                 if not register_daily_poll(
                     poll_id=message["poll"]["id"],
@@ -403,6 +423,11 @@ def dispatch_route(environ, start_response):
     queue_errors = []
     try:
         allowed = allowed_chat_ids()
+        try:
+            queued += referral_incentives.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as referral_error:
+            queue_errors.append("referrals")
+            print(f"Referral queue failed: {type(referral_error).__name__}")
         if os.environ.get("HOURLY_AVAILABILITY_START_DATE"):
             try:
                 now = dt.datetime.now(dt.timezone.utc)
@@ -499,9 +524,12 @@ def webhook_route(environ, start_response):
         return response(start_response, 503, {"ok": False, "error": "invalid configuration"})
     try:
         if "poll_answer" in update:
-            stored = save_poll_answer(update, allowed)
+            referral_stored = referral_incentives.save_answer(update, allowed)
+            stored = save_poll_answer(update, allowed) if referral_stored is None else referral_stored
         else:
             stored = save_update(update, allowed)
+            if stored:
+                referral_incentives.observe_join(update, allowed, dt.datetime.now(dt.timezone.utc))
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})
@@ -568,12 +596,14 @@ def app(environ, start_response):
         return freebies_status_route(environ, start_response)
     if path == "/api/new-clients/status" and method == "GET":
         return new_clients_status_route(environ, start_response)
+    if path == "/api/referrals/status" and method == "GET":
+        return referrals_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})
