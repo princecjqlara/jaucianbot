@@ -19,6 +19,7 @@ def main() -> None:
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
+    commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
     referrals = commands.add_parser("referrals")
     referrals.add_argument("--audit", action="store_true", help="Read-only report preview using live sales sources")
     commands.add_parser("dispatch", help="Run the shared dispatcher for all approved teams")
@@ -66,6 +67,8 @@ def main() -> None:
         path = "/api/freebies/status"
     elif args.command == "new-clients":
         path = "/api/new-clients/status"
+    elif args.command == "daily-plan":
+        path = "/api/reports/plan"
     elif args.command == "referrals":
         path = "/api/referrals/audit" if args.audit else "/api/referrals/status"
     elif args.command == "dispatch":

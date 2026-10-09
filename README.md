@@ -255,6 +255,15 @@ receives the organized detailed report. The detailed report includes Active
 members, the two-per-member quota, planned ads budget, accepted receipt
 gross/salary, each member's recorded totals, labeled tips, receipts needing
 review, and song deliveries/outstanding jobs.
+Detailed reports for all five teams also show tomorrow's active members and
+targets using the Philippine calendar date when the report is prepared.
+Hourly poll votes count each member once within their team. Trabawho's planned
+ads budget uses Active × 2 × ₱150; this rule does not apply to Veo teams, whose
+ads budgets remain unconfigured. Actual ad spending is explicitly unreported
+until a verified spending source is supplied. Profit figures exclude those
+unreported advertising costs and other expenses. The authenticated read-only
+`./remote_windows.ps1 daily-plan` command previews current tomorrow staffing
+and planned ads budgets without sending or changing any messages.
 Reports and song reminders run independently of Suno connection availability.
 Report markers mean all report parts are queued; dispatcher retries handle
 delivery failures. Amounts with unresolved receipts are explicitly partial.

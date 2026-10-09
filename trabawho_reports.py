@@ -11,6 +11,7 @@ from daily_automation import DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_C
 from trabawho_automation import plan_totals
 from trabawho_receipts import receipt_report
 from trabawho_songs import song_report_lines
+from daily_report_plans import plan_lines
 
 
 def build_trabawho_summary(work_date: dt.date, now: dt.datetime) -> str:
@@ -55,6 +56,10 @@ def build_trabawho_report(work_date: dt.date, now: dt.datetime) -> str:
     else:
         lines.append("No tracked Active poll for this date; quota and ads budget are unavailable.")
     total = report["totals"]
+    lines += ["Actual ad spend: not reported; planned budget is not confirmed spending."]
+    tomorrow = now.astimezone(MANILA).date() + dt.timedelta(days=1)
+    next_count = daily_poll_counts({TRABAWHO_CHAT_ID}, tomorrow).get(TRABAWHO_CHAT_ID)
+    lines += ["", *plan_lines(TRABAWHO_CHAT_ID, tomorrow, next_count)]
     lines += ["", "RECEIPTS — RECORDED AMOUNTS",
               f"Gross receipts (including tips/extras): {money(total['gross'])}",
               f"Recorded salary (parenthesized amounts): {money(total['salary'])}",

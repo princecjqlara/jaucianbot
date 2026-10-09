@@ -146,6 +146,8 @@ def build_group_report(
     *,
     historical: bool = False,
     active_users: list[dict] | None = None,
+    plan_date: dt.date | None = None,
+    plan_count: dict | None = None,
 ) -> str:
     config = GROUPS[chat_id]
     rows, capped = messages_for_day(chat_id, work_date)
@@ -290,9 +292,13 @@ def build_group_report(
         "💰 FINANCIALS",
         f"Gross: {money(gross)}",
         "Commissions: pending data review" if salary_total is None else f"Commissions: −{money(salary_total)}",
-        "Net profit: pending data review" if profit is None else f"Net profit: {money(profit)}",
+        "Profit before ads/other expenses: pending data review" if profit is None else f"Profit before ads/other expenses: {money(profit)}",
+        "Actual ad spend: not reported; advertising costs are not deducted above.",
     ])
     if not historical:
+        if plan_date is not None:
+            from daily_report_plans import plan_lines
+            lines.extend(["", *plan_lines(chat_id, plan_date, plan_count)])
         from freebie_automation import freebie_report_lines
         from new_client_automation import new_client_report_lines
         try:
@@ -630,6 +636,8 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
     report_counts = daily_poll_counts(missing, report_date)
     tomorrow = report_date + dt.timedelta(days=1)
     tomorrow_counts = daily_poll_counts(missing, tomorrow)
+    plan_date = now.astimezone(MANILA).date() + dt.timedelta(days=1)
+    plan_counts = tomorrow_counts if plan_date == tomorrow else daily_poll_counts(missing, plan_date)
     for chat_id, config in GROUPS.items():
         if chat_id not in missing:
             continue
@@ -646,7 +654,8 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
             dedupe_key=f"daily-quota:{tomorrow.isoformat()}:{chat_id}",
         ):
             queued += 1
-        report = build_group_report(chat_id, report_date, report_counts.get(chat_id))
+        report = build_group_report(chat_id, report_date, report_counts.get(chat_id),
+                                    plan_date=plan_date, plan_count=plan_counts.get(chat_id))
         report_parts = split_message(report)
         for part_number, part in enumerate(report_parts, 1):
             if len(report_parts) > 1:

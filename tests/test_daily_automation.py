@@ -68,7 +68,7 @@ class DailyAutomationTests(unittest.TestCase):
             report = build_group_report(-1003647732254, dt.date(2026, 10, 5), {"active_workers": 5})
         self.assertEqual(report.count("Pay: ₱0.04"), 2)
         self.assertIn("Commissions: −₱0.08", report)
-        self.assertIn("Net profit: ₱0.12", report)
+        self.assertIn("Profit before ads/other expenses: ₱0.12", report)
 
     def test_parses_current_deal_formats(self):
         text = "SEPTEMBER 18, 2026\nClient\nPD: 1,450\nPAGE: Manawari Studio"
@@ -115,7 +115,7 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("Commission: 40%", report)
         self.assertIn("Gross: ₱1,500", report)
         self.assertIn("Commissions: −₱600", report)
-        self.assertIn("Net profit: ₱900", report)
+        self.assertIn("Profit before ads/other expenses: ₱900", report)
         self.assertLess(report.index("Alex"), report.index("Bea"))
 
     def test_queues_nonanonymous_dated_polls_in_configured_topics(self):
@@ -263,7 +263,7 @@ class DailyAutomationTests(unittest.TestCase):
             )
         self.assertIn("Commission: needs a quick data review", report)
         self.assertIn("Pay: pending data review", report)
-        self.assertIn("Net profit: pending data review", report)
+        self.assertIn("Profit before ads/other expenses: pending data review", report)
 
     def test_review_does_not_block_35_percent_when_quota_cannot_be_reached(self):
         rows = [
@@ -283,7 +283,7 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIn("Target: 4 DD", report)
         self.assertIn("Commission: 35%", report)
         self.assertIn("Pay:", report)
-        self.assertIn("Net profit:", report)
+        self.assertIn("Profit before ads/other expenses:", report)
         self.assertIn("Please review 1 possible Done Deals post", report)
         self.assertNotIn("pending data review", report)
 
