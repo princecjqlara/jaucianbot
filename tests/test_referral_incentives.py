@@ -275,6 +275,16 @@ class WorkflowTests(unittest.TestCase):
             code, _ = call_app("/api/referrals/status")
         self.assertEqual(code, 401)
 
+    def test_environment_line_endings_do_not_disable_policy_or_scheduling(self):
+        with patch.dict(os.environ, {key: value + "\r\n" for key, value in ENV.items()}), \
+             patch.object(referrals, "read_records", return_value=[]), \
+             patch.object(referrals, "request", return_value=[]), \
+             patch.object(referrals, "enqueue_scheduled_action", return_value=True):
+            self.assertEqual(referrals.queue_automation(START, ALLOWED), 4)
+            self.assertTrue(referrals.status(ALLOWED, START)["policy_confirmed"])
+            self.assertIn("Neither the first 8 nor the unlocked bonus 8 expires",
+                          referrals.build_report(START.date(), START, ALLOWED))
+
     def test_actual_referral_vote_routes_through_webhook_without_old_poll_storage(self):
         with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "correct",
                                     "ALLOWED_CHAT_IDS": str(referrals.RECRUITS_CHAT)}), \

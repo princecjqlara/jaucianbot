@@ -34,7 +34,7 @@ def timestamp(value) -> dt.datetime:
 
 
 def start_date() -> dt.date:
-    return dt.date.fromisoformat(os.environ["REFERRAL_START_DATE"])
+    return dt.date.fromisoformat(os.environ["REFERRAL_START_DATE"].strip())
 
 
 def insert_record(key: str, payload: dict, now: dt.datetime) -> bool:
@@ -270,8 +270,8 @@ def calculate(referrals: list[dict], joins: list[dict], sales: list[dict],
 def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int]) -> str:
     referrals = [r["payload"] for r in read_records("referral-person:", {RECRUITS_CHAT})]
     joins = [r["payload"] for r in read_records("referral-join:", {RECRUITS_CHAT})]
-    basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "")
-    window = os.environ.get("REFERRAL_WINDOW_START", "")
+    basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "").strip()
+    window = os.environ.get("REFERRAL_WINDOW_START", "").strip()
     report = [f"🌟 RECRUITER SHARES • {work_date:%B %d, %Y} (PHT)", "",
               "Hi team! Here are today's recorded referral shares. 💛"]
     if basis not in {"gross", "earnings"} or window != "join_or_vote":
@@ -385,8 +385,8 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
 
 def status(allowed: set[int], now: dt.datetime) -> dict:
     active = enabled() and RECRUITS_CHAT in allowed
-    basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "")
-    window = os.environ.get("REFERRAL_WINDOW_START", "")
+    basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "").strip()
+    window = os.environ.get("REFERRAL_WINDOW_START", "").strip()
     polls = read_records("referral-poll:", {RECRUITS_CHAT}) if active else []
     people = read_records("referral-person:", {RECRUITS_CHAT}) if active else []
     reports = request("scheduled_actions?" + urllib.parse.urlencode({
