@@ -50,7 +50,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-09.07"
+AUTOMATION_VERSION = "2026-10-09.08"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -150,6 +150,25 @@ def referrals_status_route(environ, start_response):
         print(f"Referral status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, **data})
+
+def referrals_audit_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    allowed = allowed_chat_ids()
+    if not referral_incentives.enabled() or referral_incentives.RECRUITS_CHAT not in allowed:
+        return response(start_response, 403, {"ok": False})
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        date = now.astimezone(MANILA).date()
+        preview = referral_incentives.build_report(date, now, allowed, lock=False)
+        return response(start_response, 200, {
+            "ok": True, "read_only": True, "checked_at": now.isoformat(), "work_date": date.isoformat(),
+            "sales_chat_ids": sorted(referral_incentives.WORK_TEAMS.intersection(allowed)),
+            "report_preview": preview,
+        })
+    except Exception as error:
+        print(f"Referral audit failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
 
 
 def messages_route(environ, start_response):
@@ -612,12 +631,14 @@ def app(environ, start_response):
         return new_clients_status_route(environ, start_response)
     if path == "/api/referrals/status" and method == "GET":
         return referrals_status_route(environ, start_response)
+    if path == "/api/referrals/audit" and method == "GET":
+        return referrals_audit_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

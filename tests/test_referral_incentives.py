@@ -4,6 +4,7 @@ import os
 import unittest
 from decimal import Decimal
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import app
 import referral_incentives as referrals
@@ -157,6 +158,29 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(len(sales), 2)
         self.assertEqual(result(sales)["commissioned_sales"], 2)
 
+    def test_unpaid_and_correction_variations_do_not_count(self):
+        chat = next(iter(referrals.GROUPS))
+        config = referrals.GROUPS[chat]
+        page = next(iter(config["pages"].values()))
+        for note in ["Not yet paid", "Hindi pa paid", "Unpaid", "Void", "Correction", "Duplicate"]:
+            with self.subTest(note=note):
+                rows = [row(f"Client: Jane\nPage: {page}\nPD: 1000\n{note}", thread=config["done"])]
+                sales, review = referrals.sales_from_rows(chat, rows)
+                self.assertEqual(sales, [])
+                self.assertEqual(len(review), 1)
+
+    def test_conflicting_and_placeholder_metadata_hold_trabawho_receipts(self):
+        for metadata in [
+                "Client: Jane\nPage: Hiraya\nPage: Different Studio",
+                "Client: Jane\nOrder ID: A1\nOrder ID: A2",
+                "Client: Jane\nClient: Different Person",
+                "Client: Unknown", "Client:\nPAID", "Order ID:\nPAID"]:
+            with self.subTest(metadata=metadata):
+                sales, review = referrals.sales_from_rows(referrals.TRABAWHO_CHAT_ID,
+                                                         [row(metadata + "\n699 (140)")])
+                self.assertEqual(sales, [])
+                self.assertEqual(len(review), 1)
+
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -206,6 +230,18 @@ class WorkflowTests(unittest.TestCase):
             referrals.observe_join(update, ALLOWED, START)
         self.assertEqual(insert.call_count, 1)
         self.assertEqual(insert.call_args.args[1]["joined_at"], START.isoformat())
+
+    def test_delayed_join_update_can_only_move_clock_earlier(self):
+        chat = next(iter(referrals.WORK_TEAMS))
+        update = {"message": {"chat": {"id": chat}, "date": int(START.timestamp()),
+                             "message_id": 99, "new_chat_members": [{"id": 11}]}}
+        with patch.object(referrals, "insert_record", return_value=False), \
+             patch.object(referrals, "request", return_value=[]) as request:
+            referrals.observe_join(update, ALLOWED, START + dt.timedelta(days=2))
+        query = parse_qs(urlsplit(request.call_args.args[0]).query)
+        self.assertEqual(query["payload->>joined_at"], [f"gt.{START.isoformat()}"])
+        self.assertEqual(request.call_args.kwargs["method"], "PATCH")
+        self.assertEqual(request.call_args.args[1]["payload"]["joined_at"], START.isoformat())
 
     def test_poll_and_reports_use_requested_topics_and_pht_time(self):
         with patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue, \
@@ -335,6 +371,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("34.95", report)
         self.assertIn("1/8 commissioned sales", report)
         lock.assert_called_once()
+
+    def test_audit_preview_reads_sales_without_locking_or_scheduling(self):
+        with patch.object(referrals, "read_records", side_effect=[[{"payload": PERSON}], []]), \
+             patch.object(referrals, "receipt_messages", return_value=[
+                 row("Client: Jane\nPage: Hiraya\n699 (140)")]), \
+             patch.object(referrals, "lock_credit") as lock, \
+             patch.object(referrals, "enqueue_scheduled_action") as enqueue:
+            report = referrals.build_report(START.date(), START + dt.timedelta(hours=2),
+                                           {referrals.TRABAWHO_CHAT_ID}, lock=False)
+        self.assertIn("34.95", report)
+        lock.assert_not_called()
+        enqueue.assert_not_called()
+
+    def test_audit_route_requires_authentication_and_cannot_send_messages(self):
+        with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct",
+                                    "ALLOWED_CHAT_IDS": str(referrals.RECRUITS_CHAT)}), \
+             patch.object(referrals, "build_report", return_value="preview") as build, \
+             patch.object(app, "send_scheduled_action") as send:
+            code, _ = call_app("/api/referrals/audit")
+            self.assertEqual(code, 401)
+            build.assert_not_called()
+            code, payload = call_app("/api/referrals/audit",
+                                     headers={"Authorization": "Bearer correct"})
+        self.assertEqual(code, 200)
+        self.assertTrue(payload["read_only"])
+        self.assertEqual(build.call_args.kwargs, {"lock": False})
+        send.assert_not_called()
 
     def test_status_requires_authentication(self):
         with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct"}):

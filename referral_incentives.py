@@ -143,10 +143,19 @@ def observe_join(update: dict, allowed: set[int], now: dt.datetime) -> None:
     for user in message.get("new_chat_members") or []:
         if user.get("is_bot") or not user.get("id"):
             continue
-        insert_record(f"referral-join:{user['id']}:{chat_id}", {
+        key = f"referral-join:{user['id']}:{chat_id}"
+        payload = {
             "recruit_id": int(user["id"]), "work_chat_id": chat_id, "joined_at": joined.isoformat(),
             "join_message_id": message.get("message_id"),
-        }, now)
+        }
+        if not insert_record(key, payload, now):
+            # Out-of-order delivery may reveal an earlier join. The database
+            # predicate can move the clock earlier, never restart it later.
+            request("scheduled_actions?" + urllib.parse.urlencode({
+                "select": "id", "dedupe_key": f"eq.{key}",
+                "payload->>joined_at": f"gt.{joined.isoformat()}",
+            }), {"payload": payload, "updated_at": now.isoformat()},
+                method="PATCH", prefer="return=representation")
 
 
 def lock_credit(referral: dict, now: dt.datetime) -> None:
@@ -175,20 +184,30 @@ def _reference(row: dict, page: str) -> str | None:
     text = normalized_text(row.get("text") or "")
     if page == "Trabawho":
         pages = PAGE_RE.findall(text)
-        if len(set(p.casefold().strip() for p in pages)) == 1:
+        if len(set(p.casefold().strip() for p in pages)) > 1:
+            return None
+        if pages:
             page += ":" + pages[0].casefold().strip()
-    match = re.search(r"(?im)^\s*(?:order|invoice)(?:\s*(?:id|number|no\.?))?\s*[:#]\s*(\S+)\s*$", text)
-    if match:
-        return page.casefold() + ":order:" + match[1].casefold()
+    orders = re.findall(r"(?im)^[ \t]*(?:order|invoice)(?:[ \t]*(?:id|number|no\.?))?[ \t]*[:#][ \t]*([^\n]*)$", text)
+    if orders:
+        identities = {value.strip().casefold() for value in orders}
+        if len(identities) != 1 or identities.intersection({"", "unknown", "n/a", "none", "tbd", "-"}):
+            return None
+        return page.casefold() + ":order:" + orders[0].strip().casefold()
     # Explicit client labels avoid treating page names or amount lines as identities.
-    match = re.search(r"(?im)^\s*(?:client|customer)(?:\s+name)?\s*:\s*(.+)$", text)
-    if match:
-        name = " ".join(match[1].split()).casefold()
+    clients = re.findall(r"(?im)^[ \t]*(?:client|customer)(?:[ \t]+name)?[ \t]*:[ \t]*([^\n]*)$", text)
+    if clients:
+        names = {" ".join(value.split()).casefold() for value in clients}
+        if len(names) != 1:
+            return None
+        name = names.pop()
     elif not page.startswith("Trabawho"):
         name = client_name(text)
     else:
         name = None
-    return page.casefold() + ":client:" + name if name else None
+    return page.casefold() + ":client:" + name if name and name not in {
+        "unknown", "n/a", "none", "tbd", "client", "customer", "-"
+    } else None
 
 
 def sales_from_rows(chat_id: int, rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -198,8 +217,8 @@ def sales_from_rows(chat_id: int, rows: list[dict]) -> tuple[list[dict], list[di
         # Order IDs contain digits, but are metadata rather than monetary lines.
         originals = {r["message_id"]: r for r in rows}
         captions = [dict(r, text=re.sub(
-            r"(?im)^\s*(?:(?:order|invoice)(?:\s*(?:id|number|no\.?))?\s*[:#]|"
-            r"(?:client|customer)(?:\s+name)?\s*:|page(?:\s+name)?\s*:)[^\n]*$",
+            r"(?im)^[ \t]*(?:(?:order|invoice)(?:[ \t]*(?:id|number|no\.?))?[ \t]*[:#]|"
+            r"(?:client|customer)(?:[ \t]+name)?[ \t]*:|page(?:[ \t]+name)?[ \t]*:)[^\n]*$",
             "", normalized_text(r.get("text") or "")
         )) for r in rows]
         parsed = collect_receipts(captions, TRABAWHO["receipts"])
@@ -231,7 +250,8 @@ def sales_from_rows(chat_id: int, rows: list[dict]) -> tuple[list[dict], list[di
             row = entry["row"]
             reference = _reference(row, entry["page"])
             if not reference or not row.get("author_id") or re.search(
-                r"\b(?:unpaid|refund(?:ed)?|cancel(?:led|ed)?|not\s+paid|hindi\s+paid)\b",
+                r"\b(?:unpaid|refund(?:ed)?|cancel(?:led|ed)?|not\s+(?:yet\s+)?paid|"
+                r"hindi\s+(?:pa\s+)?paid|duplicate|void|correction|corrected)\b",
                 row.get("text") or "", re.I
             ):
                 review.append(row)
@@ -284,7 +304,7 @@ def calculate(referrals: list[dict], joins: list[dict], sales: list[dict],
     return result
 
 
-def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int]) -> str:
+def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int], *, lock: bool = True) -> str:
     referrals = [r["payload"] for r in read_records("referral-person:", {RECRUITS_CHAT})]
     joins = [r["payload"] for r in read_records("referral-join:", {RECRUITS_CHAT})]
     basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "").strip()
@@ -320,7 +340,7 @@ def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int]) -> str
     conflicts = [s for s in all_sales if len(owners[s["reference"]]) > 1]
     grouped = defaultdict(list)
     for recruit in result:
-        if recruit["eligible"] and recruit["commissioned_sales"]:
+        if lock and recruit["eligible"] and recruit["commissioned_sales"]:
             lock_credit(recruit, now)
         grouped[recruit["recruiter"]].append(recruit)
     report += [f"5% of {'sale amounts' if basis == 'gross' else 'recorded member earnings'} • first 8 sales",

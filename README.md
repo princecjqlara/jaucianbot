@@ -312,6 +312,12 @@ recorded receipts at delivery and post to Team Recuiters (`-1004389276294`),
 topic `2`, at 23:59 PHT. A dedicated `59 15 * * *` UTC dispatch supplements the
 existing schedules. Both target groups must be in `ALLOWED_CHAT_IDS`.
 `./remote_windows.ps1 referrals` shows the poll, policy, and report delivery state.
+`./remote_windows.ps1 referrals --audit` runs an authenticated, read-only preview
+against the same live sales sources. It sends no messages, queues no reports,
+and does not lock or change recruiter credit. Unpaid/correction variants and
+conflicting or placeholder order/client/page details are held for review.
+Out-of-order joining updates retain the earliest event and never extend the
+bonus window.
 
 Counts carry across the four configured Veo teams and Trabawho by Telegram
 user ID. Order IDs, or page-scoped client names when an ID is absent, prevent
