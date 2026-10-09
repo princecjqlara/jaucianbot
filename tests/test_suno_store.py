@@ -189,7 +189,7 @@ class SunoStoreTests(unittest.TestCase):
         self.assertEqual(len(contacts[0]["missing_details"]), 13)
         self.assertEqual(contacts[0]["stop_reason"], "details_collected")
 
-    def test_stopped_handoff_still_requires_threshold_and_positive_outcome(self):
+    def test_partial_handoff_requires_threshold_and_excludes_refused_clients(self):
         settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
                     "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
                     "SUNO_MIN_DETAILS_PERCENT": "26"}
@@ -204,6 +204,34 @@ class SunoStoreTests(unittest.TestCase):
                          "missing_details": [f"field-{n}" for n in range(count, 20)],
                          "contacts": {"pipeline_stage": stage}})
         with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            self.assertEqual(completed_suno_contacts(), [])
+
+    def test_26_percent_rule_survives_changes_in_chatbot_handoff_labels(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        rows = []
+        for index, (status, reason) in enumerate([
+            ("active", None), ("stopped", "details_collected"), ("stopped", "qualified"),
+            ("paused", "handoff_requested"), ("completed", "ready_for_editor"),
+        ]):
+            rows.append({"id": str(index), "name": "Client", "status": status, "stop_reason": reason,
+                         "details": {f"field-{n}": "answer" for n in range(6)},
+                         "missing_details": [f"field-{n}" for n in range(6, 20)],
+                         "contacts": {"pipeline_stage": "qualified"}})
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            result = completed_suno_contacts()
+        self.assertEqual([r["id"] for r in result], [str(i) for i in range(5)])
+        self.assertTrue(all(r["details_percent"] == 30 and not r["details_complete"] for r in result))
+
+    def test_explicit_refusal_cannot_be_overridden_by_complete_details(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        row = {"id": "excluded", "name": "Client", "status": "stopped", "stop_reason": "details_collected",
+               "details": {"name": "Client"}, "missing_details": [],
+               "contacts": {"pipeline_stage": "opted_out"}}
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=[row]):
             self.assertEqual(completed_suno_contacts(), [])
 
     def test_stopped_partial_handoffs_do_not_change_default_complete_only_mode(self):

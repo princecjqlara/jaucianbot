@@ -18,6 +18,10 @@ REQUIRED_SETTINGS = (
     "SUNO_CLIENT_DETAILS_COLUMN", "SUNO_COMPLETION_COLUMN", "SUNO_COMPLETION_VALUE",
 )
 DEFAULT_PAGE_NAME_COLUMN = "pages.name"
+BLOCKED_HANDOFF_STATES = {
+    "refusal", "opt_out", "opted_out", "not_qualified", "not_interested",
+    "declined", "cancelled", "canceled",
+}
 
 
 def details_progress(details: dict, missing: list) -> tuple[int, int]:
@@ -156,18 +160,19 @@ def completed_suno_contacts() -> list[dict]:
             collected_count, required_count = details_progress(details, missing) if (
                 isinstance(details, dict) and isinstance(missing, list)
             ) else (0, 0)
-            positive_handoff = (
-                row.get("status") == "active" and row.get(complete_col) is None
-                or row.get("status") == "stopped" and outcome in {"qualified", complete_value}
+            # Partial handoffs depend on collected data, not whether the chatbot
+            # is running or which positive completion label the site currently uses.
+            blocked = any(
+                str(value or "").strip().casefold() in BLOCKED_HANDOFF_STATES
+                for value in (row.get("status"), row.get(complete_col), mapped_value("contacts.pipeline_stage"))
             )
             partial = (
-                allow_partial and positive_handoff
-                and mapped_value("contacts.pipeline_stage") not in {"opted_out", "not_qualified"}
+                allow_partial and not blocked
                 and required_count > 0
                 and collected_count * 100 >= minimum_percent * required_count
             )
             if (
-                not (complete or partial)
+                not (complete or partial) or (allow_partial and blocked)
                 or client_id is None or not str(client_id).strip()
                 or not isinstance(name, str) or not name.strip()
                 or not isinstance(details, dict) or not details
