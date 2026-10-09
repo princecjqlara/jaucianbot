@@ -70,6 +70,14 @@ def send_scheduled_action(action: dict) -> dict:
                 result = telegram_call(operation, payload)
             except TelegramError as error:
                 detail = str(error).casefold()
+                if operation == "editMessageText" and "message to edit not found" in detail:
+                    # An admin may already have removed the old announcement.
+                    # Publish the instruction-only replacement exactly once via
+                    # its existing durable scheduled-action key.
+                    return telegram_call("sendMessage", {
+                        "chat_id": action["chat_id"], "text": source["text"],
+                        "disable_notification": bool(source.get("disable_notification", False)),
+                    })
                 already_done = (operation == "editMessageText" and "message is not modified" in detail
                                 or operation == "deleteMessage" and "message to delete not found" in detail)
                 if not already_done:

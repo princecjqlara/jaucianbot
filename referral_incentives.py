@@ -383,7 +383,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     if target:
         instructions["edit_message_id"] = int(target)
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
-        payload=instructions, scheduled_for=now, dedupe_key="referral-instructions:v2"))
+        payload=instructions, scheduled_for=now, dedupe_key="referral-instructions:v3"))
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
         payload={"question": "Who invited you to join the team? 👋\nPlease choose the person who invited you.",
                  "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,

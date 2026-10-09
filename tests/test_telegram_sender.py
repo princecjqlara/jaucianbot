@@ -94,6 +94,18 @@ class TelegramSenderTests(unittest.TestCase):
                 with self.assertRaises(TelegramError):
                     send_scheduled_action(action)
 
+    def test_missing_old_announcement_posts_instruction_only_replacement(self):
+        action = {"chat_id": -100123, "action_type": "message",
+                  "payload": {"text": "Work instructions", "edit_message_id": 516}}
+        with patch("telegram_sender.telegram_call", side_effect=[
+                TelegramError("Telegram HTTP 400: Bad Request: message to edit not found"),
+                {"message_id": 518}]) as call:
+            result = send_scheduled_action(action)
+        self.assertEqual(result["message_id"], 518)
+        self.assertNotIn("_telegram_operation", result)
+        self.assertEqual(call.call_args.args, ("sendMessage", {
+            "chat_id": -100123, "text": "Work instructions", "disable_notification": False}))
+
 
 if __name__ == "__main__":
     unittest.main()
