@@ -167,6 +167,54 @@ class SunoStoreTests(unittest.TestCase):
         ]):
             self.assertEqual([row["id"] for row in completed_suno_contacts()], ["2", "3"])
 
+    def test_stopped_handoffs_meeting_threshold_keep_missing_fields(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        rows = [
+            {"id": "lopez", "name": "Xī Nà Lopez", "status": "stopped", "stop_reason": "details_collected",
+             "details": {f"field-{n}": "answer" for n in range(7)},
+             "missing_details": [f"field-{n}" for n in range(7, 20)],
+             "contacts": {"pipeline_stage": "qualified"}},
+            {"id": "qualified", "name": "Qualified client", "status": "stopped", "stop_reason": "qualified",
+             "details": {f"field-{n}": "answer" for n in range(6)},
+             "missing_details": [f"field-{n}" for n in range(6, 20)],
+             "contacts": {"pipeline_stage": "qualified"}},
+        ]
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            contacts = completed_suno_contacts()
+        self.assertEqual([c["id"] for c in contacts], ["lopez", "qualified"])
+        self.assertEqual(contacts[0]["details_percent"], 35)
+        self.assertFalse(contacts[0]["details_complete"])
+        self.assertEqual(len(contacts[0]["missing_details"]), 13)
+        self.assertEqual(contacts[0]["stop_reason"], "details_collected")
+
+    def test_stopped_handoff_still_requires_threshold_and_positive_outcome(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected",
+                    "SUNO_MIN_DETAILS_PERCENT": "26"}
+        rows = []
+        for index, (reason, stage, count) in enumerate([
+            ("qualified", "qualified", 5), ("details_collected", "qualified", 5),
+            ("refusal", "qualified", 7), ("opt_out", "qualified", 7),
+            ("qualified", "not_qualified", 7), ("details_collected", "opted_out", 7),
+        ]):
+            rows.append({"id": str(index), "name": "Client", "status": "stopped", "stop_reason": reason,
+                         "details": {f"field-{n}": "answer" for n in range(count)},
+                         "missing_details": [f"field-{n}" for n in range(count, 20)],
+                         "contacts": {"pipeline_stage": stage}})
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            self.assertEqual(completed_suno_contacts(), [])
+
+    def test_stopped_partial_handoffs_do_not_change_default_complete_only_mode(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected"}
+        rows = [{"id": "lopez", "name": "Xī Nà Lopez", "status": "stopped",
+                 "stop_reason": "details_collected", "details": {"name": "Xī Nà Lopez"},
+                 "missing_details": ["package", "language", "duration"], "contacts": {"pipeline_stage": "qualified"}}]
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            self.assertEqual(completed_suno_contacts(), [])
+
     def test_progress_dedupes_names_and_does_not_count_blank_or_still_missing_values(self):
         self.assertEqual(details_progress({"Customer name": "A", "LANGUAGE": "Tagalog", " mood ": " ",
                                            "Package": "old", "language": "Tagalog"}, [" package ", "Mood", "Duration"]), (2, 5))

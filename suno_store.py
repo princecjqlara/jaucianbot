@@ -156,9 +156,12 @@ def completed_suno_contacts() -> list[dict]:
             collected_count, required_count = details_progress(details, missing) if (
                 isinstance(details, dict) and isinstance(missing, list)
             ) else (0, 0)
+            positive_handoff = (
+                row.get("status") == "active" and row.get(complete_col) is None
+                or row.get("status") == "stopped" and outcome in {"qualified", complete_value}
+            )
             partial = (
-                allow_partial and row.get("status") == "active"
-                and row.get(complete_col) is None
+                allow_partial and positive_handoff
                 and mapped_value("contacts.pipeline_stage") not in {"opted_out", "not_qualified"}
                 and required_count > 0
                 and collected_count * 100 >= minimum_percent * required_count
@@ -181,7 +184,7 @@ def completed_suno_contacts() -> list[dict]:
                 "page_name": (str(mapped_value(page_name_col)).strip()
                                if page_name_col and mapped_value(page_name_col) else None),
                 "last_interaction_at": mapped_value(optional["SUNO_CLIENT_DATE_COLUMN"]) if optional["SUNO_CLIENT_DATE_COLUMN"] else None,
-                "stop_reason": "details_collected" if complete else None,
+                "stop_reason": row.get(complete_col),
                 "pipeline_stage": mapped_value("contacts.pipeline_stage") if allow_partial else None,
                 "details_complete": bool(complete), "missing_details": missing or [],
                 "details_collected_count": collected_count, "details_required_count": required_count,
