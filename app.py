@@ -50,7 +50,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-09.04"
+AUTOMATION_VERSION = "2026-10-09.05"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -339,6 +339,13 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if int(action["chat_id"]) == referral_incentives.RECRUITS_CHAT and (
+                action.get("dedupe_key") == "referral-rules:v1"
+                or action["payload"].get("referral_poll") and action["payload"].get("referral_privacy_version", 1) < 2
+            ):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete recruiter disclosure was not suppressed")
+                continue
             if action["payload"].get("referral_report_date"):
                 referral_incentives.prepare_report(action, now, allowed)
             if action["payload"].get("referral_poll") and referral_incentives.poll_registered(int(action["id"])):
@@ -405,7 +412,10 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
                 raise RuntimeError("schedule was not finalized")
             sent += 1
             try:
-                save_update({"message": message}, allowed)
+                if message.get("_telegram_operation") == "editMessageText" and message.get("chat"):
+                    save_update({"edited_message": message}, allowed)
+                elif not message.get("_telegram_operation"):
+                    save_update({"message": message}, allowed)
             except Exception as archive_error:
                 print(f"Sent message archive failed: {type(archive_error).__name__}")
         except Exception as error:

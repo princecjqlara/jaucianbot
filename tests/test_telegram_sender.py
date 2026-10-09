@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from telegram_sender import send_scheduled_action
+from telegram_sender import TelegramError, send_scheduled_action
 
 
 class TelegramSenderTests(unittest.TestCase):
@@ -63,6 +63,36 @@ class TelegramSenderTests(unittest.TestCase):
         with patch("telegram_sender.telegram_call", return_value={"message_id": 12}) as call:
             send_scheduled_action(action)
         self.assertEqual(call.call_args.args[1]["text"], "Reply WORKING")
+
+    def test_edits_existing_instruction_message_without_new_post(self):
+        action = {"chat_id": -100123, "action_type": "message",
+                  "payload": {"text": "Instructions only", "edit_message_id": 516}}
+        with patch("telegram_sender.telegram_call", return_value={"message_id": 516}) as call:
+            result = send_scheduled_action(action)
+        call.assert_called_once_with("editMessageText", {
+            "chat_id": -100123, "message_id": 516, "text": "Instructions only"})
+        self.assertEqual(result["_telegram_operation"], "editMessageText")
+
+    def test_deletes_obsolete_poll_without_posting_placeholder(self):
+        action = {"chat_id": -100123, "action_type": "message",
+                  "payload": {"text": "Placeholder", "delete_message_id": 515}}
+        with patch("telegram_sender.telegram_call", return_value={"deleted": True}) as call:
+            result = send_scheduled_action(action)
+        call.assert_called_once_with("deleteMessage", {"chat_id": -100123, "message_id": 515})
+        self.assertEqual(result["message_id"], 515)
+        self.assertEqual(result["_telegram_operation"], "deleteMessage")
+
+    def test_message_operation_retries_accept_only_already_done_errors(self):
+        for field, error in [
+            ("edit_message_id", "Telegram HTTP 400: message is not modified"),
+            ("delete_message_id", "Telegram HTTP 400: message to delete not found")]:
+            action = {"chat_id": -100123, "action_type": "message",
+                      "payload": {"text": "Instructions", field: 515}}
+            with patch("telegram_sender.telegram_call", side_effect=TelegramError(error)):
+                self.assertEqual(send_scheduled_action(action)["message_id"], 515)
+            with patch("telegram_sender.telegram_call", side_effect=TelegramError("Telegram HTTP 403: forbidden")):
+                with self.assertRaises(TelegramError):
+                    send_scheduled_action(action)
 
 
 if __name__ == "__main__":

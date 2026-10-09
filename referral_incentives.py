@@ -22,6 +22,18 @@ RECRUITERS = ("Farah", "Athena", "Grace Canites", "Elle", "Shan", "Sen",
               "Pogi Michael", "Nami", "Melo", "Mark Joshua")
 WORK_TEAMS = set(GROUPS) | {TRABAWHO_CHAT_ID}
 RATE = Decimal("0.05")
+PUBLIC_INSTRUCTIONS = (
+    "👋 Welcome to the team!\n\n"
+    "Please answer the poll and choose the person who invited you. Select one name only.\n\n"
+    "Once you're added to a work team:\n"
+    "• Answer the availability polls and select the hours you can work.\n"
+    "• Follow the client-assignment instructions and reply promptly when taking a client.\n"
+    "• Post completed sales in your team's receipt or Done Deals topic. "
+    "Include the correct page, client name or order ID, and payment details.\n"
+    "• Keep your client updated and confirm delivery when the work is sent.\n\n"
+    "If you need help or your inviter isn't listed, ask a team admin. "
+    "Thank you, and welcome aboard! 💛"
+)
 
 
 def enabled() -> bool:
@@ -62,6 +74,7 @@ def register_poll(action: dict, message: dict, now: dt.datetime) -> bool:
     return insert_record(f"referral-poll:{action['id']}", {
         "referral_poll_id": message["poll"]["id"], "options": list(RECRUITERS),
         "telegram_message_id": message["message_id"],
+        "privacy_version": action["payload"].get("referral_privacy_version", 1),
     }, now) or poll_registered(int(action["id"]))
 
 
@@ -338,6 +351,8 @@ def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int]) -> str
 
 
 def prepare_report(action: dict, now: dt.datetime, allowed: set[int]) -> None:
+    if action.get("chat_id") != SHARES_CHAT or action["payload"].get("message_thread_id") != SHARES_THREAD:
+        raise ValueError("Recruiter shares require the private reporting topic")
     date = dt.date.fromisoformat(action["payload"]["referral_report_date"])
     chunks = split_message(build_report(date, now, allowed))
     action["payload"]["text"] = chunks[0]
@@ -350,25 +365,30 @@ def prepare_report(action: dict, now: dt.datetime, allowed: set[int]) -> None:
 def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     if not enabled() or RECRUITS_CHAT not in allowed:
         return 0
-    queued = int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
-        payload={"question": "Who invited you to join the team? 👋\nChoose your recruiter so we can credit their referral incentive.",
-                 "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,
-                 "disable_notification": False, "referral_poll": True},
-        scheduled_for=now, dedupe_key="referral-recruiter-poll:v1"))
+    queued = 0
+    # Replace the old poll because Telegram cannot edit a posted poll question.
+    for record in read_records("referral-poll:", {RECRUITS_CHAT}):
+        old = record["payload"]
+        if old.get("privacy_version", 1) < 2:
+            target = int(old["telegram_message_id"])
+            queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
+                payload={"text": "Replacing the team registration poll.", "delete_message_id": target},
+                scheduled_for=now, dedupe_key=f"referral-public-poll-remove:{target}"))
+    old_rules = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "telegram_message_id", "chat_id": f"eq.{RECRUITS_CHAT}",
+        "dedupe_key": "eq.referral-rules:v1", "limit": 1,
+    })) or []
+    target = old_rules[0].get("telegram_message_id") if old_rules else None
+    instructions = {"text": PUBLIC_INSTRUCTIONS, "disable_notification": False}
+    if target:
+        instructions["edit_message_id"] = int(target)
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
-        payload={"text": (
-            "🌟 Team referral rewards are here!\n\n"
-            "New members, please choose the person who invited you in the recruiter poll. 💛\n\n"
-            "Your recruiter earns 5% of your first 8 paid client sales, with no expiry.\n"
-            "Finish those 8 sales within 3 days and unlock another 8 commissioned sales—"
-            "up to 16 in total! The bonus sales have no expiry too.\n\n"
-            "The 3 days start when you join a work team or first vote in this poll, whichever comes first. "
-            "Changing your vote won't restart the timer.\n\n"
-            "Daily shares will be posted in Team Recuiters at 11:59 PM, Philippine time. "
-            "Please include the client name or order ID in sale receipts so each sale can be credited accurately.\n\n"
-            "Thank you for bringing great people into our teams! 🙌"
-        ), "disable_notification": False},
-        scheduled_for=now, dedupe_key="referral-rules:v1"))
+        payload=instructions, scheduled_for=now, dedupe_key="referral-instructions:v2"))
+    queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
+        payload={"question": "Who invited you to join the team? 👋\nPlease choose the person who invited you.",
+                 "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,
+                 "disable_notification": False, "referral_poll": True, "referral_privacy_version": 2},
+        scheduled_for=now, dedupe_key="referral-recruiter-poll:v2"))
     if SHARES_CHAT in allowed:
         today = now.astimezone(MANILA).date()
         # Durable scheduled reports are refreshed from actual sales at delivery time.
@@ -400,5 +420,6 @@ def status(allowed: set[int], now: dt.datetime) -> dict:
             "base_sales_expire": False, "bonus_sales_expire": False,
             "commission_basis": basis or None, "window_start": window or None,
             "policy_confirmed": basis in {"gross", "earnings"} and window == "join_or_vote",
-            "polls": [{"message_id": r["payload"]["telegram_message_id"]} for r in polls],
+            "polls": [{"message_id": r["payload"]["telegram_message_id"]}
+                      for r in polls if r["payload"].get("privacy_version", 1) >= 2],
             "recorded_referrals": len(people), "reports": reports or []}

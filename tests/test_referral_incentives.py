@@ -208,10 +208,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(insert.call_args.args[1]["joined_at"], START.isoformat())
 
     def test_poll_and_reports_use_requested_topics_and_pht_time(self):
-        with patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue:
+        with patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue, \
+             patch.object(referrals, "read_records", return_value=[]), \
+             patch.object(referrals, "request", return_value=[]):
             self.assertEqual(referrals.queue_automation(START, ALLOWED), 4)
         calls = [call.kwargs for call in enqueue.call_args_list]
-        poll = calls[0]
+        poll = next(c for c in calls if c["action_type"] == "poll")
         self.assertFalse(poll["payload"]["is_anonymous"])
         self.assertFalse(poll["payload"]["allows_multiple_answers"])
         self.assertEqual(poll["payload"]["options"], list(referrals.RECRUITERS))
@@ -220,7 +222,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(reports), 2)
         self.assertEqual(reports[0]["scheduled_for"].strftime("%H:%M"), "15:59")
         self.assertEqual(reports[0]["payload"]["message_thread_id"], 2)
-        self.assertIn("no expiry", calls[1]["payload"]["text"])
+        public_text = "\n".join(c["payload"].get("text", "") + c["payload"].get("question", "")
+                                for c in calls if c["chat_id"] == referrals.RECRUITS_CHAT)
+        for word in ["5%", "commission", "credited", "incentive", "bonus", "earn", "shares"]:
+            self.assertNotIn(word, public_text.lower())
+        self.assertIn("Select one name", public_text)
 
     def test_unknown_poll_falls_back_to_existing_poll_handlers(self):
         with patch.object(referrals, "poll_context", return_value=None):
@@ -228,7 +234,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_registered_poll_is_not_resent_on_finalize_retry(self):
         action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT,
-                  "action_type": "poll", "payload": {"referral_poll": True}}
+                  "action_type": "poll", "payload": {"referral_poll": True, "referral_privacy_version": 2}}
         with patch.object(app, "claim_scheduled_actions", return_value=[action]), \
              patch.object(referrals, "poll_registered", return_value=True), \
              patch.object(app, "finish_scheduled_action", return_value=True), \
@@ -237,7 +243,8 @@ class WorkflowTests(unittest.TestCase):
         send.assert_not_called()
 
     def test_report_refreshed_at_delivery_and_parts_have_stable_keys(self):
-        action = {"payload": {"referral_report_date": "2026-10-09"}}
+        action = {"chat_id": referrals.SHARES_CHAT, "payload": {
+            "referral_report_date": "2026-10-09", "message_thread_id": referrals.SHARES_THREAD}}
         with patch.object(referrals, "build_report", return_value="fresh report") as build, \
              patch.object(referrals, "split_message", return_value=["fresh", "details"]), \
              patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue:
@@ -245,6 +252,58 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(action["payload"]["text"], "fresh")
         build.assert_called_once_with(START.date(), START, ALLOWED)
         self.assertEqual(enqueue.call_args.kwargs["dedupe_key"], "referral-report:2026-10-09:part-1")
+
+    def test_old_public_disclosures_are_replaced_with_instructions(self):
+        with patch.object(referrals, "read_records", return_value=[{
+                "payload": {"telegram_message_id": 515}}]), \
+             patch.object(referrals, "request", return_value=[{"telegram_message_id": 516}]), \
+             patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue:
+            referrals.queue_automation(START, ALLOWED)
+        calls = [c.kwargs for c in enqueue.call_args_list]
+        self.assertEqual(calls[0]["payload"]["delete_message_id"], 515)
+        self.assertEqual(calls[1]["payload"]["edit_message_id"], 516)
+        self.assertEqual(calls[1]["payload"]["text"], referrals.PUBLIC_INSTRUCTIONS)
+        self.assertEqual(calls[2]["dedupe_key"], "referral-recruiter-poll:v2")
+
+    def test_old_pending_disclosure_cannot_be_sent_after_privacy_update(self):
+        actions = [
+            {"id": 1, "chat_id": referrals.RECRUITS_CHAT, "action_type": "message",
+             "dedupe_key": "referral-rules:v1", "payload": {"text": "5% earnings"}},
+            {"id": 2, "chat_id": referrals.RECRUITS_CHAT, "action_type": "poll",
+             "payload": {"referral_poll": True}},
+        ]
+        with patch.object(app, "claim_scheduled_actions", return_value=actions), \
+             patch.object(app, "finish_scheduled_action", return_value=True), \
+             patch.object(app, "send_scheduled_action") as send:
+            self.assertEqual(app.deliver_due_actions(ALLOWED), (2, 0, 0))
+        send.assert_not_called()
+
+    def test_private_report_cannot_be_delivered_in_recruits_or_wrong_topic(self):
+        for chat, topic in [(referrals.RECRUITS_CHAT, 2), (referrals.SHARES_CHAT, 1),
+                            (referrals.SHARES_CHAT, None), (None, 2)]:
+            with patch.object(referrals, "build_report") as build:
+                with self.assertRaises(ValueError):
+                    referrals.prepare_report({"chat_id": chat, "payload": {
+                        "message_thread_id": topic, "referral_report_date": "2026-10-09"}}, START, ALLOWED)
+            build.assert_not_called()
+
+    def test_report_combines_all_five_teams_by_stable_member_id(self):
+        def deal_rows(chat, *args):
+            config = referrals.GROUPS[chat]
+            page = next(iter(config["pages"].values()))
+            return [dict(row(f"Client: Client {chat}\nOrder ID: {chat}\nPage: {page}\nPD: 1000\nPaid",
+                             thread=config["done"]), author_name="Changed Display Name")]
+        with patch.object(referrals, "read_records", side_effect=[[{"payload": PERSON}], []]), \
+             patch.object(referrals, "activity_messages", side_effect=deal_rows) as veo_read, \
+             patch.object(referrals, "receipt_messages", return_value=[
+                 row("Client: Suno Client\nOrder ID: Suno123\nPage: Hiraya\n1000 (200)")]) as suno_read, \
+             patch.object(referrals, "lock_credit"):
+            report = referrals.build_report(START.date(), START + dt.timedelta(hours=2), ALLOWED)
+        self.assertEqual({c.args[0] for c in veo_read.call_args_list}, set(referrals.GROUPS))
+        self.assertEqual(veo_read.call_count, 4)
+        suno_read.assert_called_once()
+        self.assertIn("5/8 commissioned sales", report)
+        self.assertIn("250", report)
 
     def test_report_with_no_votes_has_all_names_and_no_expiry_rule(self):
         with patch.object(referrals, "read_records", return_value=[]):

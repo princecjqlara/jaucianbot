@@ -36,6 +36,8 @@ def telegram_call(method: str, payload: dict) -> dict:
         raise TelegramError(f"Telegram HTTP {error.code}: {description}") from error
     except urllib.error.URLError as error:
         raise TelegramError(f"Telegram network error ({type(error.reason).__name__})") from error
+    if method == "deleteMessage" and isinstance(result, dict) and result.get("ok") and result.get("result") is True:
+        return {"deleted": True}
     if not isinstance(result, dict) or not result.get("ok") or not isinstance(result.get("result"), dict):
         description = result.get("description", "request failed") if isinstance(result, dict) else "invalid response"
         raise TelegramError(f"Telegram API error: {description}")
@@ -55,6 +57,25 @@ def send_scheduled_action(action: dict) -> dict:
     if source.get("message_thread_id") is not None and not is_trabawho_general:
         common["message_thread_id"] = source["message_thread_id"]
     if action_type == "message":
+        for operation, field in (("deleteMessage", "delete_message_id"), ("editMessageText", "edit_message_id")):
+            if source.get(field) is None:
+                continue
+            target = source[field]
+            if isinstance(target, bool) or not isinstance(target, int) or target <= 0:
+                raise TelegramError("Invalid message operation target")
+            payload = {"chat_id": action["chat_id"], "message_id": target}
+            if operation == "editMessageText":
+                payload["text"] = source["text"]
+            try:
+                result = telegram_call(operation, payload)
+            except TelegramError as error:
+                detail = str(error).casefold()
+                already_done = (operation == "editMessageText" and "message is not modified" in detail
+                                or operation == "deleteMessage" and "message to delete not found" in detail)
+                if not already_done:
+                    raise
+                result = {}
+            return {**result, "message_id": target, "_telegram_operation": operation}
         text = None
         if action.get("sent_at"):
             text = source.get("freebie_reminder_text") or source.get("new_client_reminder_text")

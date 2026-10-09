@@ -295,6 +295,13 @@ the recruit's first 8 identifiable orders, with no expiry. Completing those
 vote unlocks 8 additional commissioned orders (16 total), also with no expiry.
 Withdrawing or changing a vote never restarts that clock. Recruiter credit is
 locked after the first commissioned sale is calculated in a report.
+Veo Recruits receives only the inviter-selection poll and onboarding/work
+instructions. Commission rates, bonus rules, credited sales and share amounts
+are sent exclusively to the recruiter report topic. The previous public rules
+post is edited and its incentive-worded poll is replaced with a neutral poll;
+stored attribution and original vote dates are preserved. Pending legacy
+disclosures are suppressed, and share-report delivery requires the exact
+recruiter chat and topic.
 
 `REFERRAL_INCENTIVES_ENABLED=true`, `REFERRAL_START_DATE`,
 `REFERRAL_COMMISSION_BASIS=gross`, and
