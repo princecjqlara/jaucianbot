@@ -211,8 +211,12 @@ after verification. Disabled sources suppress queued assignment reminders as
 well. Contact identities include the Suno project and actual page ID, and states
 with outstanding `missing_details` are excluded from complete clients.
 
-Trabawho production uses `SUNO_MIN_DETAILS_PERCENT=26`: an active Suno chatbot
-state may be assigned once at least 26% of its required fields are collected.
+Trabawho production uses `SUNO_MIN_DETAILS_PERCENT=26`: a Suno client may be
+assigned once at least 26% of its required fields are collected, even when the
+chatbot is stopped or the client still has missing fields. Eligibility uses the
+collected data rather than requiring an active status or a particular positive
+handoff label. For example, a stopped `details_collected` contact with 7 collected
+fields and 13 missing fields qualifies at 35%; its brief remains partial.
 The total is the unique union of collected and missing field names; blanks and
 fields still listed as missing do not count as collected. Assignments show all
 collected information and the remaining fields. Refused and opted-out leads
