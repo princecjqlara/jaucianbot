@@ -386,8 +386,21 @@ def prepare_report(action: dict, now: dt.datetime, allowed: set[int]) -> None:
             scheduled_for=now, dedupe_key=f"referral-report:{date.isoformat()}:part-{part}")
 
 
+def setup_complete(key: str) -> bool:
+    return bool(request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id", "dedupe_key": f"eq.{key}", "limit": 1,
+    })))
+
+
 def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     if not enabled() or RECRUITS_CHAT not in allowed:
+        return 0
+    today = now.astimezone(MANILA).date()
+    # Scheduling is daily; pending deliveries and replies still run independently.
+    # Include the reporting approval so adding it during a day queues its reports.
+    setup_key = (f"referral-setup:v1:{RECRUITS_THREAD}:"
+                 f"{SHARES_CHAT if SHARES_CHAT in allowed else 0}:{today.isoformat()}")
+    if setup_complete(setup_key):
         return 0
     queued = 0
     # Replace the old poll because Telegram cannot edit a posted poll question.
@@ -424,7 +437,6 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
                  "message_thread_id": RECRUITS_THREAD},
         scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v3:{RECRUITS_THREAD}"))
     if SHARES_CHAT in allowed:
-        today = now.astimezone(MANILA).date()
         # Durable scheduled reports are refreshed from actual sales at delivery time.
         for date in (today - dt.timedelta(days=1), today, today + dt.timedelta(days=1)):
             if date < start_date():
@@ -434,6 +446,9 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
                 payload={"text": "Preparing today's recruiter shares…", "message_thread_id": SHARES_THREAD,
                          "disable_notification": False, "referral_report_date": date.isoformat()},
                 scheduled_for=at, dedupe_key=f"referral-report:{date.isoformat()}"))
+    # Write only after every scheduling operation succeeds. Partial failures
+    # retry on the next dispatch using the existing action deduplication keys.
+    insert_record(setup_key, {"setup_date": today.isoformat()}, now)
     return queued
 
 

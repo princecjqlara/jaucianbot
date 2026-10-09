@@ -187,6 +187,9 @@ class WorkflowTests(unittest.TestCase):
         env = patch.dict(os.environ, ENV)
         env.start()
         self.addCleanup(env.stop)
+        complete = patch.object(referrals, "setup_complete", return_value=False)
+        complete.start()
+        self.addCleanup(complete.stop)
 
     def answer(self, selected, number=11):
         return {"update_id": number, "poll_answer": {"poll_id": "poll",
@@ -265,6 +268,59 @@ class WorkflowTests(unittest.TestCase):
         for word in ["5%", "commission", "credited", "incentive", "bonus", "earn", "shares"]:
             self.assertNotIn(word, public_text.lower())
         self.assertIn("Select one name", public_text)
+
+    def test_completed_daily_setup_skips_expensive_reads_and_requeues(self):
+        with patch.object(referrals, "setup_complete", return_value=True), \
+             patch.object(referrals, "read_records") as read, \
+             patch.object(referrals, "enqueue_scheduled_action") as enqueue, \
+             patch.object(referrals, "insert_record") as insert:
+            self.assertEqual(referrals.queue_automation(START, ALLOWED), 0)
+        read.assert_not_called()
+        enqueue.assert_not_called()
+        insert.assert_not_called()
+
+    def test_partial_setup_failure_does_not_mark_day_complete(self):
+        with patch.object(referrals, "read_records", return_value=[]), \
+             patch.object(referrals, "request", return_value=[]), \
+             patch.object(referrals, "enqueue_scheduled_action", side_effect=[
+                 True, RuntimeError("queue unavailable")]), \
+             patch.object(referrals, "insert_record") as insert:
+            with self.assertRaisesRegex(RuntimeError, "queue unavailable"):
+                referrals.queue_automation(START, ALLOWED)
+        insert.assert_not_called()
+
+    def test_setup_marker_written_after_all_scheduling_and_scope_changes(self):
+        events = []
+        with patch.object(referrals, "read_records", return_value=[]), \
+             patch.object(referrals, "request", return_value=[]), \
+             patch.object(referrals, "setup_complete", return_value=False) as complete, \
+             patch.object(referrals, "enqueue_scheduled_action",
+                          side_effect=lambda **kwargs: events.append("queue") or True), \
+             patch.object(referrals, "insert_record",
+                          side_effect=lambda *args: events.append("marker") or True):
+            referrals.queue_automation(START, ALLOWED - {referrals.SHARES_CHAT})
+            first_key = complete.call_args.args[0]
+            self.assertEqual(events, ["queue", "queue", "marker"])
+            events.clear()
+            referrals.queue_automation(START, ALLOWED)
+            second_key = complete.call_args.args[0]
+            self.assertEqual(events, ["queue", "queue", "queue", "queue", "marker"])
+            referrals.queue_automation(START + dt.timedelta(days=1), ALLOWED)
+            third_key = complete.call_args.args[0]
+        self.assertNotEqual(first_key, second_key)
+        self.assertNotEqual(second_key, third_key)
+
+    def test_dispatch_still_delivers_due_actions_after_setup_is_complete(self):
+        with patch.dict(os.environ, {"ALLOWED_CHAT_IDS": str(referrals.RECRUITS_CHAT)}, clear=True), \
+             patch.dict(os.environ, ENV), \
+             patch.object(referrals, "setup_complete", return_value=True), \
+             patch.object(app, "run_due_daily_automation", return_value=0), \
+             patch.object(app, "deliver_due_actions", return_value=(1, 1, 0)) as deliver:
+            code, payload = call_app("/api/cron/dispatch")
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["queued"], 0)
+        self.assertEqual(payload["sent"], 1)
+        deliver.assert_called_once()
 
     def test_unknown_poll_falls_back_to_existing_poll_handlers(self):
         with patch.object(referrals, "poll_context", return_value=None):

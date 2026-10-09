@@ -319,6 +319,15 @@ conflicting or placeholder order/client/page details are held for review.
 Out-of-order joining updates retain the earliest event and never extend the
 bonus window.
 
+Recruiter poll/instruction maintenance and report scheduling have a durable
+daily setup checkpoint. After every scheduling operation succeeds, later
+dispatches perform one checkpoint read instead of repeating setup reads and
+writes. A partial failure retries on the next dispatch. Approval changes and
+the next Philippine day trigger setup again. Due deliveries, client checks
+and reply processing continue on every normal dispatch. Bump the
+`referral-setup` key version whenever changing poll/instruction scheduling
+keys so a same-day deployment does not skip the new setup.
+
 Counts carry across the four configured Veo teams and Trabawho by Telegram
 user ID. Order IDs, or page-scoped client names when an ID is absent, prevent
 reposts from consuming another commissioned sale. Include an order ID for
