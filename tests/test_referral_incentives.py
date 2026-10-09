@@ -217,7 +217,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(poll["payload"]["is_anonymous"])
         self.assertFalse(poll["payload"]["allows_multiple_answers"])
         self.assertEqual(poll["payload"]["options"], list(referrals.RECRUITERS))
-        self.assertNotIn("message_thread_id", poll["payload"])
+        self.assertEqual(poll["payload"]["message_thread_id"], referrals.RECRUITS_THREAD)
+        self.assertIn("Not starting yet? Please don't vote.", poll["payload"]["question"])
+        self.assertIn("just before your first sale", poll["payload"]["question"])
         reports = [call for call in calls if call["chat_id"] == referrals.SHARES_CHAT]
         self.assertEqual(len(reports), 2)
         self.assertEqual(reports[0]["scheduled_for"].strftime("%H:%M"), "15:59")
@@ -234,7 +236,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_registered_poll_is_not_resent_on_finalize_retry(self):
         action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT,
-                  "action_type": "poll", "payload": {"referral_poll": True, "referral_privacy_version": 2}}
+                  "action_type": "poll", "payload": {"referral_poll": True, "referral_privacy_version": 3,
+                                                   "message_thread_id": referrals.RECRUITS_THREAD}}
         with patch.object(app, "claim_scheduled_actions", return_value=[action]), \
              patch.object(referrals, "poll_registered", return_value=True), \
              patch.object(app, "finish_scheduled_action", return_value=True), \
@@ -254,16 +257,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(enqueue.call_args.kwargs["dedupe_key"], "referral-report:2026-10-09:part-1")
 
     def test_old_public_disclosures_are_replaced_with_instructions(self):
-        with patch.object(referrals, "read_records", return_value=[{
-                "payload": {"telegram_message_id": 515}}]), \
+        with patch.object(referrals, "read_records", side_effect=[
+                [{"payload": {"telegram_message_id": 517, "privacy_version": 2}}],
+                [{"telegram_message_id": 518, "payload": {}},
+                 {"telegram_message_id": 519, "payload": {"message_thread_id": referrals.RECRUITS_THREAD}}]]), \
              patch.object(referrals, "request", return_value=[{"telegram_message_id": 516}]), \
              patch.object(referrals, "enqueue_scheduled_action", return_value=True) as enqueue:
             referrals.queue_automation(START, ALLOWED)
         calls = [c.kwargs for c in enqueue.call_args_list]
-        self.assertEqual(calls[0]["payload"]["delete_message_id"], 515)
-        self.assertEqual(calls[1]["payload"]["edit_message_id"], 516)
-        self.assertEqual(calls[1]["payload"]["text"], referrals.PUBLIC_INSTRUCTIONS)
-        self.assertEqual(calls[2]["dedupe_key"], "referral-recruiter-poll:v2")
+        self.assertEqual(calls[0]["payload"]["delete_message_id"], 517)
+        self.assertEqual(calls[1]["payload"]["delete_message_id"], 516)
+        self.assertEqual(calls[2]["payload"]["delete_message_id"], 518)
+        self.assertEqual(calls[3]["payload"]["text"], referrals.PUBLIC_INSTRUCTIONS)
+        self.assertEqual(calls[3]["payload"]["message_thread_id"], referrals.RECRUITS_THREAD)
+        self.assertEqual(calls[4]["dedupe_key"], "referral-recruiter-poll:v3:510")
 
     def test_old_pending_disclosure_cannot_be_sent_after_privacy_update(self):
         actions = [

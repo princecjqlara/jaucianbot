@@ -288,7 +288,8 @@ webhook. The existing authenticated Windows helper supports
 teams when startup is explicitly requested.
 
 Recruiter incentives use a non-anonymous, single-answer poll in Veo Recruits
-(`-1003555676168`, General). New members select their recruiter from the ten
+(`-1003555676168`, topic `510`). Members who have not started should wait;
+they vote just before their first sale and select their inviter from the ten
 configured names. The recruiter receives 5% of recorded paid sale amounts on
 the recruit's first 8 identifiable orders, with no expiry. Completing those
 8 within 72 hours of the earliest recorded work-team join or first recruiter
@@ -298,7 +299,8 @@ locked after the first commissioned sale is calculated in a report.
 Veo Recruits receives only the inviter-selection poll and onboarding/work
 instructions. Commission rates, bonus rules, credited sales and share amounts
 are sent exclusively to the recruiter report topic. The previous public rules
-post is edited and its incentive-worded poll is replaced with a neutral poll;
+post and General-topic poll are removed; the neutral poll and instructions go
+in topic `510`;
 stored attribution and original vote dates are preserved. Pending legacy
 disclosures are suppressed, and share-report delivery requires the exact
 recruiter chat and topic.

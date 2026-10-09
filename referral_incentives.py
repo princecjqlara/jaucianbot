@@ -16,6 +16,7 @@ from hourly_availability import read_records
 from receipt_parser import collect_receipts
 
 RECRUITS_CHAT = -1003555676168
+RECRUITS_THREAD = 510
 SHARES_CHAT = -1004389276294
 SHARES_THREAD = 2
 RECRUITERS = ("Farah", "Athena", "Grace Canites", "Elle", "Shan", "Sen",
@@ -24,7 +25,9 @@ WORK_TEAMS = set(GROUPS) | {TRABAWHO_CHAT_ID}
 RATE = Decimal("0.05")
 PUBLIC_INSTRUCTIONS = (
     "👋 Welcome to the team!\n\n"
-    "Please answer the poll and choose the person who invited you. Select one name only.\n\n"
+    "If you're not starting yet, please don't vote. 💛\n"
+    "When you're ready to start, vote just before your first sale and choose the person who invited you. "
+    "Select one name only.\n\n"
     "Once you're added to a work team:\n"
     "• Answer the availability polls and select the hours you can work.\n"
     "• Follow the client-assignment instructions and reply promptly when taking a client.\n"
@@ -75,6 +78,7 @@ def register_poll(action: dict, message: dict, now: dt.datetime) -> bool:
         "referral_poll_id": message["poll"]["id"], "options": list(RECRUITERS),
         "telegram_message_id": message["message_id"],
         "privacy_version": action["payload"].get("referral_privacy_version", 1),
+        "thread_id": action["payload"].get("message_thread_id"),
     }, now) or poll_registered(int(action["id"]))
 
 
@@ -369,7 +373,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     # Replace the old poll because Telegram cannot edit a posted poll question.
     for record in read_records("referral-poll:", {RECRUITS_CHAT}):
         old = record["payload"]
-        if old.get("privacy_version", 1) < 2:
+        if old.get("privacy_version", 1) < 3 or old.get("thread_id") != RECRUITS_THREAD:
             target = int(old["telegram_message_id"])
             queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
                 payload={"text": "Replacing the team registration poll.", "delete_message_id": target},
@@ -379,16 +383,26 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
         "dedupe_key": "eq.referral-rules:v1", "limit": 1,
     })) or []
     target = old_rules[0].get("telegram_message_id") if old_rules else None
-    instructions = {"text": PUBLIC_INSTRUCTIONS, "disable_notification": False}
     if target:
-        instructions["edit_message_id"] = int(target)
+        queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
+            payload={"text": "Removing the previous team instructions.", "delete_message_id": int(target)},
+            scheduled_for=now, dedupe_key=f"referral-public-instruction-remove:{target}"))
+    for record in read_records("referral-instructions:", {RECRUITS_CHAT}):
+        target = record.get("telegram_message_id")
+        if target and record["payload"].get("message_thread_id") != RECRUITS_THREAD:
+            queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
+                payload={"text": "Moving the team instructions to their topic.", "delete_message_id": int(target)},
+                scheduled_for=now, dedupe_key=f"referral-public-instruction-remove:{target}"))
+    instructions = {"text": PUBLIC_INSTRUCTIONS, "disable_notification": False, "message_thread_id": RECRUITS_THREAD}
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
-        payload=instructions, scheduled_for=now, dedupe_key="referral-instructions:v3"))
+        payload=instructions, scheduled_for=now, dedupe_key=f"referral-instructions:v4:{RECRUITS_THREAD}"))
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
-        payload={"question": "Who invited you to join the team? 👋\nPlease choose the person who invited you.",
+        payload={"question": "Who invited you to join the team? 👋\nNot starting yet? Please don't vote. "
+                             "Vote just before your first sale, and choose one name.",
                  "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,
-                 "disable_notification": False, "referral_poll": True, "referral_privacy_version": 2},
-        scheduled_for=now, dedupe_key="referral-recruiter-poll:v2"))
+                 "disable_notification": False, "referral_poll": True, "referral_privacy_version": 3,
+                 "message_thread_id": RECRUITS_THREAD},
+        scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v3:{RECRUITS_THREAD}"))
     if SHARES_CHAT in allowed:
         today = now.astimezone(MANILA).date()
         # Durable scheduled reports are refreshed from actual sales at delivery time.
@@ -414,12 +428,13 @@ def status(allowed: set[int], now: dt.datetime) -> dict:
         "chat_id": f"eq.{SHARES_CHAT}", "dedupe_key": "like.referral-report:*",
         "order": "id.desc", "limit": 20,
     })) if active and SHARES_CHAT in allowed else []
-    return {"enabled": active, "recruits_chat_id": RECRUITS_CHAT, "shares_chat_id": SHARES_CHAT,
+    return {"enabled": active, "recruits_chat_id": RECRUITS_CHAT, "recruits_topic": RECRUITS_THREAD, "shares_chat_id": SHARES_CHAT,
             "shares_topic": SHARES_THREAD, "report_time_pht": "23:59", "commission_percent": 5,
             "base_sales": 8, "maximum_sales": 16, "bonus_window_hours": 72,
             "base_sales_expire": False, "bonus_sales_expire": False,
             "commission_basis": basis or None, "window_start": window or None,
             "policy_confirmed": basis in {"gross", "earnings"} and window == "join_or_vote",
             "polls": [{"message_id": r["payload"]["telegram_message_id"]}
-                      for r in polls if r["payload"].get("privacy_version", 1) >= 2],
+                      for r in polls if r["payload"].get("privacy_version", 1) >= 3
+                      and r["payload"].get("thread_id") == RECRUITS_THREAD],
             "recorded_referrals": len(people), "reports": reports or []}
