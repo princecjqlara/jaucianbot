@@ -28,6 +28,9 @@ REMINDER_HOURS = (7, 10, 13, 16, 19, 21)
 GROUPS = {
     -1004423057797: {
         "name": "Veo Ollie",
+        "new_client_timeout_minutes": 30,
+        "new_client_ready_rotation": True,
+        "new_client_retry_cooldown_minutes": 30,
         "announcements": 4794,
         "freebie": 4811,
         "contact_thread": 5758,
@@ -42,6 +45,9 @@ GROUPS = {
     },
     -1003962888977: {
         "name": "Veo Jessa",
+        "new_client_timeout_minutes": 30,
+        "new_client_ready_rotation": True,
+        "new_client_retry_cooldown_minutes": 30,
         "announcements": 5,
         "freebie": 3240,
         "contact_thread": 3725,
