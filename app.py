@@ -32,6 +32,7 @@ from daily_automation import GROUPS, AVAILABILITY_GROUPS, MANILA, TRABAWHO, TRAB
 import hourly_availability
 import client_volunteers
 import referral_incentives
+import database_scheduler
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -51,7 +52,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-10.02"
+AUTOMATION_VERSION = "2026-10-11.03"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -89,11 +90,39 @@ def status_route(environ, start_response):
 
 def health_route(environ, start_response):
     try:
-        archive_status(allowed_chat_ids())
+        allowed = allowed_chat_ids()
+        archive_status(allowed)
+        if os.environ.get("SUPABASE_DB_URL"):
+            scheduler = database_scheduler.scheduler_status(allowed)
+            if not scheduler["healthy"]:
+                return response(start_response, 503, {"ok": False, "error": "automation_unhealthy"})
     except Exception as error:
         print(f"Health query failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True})
+
+
+def scheduler_route(environ, start_response, method: str):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        allowed = allowed_chat_ids()
+        if method == "POST":
+            body = read_json_body(environ) if int(environ.get("CONTENT_LENGTH") or 0) else {}
+            verify = body.get("verify_recovery", False)
+            if not isinstance(verify, bool):
+                return response(start_response, 400, {"ok": False, "error": "verify_recovery must be boolean"})
+            state = database_scheduler.configure_scheduler(allowed, verify_recovery=verify)
+        else:
+            state = database_scheduler.scheduler_status(allowed)
+        return response(start_response, 200, {"ok": True, "scheduler": state})
+    except ValueError:
+        return response(start_response, 400, {"ok": False, "error": "invalid scheduler request"})
+    except database_scheduler.SchedulerError as error:
+        return response(start_response, 503, {"ok": False, "error": str(error)})
+    except Exception as error:
+        print(f"Scheduler maintenance failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "scheduler_maintenance_failed"})
 
 
 def groups_route(environ, start_response):
@@ -366,7 +395,25 @@ def schedules_route(environ, start_response, method: str):
 
 
 def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int, int]:
-    actions = claim_scheduled_actions(allowed, limit=limit)
+    # Deferred reminders should not use every slot ahead of a new client.
+    # Bound both sends and scanning so a backlog cannot extend this indefinitely.
+    processed = sent = failed = 0
+    scan_limit = max(limit, 1) * 4
+    while sent + failed < limit and processed < scan_limit:
+        batch_limit = min(limit - sent - failed, scan_limit - processed, 25)
+        actions = claim_scheduled_actions(allowed, limit=batch_limit)
+        if not actions:
+            break
+        batch_processed, batch_sent, batch_failed = _deliver_claimed_actions(actions, allowed)
+        processed += batch_processed
+        sent += batch_sent
+        failed += batch_failed
+        if len(actions) < batch_limit:
+            break
+    return processed, sent, failed
+
+
+def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[int, int, int]:
     sent = 0
     failed = 0
     for action in actions:
@@ -471,6 +518,14 @@ def dispatch_route(environ, start_response):
     queue_errors = []
     try:
         allowed = allowed_chat_ids()
+        if os.environ.get("SUPABASE_DB_URL"):
+            try:
+                if claim_automation_slot(allowed, dt.datetime.now(dt.timezone.utc),
+                                         workflow="scheduler-guard", interval_seconds=300):
+                    database_scheduler.ensure_scheduler(allowed)
+            except Exception as guard_error:
+                queue_errors.append("scheduler_guard")
+                print(f"Scheduler guard failed: {type(guard_error).__name__}")
         try:
             queued += referral_incentives.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
         except Exception as referral_error:
@@ -652,10 +707,12 @@ def app(environ, start_response):
         return daily_plan_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
+    if path == "/api/scheduler" and method in {"GET", "POST"}:
+        return scheduler_route(environ, start_response, method)
     if path == "/api/cron/dispatch" and method == "GET":
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/freebies/status", "/api/schedules", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

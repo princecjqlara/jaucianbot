@@ -1,3 +1,7 @@
 # Telegram group insights
 
 When the user asks about Telegram group activity, use the archive in this directory. It includes Telegram Desktop HTML exports and live bot messages. If `.insights-api-key.dpapi` and `.insights-base-url` exist, run `./remote_windows.ps1 status` and use `./remote_windows.ps1 messages ...` for current cloud data. Otherwise run `py telegram_insights.py status` and use `recent` or `search` for local data. Cite group title, UTC date, and message ID. Describe coverage gaps and whether evidence came from an export or the live bot. Do not read or print secret files, set a webhook, call `getUpdates` separately, or send messages to Telegram. The collector or webhook owns the update stream. Approve or revoke a group only when the user's request identifies it clearly; ask which group if the target is ambiguous.
+
+# Automation maintenance
+
+Run `py validate_project.py` before deploying code or schedule changes. Preserve the Vercel build test gate and include the regression tests in deployments. After scheduler changes, run `./remote_windows.ps1 configure-scheduler --verify-recovery` and verify `scheduler-status` plus `/api/health`. The verification uses an uncommitted savepoint and does not invoke delivery. Use scheduled runs to verify actual delivery; do not call the dispatcher manually. Keep the public health endpoint read-only and fail it when automation is stale, failing, or accumulating overdue deliveries. Scheduler guard failures must not block otherwise due deliveries.

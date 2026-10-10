@@ -35,6 +35,7 @@ REASSIGN_REASON_30 = "working_not_confirmed_within_30_minutes"
 REASSIGN_REASONS = {REASSIGN_REASON, REASSIGN_REASON_30, volunteers.EXPIRED}
 DUPLICATE_REASON = "contact_already_acknowledged"
 SUPERSEDED_REASON = "assignment_superseded"
+DELIVERY_FAILED_REASON = "assignment_delivery_failed"
 REMINDER_MINUTES = 60
 
 
@@ -493,9 +494,34 @@ def _reconcile_archived_confirmations(history: list[dict], now: dt.datetime) -> 
 
 def _release_stale_assignments(history: list[dict], now: dt.datetime) -> None:
     """Cancel open assignments after the team's delivered-client wait expires."""
+    work_date = now.astimezone(MANILA).date()
+    available_ids: dict[int, set[int]] = {}
     for row in history:
         if not is_new_client_action(row):
             continue
+        payload = row["payload"]
+        if (row.get("status") != "cancelled" and not payload.get("new_client_acknowledged_at")
+                and not (payload.get("_first_delivery_at") or row.get("sent_at"))):
+            reason = None
+            if payload.get("new_client_work_date") != work_date.isoformat():
+                reason = "assignment_day_ended"
+            elif row.get("status") == "failed":
+                reason = DELIVERY_FAILED_REASON
+            elif hourly_enabled(work_date):
+                chat_id = int(row["chat_id"])
+                if chat_id not in available_ids:
+                    available_ids[chat_id] = {
+                        int(user["user_id"])
+                        for user in current_members(_active_members(chat_id, work_date), now)
+                    }
+                if int(payload["new_client_assignee_id"]) not in available_ids[chat_id]:
+                    reason = "assignee_inactive_before_first_delivery"
+            if reason:
+                cancelled = dict(payload, new_client_cancelled_at=now.isoformat(),
+                                 new_client_cancelled_reason=reason, new_client_phase="expired")
+                if update_new_client_action(int(row["id"]), cancelled, status="cancelled"):
+                    row.update(status="cancelled", payload=cancelled)
+                continue
         if volunteers.release(row, now) or row.get("status") == "cancelled":
             continue
         payload = row["payload"]
@@ -533,6 +559,7 @@ def _reserved_contact_keys(history: list[dict]) -> set[str]:
             row.get("status") == "cancelled"
             and row["payload"].get("new_client_cancelled_reason") in REASSIGN_REASONS.union({
                 "assignment_day_ended", "assignee_inactive_before_first_delivery", SUPERSEDED_REASON,
+                DELIVERY_FAILED_REASON,
             })
             and not row["payload"].get("new_client_acknowledged_at")
         ):
@@ -632,7 +659,12 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     for row in history:
         payload = row.get("payload") or {}
         assignee_id = payload.get("new_client_assignee_id")
-        if assignee_id is not None:
+        # A missed turn applies to this work date. An offer cancelled before
+        # delivery did not give that editor a turn at all. Failed deliveries
+        # avoid the same editor until tomorrow so retries cannot loop forever.
+        if (assignee_id is not None
+                and payload.get("new_client_work_date") == work_date.isoformat()
+                and payload.get("new_client_cancelled_reason") != "assignee_inactive_before_first_delivery"):
             for key in _action_contact_keys(row):
                 prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = 0
@@ -852,9 +884,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 # considering another member in the same round.
                 latest = [row for row in new_client_actions({chat_id}) if new_client_action_matches_source(row)]
                 _enrich_history_contact_identities(latest)
-                for row in latest:
-                    if is_new_client_action(row):
-                        used_contact_keys.update(_action_contact_keys(row))
+                used_contact_keys.update(_reserved_contact_keys(latest))
                 candidates = [
                     item for item in candidates
                     if not item[2].intersection(used_contact_keys)
@@ -1049,7 +1079,15 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         for user in members:
             user_id = int(user["user_id"])
             rows = [row for row in today if int(row["payload"]["new_client_assignee_id"]) == user_id]
+            open_rows = [
+                row for row in rows
+                if not row["payload"].get("new_client_acknowledged_at")
+                and (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer")
+            ]
             reason = (
+                "awaiting_volunteer_claim" if any(row["payload"].get("new_client_phase") == "volunteer" for row in open_rows) else
+                "delivery_failed" if any(row.get("status") == "failed" and not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
+                "awaiting_delivery" if any(not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
                 "awaiting_working_reply" if user_id in open_members else
                 "outside_selected_hours" if "available_hours" in user and now.astimezone(MANILA).hour not in user["available_hours"] else
                 "reply_cooldown" if user_id in paused else

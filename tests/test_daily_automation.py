@@ -422,11 +422,11 @@ class DailyAutomationTests(unittest.TestCase):
             run_due_daily_automation(dt.datetime(2026, 9, 19, 0, tzinfo=dt.timezone.utc), {chat_id})
             self.assertEqual(reminders.call_count, 7)
 
-    def test_vercel_cron_covers_midnight_and_daytime_hours(self):
+    def test_vercel_cron_covers_midnight_and_every_hour(self):
         config = json.loads((Path(__file__).resolve().parents[1] / "vercel.json").read_text())
         self.assertEqual(
             {(job["path"], job["schedule"]) for job in config["crons"]},
-            {("/api/cron/dispatch", f"0 {hour} * * *") for hour in (*range(14), 16, 23)}
+            {("/api/cron/dispatch", f"0 {hour} * * *") for hour in range(24)}
             | {("/api/cron/dispatch", "59 15 * * *")},
         )
 

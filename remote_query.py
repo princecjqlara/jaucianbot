@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import urllib.parse
+import urllib.error
 import urllib.request
 
 
@@ -19,6 +20,9 @@ def main() -> None:
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
+    commands.add_parser("scheduler-status", help="Read database scheduler configuration and recent HTTP results")
+    scheduler_setup = commands.add_parser("configure-scheduler", help="Install or repair the database's one-minute dispatcher")
+    scheduler_setup.add_argument("--verify-recovery", action="store_true", help="Test watchdog repair inside a rolled-back savepoint")
     commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
     referrals = commands.add_parser("referrals")
     referrals.add_argument("--audit", action="store_true", help="Read-only report preview using live sales sources")
@@ -67,6 +71,11 @@ def main() -> None:
         path = "/api/freebies/status"
     elif args.command == "new-clients":
         path = "/api/new-clients/status"
+    elif args.command in {"scheduler-status", "configure-scheduler"}:
+        path = "/api/scheduler"
+        if args.command == "configure-scheduler":
+            method = "POST"
+            body = json.dumps({"verify_recovery": args.verify_recovery}).encode("utf-8")
     elif args.command == "daily-plan":
         path = "/api/reports/plan"
     elif args.command == "referrals":
@@ -121,8 +130,20 @@ def main() -> None:
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(base + path, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        print(json.dumps(json.load(response), ensure_ascii=False, indent=2))
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            print(json.dumps(json.load(response), ensure_ascii=False, indent=2))
+    except urllib.error.HTTPError as error:
+        with error:
+            try:
+                detail = json.loads(error.read(20000))
+            except (ValueError, UnicodeError):
+                detail = {}
+        result = {"ok": False, "http_status": error.code}
+        if isinstance(detail, dict):
+            result.update({name: detail[name] for name in ("error", "restriction", "automation_version") if name in detail})
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

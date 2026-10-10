@@ -20,6 +20,28 @@ assignment checks. Due deliveries continue on every dispatcher call. Completed
 daily reports are checkpointed to avoid rebuilding them throughout midnight.
 Checkpoints are cancelled scheduler records and cannot be sent to Telegram.
 
+Deployments run `validate_project.py` as a required build step. Missing or failing
+regression tests stop the build. The tests run with production credentials removed
+from their process environment.
+
+The database has an independent two-minute watchdog that restores the named
+dispatcher if it is missing, disabled, rescheduled, or given an incorrect command.
+It also recreates its cancelled checkpoint when needed and prunes these jobs'
+completed execution logs after seven days when its database role permits deletion.
+Each dispatcher checks its scheduler guard
+at most once per five minutes; the hourly Vercel fallback can restore both named
+jobs. Guard failures are reported while due deliveries continue.
+
+`/api/health` now returns HTTP 503 if dispatcher requests or successful responses
+are older than three minutes, if the watchdog has failed or has not run within
+five minutes, or if there are failed deliveries, stale claims, or deliveries more
+than five minutes overdue. Its public response contains no group details. Read
+`./remote_windows.ps1 scheduler-status` for authenticated diagnostic reasons.
+After a scheduler change, run `./remote_windows.ps1 configure-scheduler --verify-recovery`.
+It checks restoration of a disabled dispatcher's cadence, command, and active state
+inside a rolled-back savepoint; the scheduler never observes a changed job. Deliberate maintenance pauses must
+disable both named database jobs and the Vercel fallback to stay paused.
+
 Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase through its server-side Data API. The read-only `/api/status` and `/api/messages` endpoints require an API key. The local `.env.local`, SQLite archive, and exported chat files are excluded from Git. `.env.example` lists the variable names without values.
 
 1. Open this Supabase project's SQL Editor and run [`supabase/schema.sql`](supabase/schema.sql). It creates the archive tables and functions, enables row-level security, and grants access only to the server-side service role. Run `py verify_supabase.py` afterward; it should report that the archive is ready.
@@ -41,7 +63,7 @@ Vercel receives Telegram updates at `/api/webhook` and saves them to Supabase th
 4. After the Production deployment and database are ready, stop the Windows poller: `Stop-ScheduledTask -TaskName TelegramGroupInsights` and `Disable-ScheduledTask -TaskName TelegramGroupInsights`. Then run `./telegram_windows.ps1 set-webhook https://YOUR-PRODUCTION-DOMAIN/api/webhook`. It reads the same webhook secret from `.env.local`. Inspect delivery with `./telegram_windows.ps1 webhook-info`.
 5. Run `./setup_remote_windows.ps1 https://YOUR-PRODUCTION-DOMAIN`. The assistant can then query the cloud archive with `./remote_windows.ps1 status` and `./remote_windows.ps1 messages --days 7`.
 6. In the cron-job.org Console, create a GET job for `https://YOUR-PRODUCTION-DOMAIN/api/health` every 15 minutes. The endpoint checks Vercel and Supabase and returns only `{"ok": true}`. Dashboard setup does not need an API key or request headers. The optional `configure_cronjob.py` script uses a cron-job.org API key only when creating the job through its REST API.
-7. Create an external GET job for `https://YOUR-PRODUCTION-DOMAIN/api/cron/dispatch` every minute to process Veo's 30-minute timeouts promptly. No API key or headers are required for this existing dispatch endpoint. The configured Vercel fallback jobs each run once daily: midnight closeout and a separate job for every hour from 7 AM through 9 PM Philippine time. These jobs remain compatible with Hobby. Vercel's frequent cron schedules require Pro or Enterprise; see [Vercel's scheduling limits](https://vercel.com/docs/cron-jobs/usage-and-pricing). A timeout is processed on the next successful dispatcher run. Without a frequent external dispatcher, new completed contacts and the 30-minute deadline can wait for a later fallback run. To create or update the one-minute job through the cron-job.org API, run `py configure_cronjob.py https://YOUR-PRODUCTION-DOMAIN --dispatch`; it prompts securely for the cron-job.org API key when no key is configured locally.
+7. Run `./remote_windows.ps1 configure-scheduler` to install or repair the archive database's named one-minute dispatcher using Supabase `pg_cron` and `pg_net`. It uses the server's existing `SUPABASE_DB_URL`; database credentials stay inside the service. The authenticated maintenance endpoint installs the extensions if needed, creates a cancelled checkpoint that cannot enter Telegram delivery, and configures one job for `https://jaucianassitant.vercel.app/api/cron/dispatch`. The first request runs on a scheduled tick. Repeating the command updates the same job. Read `./remote_windows.ps1 scheduler-status` for the job's schedule, active state, and recent dispatcher HTTP result. The Vercel fallback also runs once during every hour, including overnight, plus the existing closeout. Hobby timing can drift within the scheduled hour; see [Vercel's scheduling limits](https://vercel.com/docs/cron-jobs/usage-and-pricing). If database scheduling is unavailable, configure an external one-minute GET job instead with `py configure_cronjob.py https://YOUR-PRODUCTION-DOMAIN --dispatch` and a cron-job.org API key. A timeout is processed on the next successful dispatcher run.
 
 Telegram retries webhook requests that fail; the database uses the group ID and message ID to avoid duplicates. Keep the webhook secret, API key, bot token, and service role key private. If switching back to local polling, remove the webhook with `./telegram_windows.ps1 delete-webhook`, then re-enable and start the Windows task.
 
@@ -104,7 +126,7 @@ The dispatcher also runs the four configured Veo group workflows in Philippine t
 - Around midnight it posts a dated, nonanonymous Active/Not Active poll for the following day in each **Active for Tomorrow** topic. If today's poll is missing, it posts a catch-up poll for today.
 - At daily closeout it calculates `ceil(active workers × 0.8)`. The same number is the group target for Done Deals and Close Deals, and it posts the next day's target in each announcements topic.
 - At **7:00 AM, 10:00 AM, 1:00 PM, 4:00 PM, 7:00 PM, and 9:00 PM Philippine time**, it posts one reminder in each Veo team's announcements topic. Each reminder reads the latest tracked Active poll and that day's Done Deals and Close Deals posts, shows the target, current totals, and how many DD and CD are still needed, then adds a short encouragement. From 10:00 AM onward it identifies Active voters with no readable CD/DD yet; possible unreadable posts are listed separately instead of treating their authors as inactive. Afternoon and evening reminders show the current sales leader and recommend whether the next focus should be new CDs or converting open CDs into paid DDs. If the poll or deal data is incomplete, it says so instead of showing an unverified gap.
-- `vercel.json` schedules midnight closeout and hourly daytime dispatches. Dedupe keys prevent duplicate reminders if another dispatcher also runs. Vercel Hobby cron timing can drift within the scheduled hour.
+- `vercel.json` schedules midnight closeout and hourly fallback dispatches throughout the day and night. Dedupe keys prevent duplicate reminders if another dispatcher also runs. Vercel Hobby cron timing can drift within the scheduled hour; the separate one-minute scheduler is still required for prompt handoffs.
 - It reads that day's configured Done Deals and Close Deals topics, groups results by page, totals Price Deal amounts, and posts one organized report per group to **DAILY REPORTS**.
 - Employees are ranked by Price Deal sales. When the group reaches both its DD and CD targets, each employee's pay is 40% of their Price Deal total; otherwise it is 35%. Profit is gross Price Deal value less those commissions. An unreadable post is still flagged, but pay stays available when the unresolved posts cannot possibly change the commission tier; only a genuinely undecidable tier remains pending review.
 - Each report lists people who answered **Active** in that day's named poll but had no parsed CD or DD. Telegram user IDs match poll answers to live deal posts. Unreadable deal posts are flagged for review instead of counting their authors as having no deals. Historical samples use "active" replies from the previous Philippine day and match exported deal posts by display name.
@@ -161,6 +183,15 @@ client back. The previous editor receives a friendly reply naming the current
 editor and asking them to wait for their next turn. The first eligible volunteer
 still wins within a single current volunteer window; a later volunteer reply
 cannot replace that winner.
+
+Undelivered offers are released when their editor leaves the selected work hour,
+and an offer that exhausts delivery retries can move to another available editor.
+An editor can receive a client again on a later work date, or when an earlier
+offer was cancelled before delivery because their selected hour ended. Cancelled
+offers retain their audit history and assignment attempt numbers. The status view
+distinguishes awaiting delivery, delivery failure, volunteer claims, and WORKING
+replies. The dispatcher can scan up to 100 due actions past deferred reminders
+while retaining its limit of 25 delivery attempts per call.
 
 Reconciliation repairs incorrect older confirmations, preserves their timestamps
 for audit, and accepts a valid archived reply to the latest offer. Pending

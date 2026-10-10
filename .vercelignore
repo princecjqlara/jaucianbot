@@ -10,5 +10,4 @@ telegram_insights.sqlite3-*
 .insights-base-url
 *.log
 __pycache__/
-tests/
 .audit/
