@@ -635,6 +635,10 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
             f"Track delivery in https://t.me/c/2894511895/{GROUPS[chat_id]['songs']}. "
             f"After sending it to the client, post <code>SONG SENT {token}</code> there."
         )
+    else:
+        details += ("\n\nWhen this client pays, include "
+                    f"<code>Client token: {token}</code> in your Done Deal post, "
+                    "along with the page, client name and price, so we can link the sale to this assignment.")
     return (
         f"👤 Hi {member}! New client round {round_number}.\n\n{details}",
         f"⏰ Hi {member}! Please confirm that you are working on this new client.\n\n{details}",
@@ -847,6 +851,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "new_client_round": round_number,
                 "new_client_assignment_attempt": attempt_number,
                 "new_client_assigned_at": now.isoformat(),
+                "new_client_direct_timeout_minutes": _timeout_minutes(chat_id),
             }
             if volunteers.enabled():
                 payload.update(new_client_response_minutes=20, new_client_volunteer_minutes=10, new_client_phase="direct")

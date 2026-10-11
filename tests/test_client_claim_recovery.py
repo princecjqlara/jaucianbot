@@ -8,10 +8,15 @@ import client_volunteers as volunteers
 import cloud_store
 import new_client_automation as clients
 from test_hourly_assignments import CHAT, NOW, MEMBERS, offer, message
-from test_client_ownership import attempts
+from test_client_ownership import FixedDateTime, attempts
 
 
 class ClaimRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch.object(clients.dt, "datetime", FixedDateTime)
+        clock.start()
+        self.addCleanup(clock.stop)
+
     def test_concurrent_loser_reads_winner_and_gets_wait_reply(self):
         initial = offer()
         winner = copy.deepcopy(initial)

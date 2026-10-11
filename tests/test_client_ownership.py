@@ -11,6 +11,13 @@ from psycopg._queries import _query2pg
 from test_hourly_assignments import CHAT, NOW, offer, message
 
 
+class FixedDateTime(dt.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        fixed = NOW + dt.timedelta(minutes=30)
+        return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+
 def attempts():
     older, latest = offer(), offer()
     older["id"] = 100
@@ -26,6 +33,19 @@ def attempts():
 
 
 class OwnershipTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch.object(clients.dt, "datetime", FixedDateTime)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def test_replies_older_than_two_days_do_not_generate_turn_notices(self):
+        older, latest = attempts()
+        incoming = message()
+        incoming["date"] = int((NOW - dt.timedelta(days=3)).timestamp())
+        with patch.object(clients, "enqueue_scheduled_action") as enqueue:
+            self.assertFalse(clients._queue_turn_notice(older, latest, incoming, NOW))
+        enqueue.assert_not_called()
+
     def test_reply_orders_always_keep_latest_offer(self):
         for latest_first in (False, True):
             with self.subTest(latest_first=latest_first):

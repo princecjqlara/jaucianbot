@@ -531,6 +531,7 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_retirement_complete",
     "new_client_ack_pending", "new_client_ack_queued_at",
     "new_client_offer_generation",
+    "new_client_original_assignee_name", "new_client_direct_timeout_minutes",
 )
 
 

@@ -67,6 +67,7 @@ def open_window(row: dict, now: dt.datetime) -> None:
     changed = dict(payload, new_client_phase="volunteer", new_client_cancelled_reason=OPEN,
                    new_client_cancelled_at=now.isoformat(),
                    new_client_original_assignee_id=payload["new_client_assignee_id"])
+    changed["new_client_original_assignee_name"] = payload.get("new_client_assignee_name")
     if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
         row.update(payload=changed, status="cancelled")
 

@@ -11,6 +11,7 @@ from daily_automation import GROUPS, MANILA, TRABAWHO_CHAT_ID
 from deal_parser import collect_deals
 from freebie_automation import is_freebie_action
 from new_client_automation import is_new_client_action
+from member_performance import build_client_performance, empty_client_metrics
 
 
 def _timestamp(value: str) -> dt.datetime:
@@ -36,6 +37,11 @@ def _poll_date(row: dict) -> dt.date | None:
 
 def _recommendations(worker: dict) -> list[str]:
     suggestions: list[str] = []
+    clients = worker.get("client_performance") or {}
+    if clients.get("missed_offers"):
+        suggestions.append(f"{clients['missed_offers']} delivered client offer(s) passed the reply deadline; check your selected hours and confirm WORKING promptly.")
+    if clients.get("unlinked_dd_posts"):
+        suggestions.append("Add the client token or CRM contact ID to assigned-client DD posts so conversion can be attributed accurately.")
     if worker["active_days"] == 0:
         suggestions.append("Not enough tracked Active-poll history for a consistency assessment.")
     elif worker["active_days_without_deals"]:
@@ -140,21 +146,27 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         if start_local <= completed.astimezone(MANILA) < end_local:
             person(payload.get("freebie_assignee_id"), payload.get("freebie_assignee_name"))["freebies"] += 1
 
-    for action in new_client_actions({chat_id}):
+    client_history = new_client_actions({chat_id})
+    for action in client_history:
         if not is_new_client_action(action):
             continue
         payload = action.get("payload") or {}
         acknowledged_at = payload.get("new_client_acknowledged_at")
-        if not acknowledged_at:
+        if not acknowledged_at or payload.get("new_client_superseded_by") or payload.get("new_client_revoked_acknowledged_at"):
             continue
         acknowledged = _timestamp(acknowledged_at)
-        if start_local <= acknowledged.astimezone(MANILA) < end_local:
+        if start_local <= acknowledged.astimezone(MANILA) < end_local and acknowledged <= now:
             person(
                 payload.get("new_client_assignee_id"), payload.get("new_client_assignee_name"),
             )["new_clients"] += 1
 
+    performance = build_client_performance(client_history, parsed["entries"], config, start_local, end_local, now)
+    for metrics in performance["members"]:
+        target = person(metrics["user_id"], metrics.get("name"))
+        target["client_performance"] = {k: v for k, v in metrics.items() if k not in {"user_id", "name"}}
     workers = []
     for value in people.values():
+        value.setdefault("client_performance", empty_client_metrics())
         active_dates = value.pop("active_dates")
         active_days = len(active_dates)
         inactive_days = len(value.pop("inactive_dates"))
@@ -183,6 +195,14 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         ranked.sort(key=lambda item: (-item[metric], item["name"].casefold()))
         return [{"name": item["name"], "value": item[metric]} for item in ranked[:5]]
 
+    def client_leaders(metric: str, sample: str, *, descending=True) -> list[dict]:
+        ranked = [item for item in workers if item["client_performance"][metric] is not None
+                  and item["client_performance"][sample] > 0]
+        ranked.sort(key=lambda item: ((-1 if descending else 1) * item["client_performance"][metric],
+                                     item["name"].casefold()))
+        return [{"name": item["name"], "value": item["client_performance"][metric],
+                 "sample_size": item["client_performance"][sample]} for item in ranked[:5]]
+
     return {
         "team": config["name"],
         "chat_id": chat_id,
@@ -197,11 +217,17 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
             "confirmed_freebies": leaders("freebies"),
             "acknowledged_new_clients": leaders("new_clients"),
             "consistency": leaders("consistency_percent"),
+            "client_conversion": client_leaders("conversion_percent", "accepted_clients"),
+            "client_response_minutes": client_leaders("median_response_minutes", "response_samples", descending=False),
+            "client_on_time_response": client_leaders("on_time_response_percent", "delivered_offers"),
         },
         "workers": workers,
+        "client_performance_definitions": performance["definitions"],
+        "client_performance_evidence": performance["evidence"],
         "coverage_note": (
             "Metrics use tracked poll responses, readable live deal-topic posts, FREEBIE SENT confirmations, "
             "and new-client WORKING confirmations. "
             "Best hour means deal-posting time, not login time. Missing or unreadable data is shown separately."
+            " Client conversion requires an explicit token or CRM contact ID in the DD post; historical unlinked sales are not inferred."
         ),
     }

@@ -76,6 +76,8 @@ class VeoRolloutTests(unittest.TestCase):
             self.assertIn(payload["new_client_assignee_id"], {11, 22})
             self.assertEqual(payload["new_client_response_minutes"], 20)
             self.assertEqual(payload["new_client_volunteer_minutes"], 10)
+            self.assertEqual(payload["new_client_direct_timeout_minutes"], 20)
+            self.assertIn(f"Client token: {payload['new_client_token']}", payload["text"])
 
     def test_ready_editor_keeps_receiving_when_peer_has_an_open_offer_in_fallback(self):
         for chat in TEAMS:
