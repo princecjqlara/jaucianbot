@@ -91,7 +91,20 @@ def completed_detail_contacts(page_id: str, *, exclude_handled: bool = False) ->
         if len(batch) < 1000:
             break
     contacts: dict[str, dict] = {}
-    blocked = blocked_contact_ids(page_id) if exclude_handled and rows else set()
+    blocked = set()
+    if exclude_handled and rows:
+        candidates = []
+        for row in rows:
+            contact = row.get("contacts") or {}
+            if isinstance(contact, list):
+                contact = contact[0] if contact else {}
+            if contact.get("id"):
+                candidates.append(str(contact["id"]))
+        candidates = sorted(set(candidates))
+        # Ownership reads concern only the completed briefs being considered,
+        # not every outbound event and tagged contact on a large CRM page.
+        for start in range(0, len(candidates), 100):
+            blocked.update(blocked_contact_ids(page_id, contact_ids=set(candidates[start:start + 100])))
     for row in rows:
         contact = row.get("contacts") or {}
         if isinstance(contact, list):
@@ -123,9 +136,11 @@ def completed_detail_contacts(page_id: str, *, exclude_handled: bool = False) ->
     return list(contacts.values())
 
 
-def blocked_contact_ids(page_id: str, contact_id: str | None = None) -> set[str]:
+def blocked_contact_ids(page_id: str, contact_id: str | None = None, *, contact_ids: set[str] | None = None) -> set[str]:
     """Exclude paid/converted tags and recorded human intervention, read-only."""
     blocked = set()
+    if contact_ids is not None and not contact_ids:
+        return blocked
     tags = crm_request("tags?" + urllib.parse.urlencode({
         "select": "id,name,system_key", "page_id": f"eq.{page_id}", "limit": 1000,
     })) or []
@@ -143,6 +158,8 @@ def blocked_contact_ids(page_id: str, contact_id: str | None = None) -> set[str]
     for table, filters in queries:
         if contact_id:
             filters["contact_id"] = f"eq.{contact_id}"
+        elif contact_ids is not None:
+            filters["contact_id"] = "in.(" + ",".join(sorted(contact_ids)) + ")"
         offset = 0
         while True:
             rows = crm_request(table + "?" + urllib.parse.urlencode({

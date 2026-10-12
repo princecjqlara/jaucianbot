@@ -5,6 +5,23 @@ import crm_store
 
 
 class CrmStoreTests(unittest.TestCase):
+    def test_handling_checks_only_read_contacts_in_the_completed_brief_batch(self):
+        row = {"collected_details": {"name": "Client"}, "contacts": {
+            "id": "contact-1", "page_id": "page-1", "name": "Client", "psid": "person",
+        }}
+        with patch.object(crm_store, "crm_request", return_value=[row]), patch.object(crm_store, "blocked_contact_ids", return_value=set()) as blocked:
+            self.assertEqual(len(crm_store.completed_detail_contacts("page-1", exclude_handled=True)), 1)
+        blocked.assert_called_once_with("page-1", contact_ids={"contact-1"})
+
+    def test_bulk_handling_queries_are_filtered_by_candidate_contact_ids(self):
+        def response(path):
+            if path.startswith("tags?"):
+                return [{"id": "paid-tag", "name": "Paid"}]
+            self.assertIn("contact_id=in.%28client-1%2Cclient-2%29", path)
+            return []
+        with patch.object(crm_store, "crm_request", side_effect=response):
+            self.assertEqual(crm_store.blocked_contact_ids("page", contact_ids={"client-1", "client-2"}), set())
+
     def test_completed_detail_contacts_uses_chatbot_completion_state(self):
         rows = [{
             "contact_id": "contact-1",

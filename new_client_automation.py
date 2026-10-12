@@ -1135,7 +1135,8 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         except Exception as error:
             page_contacts = []
             source_available = False
-            print(f"New-client status source read failed for {chat_id}: {type(error).__name__}")
+            detail = str(error) if re.fullmatch(r"(?:CRM|Suno) Data API HTTP \d{3}", str(error)) else ""
+            print(f"New-client status source read failed for {chat_id}: {type(error).__name__} {detail}")
         ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
