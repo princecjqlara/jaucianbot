@@ -54,7 +54,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-13.02"
+AUTOMATION_VERSION = "2026-10-13.03"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -646,7 +646,8 @@ def webhook_route(environ, start_response):
         try:
             ready_chat = ready_availability.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
             if ready_chat is not None:
-                queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {ready_chat})
+                if ready_chat != TRABAWHO_CHAT_ID or suno_configured():
+                    queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {ready_chat})
                 return response(start_response, 200, {"ok": True})
         except Exception as error:
             print(f"Ready queue update failed: {type(error).__name__}")

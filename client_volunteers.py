@@ -50,7 +50,7 @@ def open_window(row: dict, now: dt.datetime) -> None:
     header = (f"👋 Who would like this client?\n"
               f"Client: {html.escape(payload.get('new_client_contact_name') or 'Client')}\n"
               f"Page: {html.escape(payload.get('new_client_page') or 'Unknown page')}\n\n")
-    next_step = ("If nobody takes it, we try the next ready editor; after two missed offers, Ollie reviews the client. "
+    next_step = (f"If nobody takes it, we try the next ready editor; after two missed offers, {ready.review_contact(int(row['chat_id']))} reviews the client. "
                  if ready.enabled(int(row["chat_id"])) else
                  "If nobody takes it, we'll offer it to the next member in the round robin. ")
     footer = (f"\n\nIf you're available, reply <code>TAKE {payload['new_client_token']}</code>. "
@@ -192,5 +192,6 @@ def release(row: dict, now: dt.datetime) -> bool:
         changed = dict(payload, new_client_cancelled_reason=reason, new_client_cancelled_at=now.isoformat(), new_client_phase="expired")
         if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
             row.update(payload=changed, status="cancelled")
-            client_handoffs.close_offers(row, now, "The takeover window ended. Wait for the next assignment or Ollie's review.")
+            import ready_availability as ready
+            client_handoffs.close_offers(row, now, f"The takeover window ended. Wait for the next assignment or {ready.review_contact(int(row['chat_id']))}'s review.")
     return True

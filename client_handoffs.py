@@ -34,7 +34,7 @@ def end_delivered(row: dict, now: dt.datetime) -> bool:
             "text": f"{member}, your acceptance turn has ended for {html.escape(p.get('new_client_contact_name') or 'this client')} "
                     f"({html.escape(p.get('new_client_page') or 'Page')}). No WORKING confirmation was recorded within your acceptance window. "
                     "Please stop using the old offer. We will open TAKE or arrange the next handoff after this notice. "
-                    "If you already have an ongoing conversation, ask Ollie to review ownership before anyone continues.",
+                    f"If you already have an ongoing conversation, ask {ready.review_contact(int(row['chat_id']))} to review ownership before anyone continues.",
             "parse_mode": "HTML", "message_thread_id": p["new_client_thread_id"],
             "client_handoff_parent_id": int(row["id"]), "client_handoff_kind": "turn-ended",
             "client_handoff_generation": int(p.get("new_client_offer_generation") or 0),
@@ -145,7 +145,7 @@ def bound_missed_offers(history: list[dict], now: dt.datetime) -> None:
             row["payload"] = p = changed
         enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
             dedupe_key=f"client-review:{row['id']}", payload={"message_thread_id": p["new_client_thread_id"],
-                "text": f"OLLIE — CLIENT NEEDS REVIEW\nClient: {p.get('new_client_contact_name') or 'Client'}\nPage: {p.get('new_client_page') or 'Page'}\n"
+                "text": f"CLIENT NEEDS TEAM LEAD REVIEW\nClient: {p.get('new_client_contact_name') or 'Client'}\nPage: {p.get('new_client_page') or 'Page'}\n"
                         "Two or more acceptance offers were missed. Automatic reassignment and TAKE are paused for this client. "
                         "Please check its payment status and existing editor before arranging a handoff."})
-        close_offers(row, now, "Paused for Ollie's ownership review after missed offers.")
+        close_offers(row, now, f"Paused for {ready.review_contact(int(row['chat_id']))}'s ownership review after missed offers.")

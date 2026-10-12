@@ -20,7 +20,7 @@ REQUIRED_SETTINGS = (
 DEFAULT_PAGE_NAME_COLUMN = "pages.name"
 BLOCKED_HANDOFF_STATES = {
     "refusal", "opt_out", "opted_out", "not_qualified", "not_interested",
-    "declined", "cancelled", "canceled",
+    "declined", "cancelled", "canceled", "paid", "converted", "won", "closed_won",
 }
 
 
@@ -81,7 +81,7 @@ def suno_request(path: str):
         raise RuntimeError(f"Suno network error ({type(error.reason).__name__})") from None
 
 
-def completed_suno_contacts() -> list[dict]:
+def completed_suno_contacts(*, contact_id: str | None = None) -> list[dict]:
     """Read completed briefs, or Suno handoffs meeting the configured percentage.
 
     Completion stays the default; partial handoffs require a separate setting
@@ -140,6 +140,8 @@ def completed_suno_contacts() -> list[dict]:
         }
         if not allow_partial:
             filters[complete_col] = f"eq.{complete_value}"
+        if contact_id is not None:
+            filters[id_col] = f"eq.{contact_id}"
         rows = suno_request(table + "?" + urllib.parse.urlencode(filters)) or []
         for row in rows:
             outcome = row.get(complete_col)
@@ -198,3 +200,14 @@ def completed_suno_contacts() -> list[dict]:
         if len(rows) < 1000:
             return list(contacts.values())
         offset += len(rows)
+
+
+def suno_contact_assignable(action: dict) -> bool:
+    """Recheck Suno handoffs in their mapped source, never in the Veo CRM."""
+    if not suno_configured() or not suno_assignment_matches_project(action):
+        return False
+    p = action["payload"]
+    return any(c["id"] == p["new_client_contact_id"] and
+               c["page_id"] == p["new_client_contact_page_id"] and
+               (not p.get("new_client_contact_psid") or c["psid"] == p["new_client_contact_psid"])
+               for c in completed_suno_contacts(contact_id=p["new_client_contact_id"]))

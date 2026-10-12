@@ -10,12 +10,17 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 2
+GUIDE_VERSION = 3
 COMMAND = re.compile(r"^\s*/?(ready|busy)(?:@[\w]+)?\s*$", re.I)
 
 
 def enabled(chat_id: int) -> bool:
-    return chat_id == OLLIE and os.environ.get("NEW_CLIENT_READY_ENABLED", "").strip().lower() == "true"
+    from daily_automation import AVAILABILITY_GROUPS
+    return chat_id in AVAILABILITY_GROUPS and os.environ.get("NEW_CLIENT_READY_ENABLED", "").strip().lower() == "true"
+
+
+def review_contact(chat_id: int) -> str:
+    return "Ollie" if chat_id == OLLIE else "your team lead"
 
 
 def records(chat_id: int) -> list[dict]:
@@ -135,10 +140,22 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
 
 def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     from daily_automation import AVAILABILITY_GROUPS, MANILA
+    config = AVAILABILITY_GROUPS[chat_id]
+    team = config["name"].upper()
+    reviewer = review_contact(chat_id)
+    internal = str(abs(chat_id))[3:]
+    workflow = (
+        "Suno: complete any missing client details before finalizing the song. After WORKING is accepted, "
+        "send the song today and within 24 hours. Post SONG SENT + the same client token in SONGS "
+        f"to stop its delivery reminders: https://t.me/c/{internal}/{config['songs']}\n\n"
+        if config.get("client_source") == "suno" else
+        "FREEBIE tasks keep their own FREEBIE SENT + token instructions. When a new client pays, "
+        "include Client token: + their actual token in the Done Deal post to link the sale.\n\n"
+    )
     queued = int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
         dedupe_key=f"ready-instructions:v{GUIDE_VERSION}:{chat_id}:{now.astimezone(MANILA).date()}",
         payload={"message_thread_id": thread_id, "text": (
-            "TEAM OLLIE — HOW TO USE THE NEW CLIENT SYSTEM\n\n"
+            f"{team} — HOW TO USE THE NEW CLIENT SYSTEM\n\n"
             "Dito sa NEW CLIENTS topic gamitin ang commands.\n\n"
             "1. Available ka na? Send /ready. Kasali ka sa queue for ONE automatic assignment within the next 15 minutes. "
             "Kapag expired na at wala pang assignment, send /ready ulit when available.\n\n"
@@ -154,22 +171,21 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
             "10-minute window. First eligible claim wins. Kailangan available ka sa current hourly poll OR may active /ready window. "
             "Wait for confirmation bago ka mag-chat sa client. An accepted takeover is an official handoff — walang agawan.\n\n"
             "6. Once accepted, sa confirmed editor na ang client. Kung may existing editor na sa CRM, paid na, "
-            "or conflicting ang updates, ask Ollie to review first. Huwag sabay-sabay mag-message sa client.\n\n"
+            f"or conflicting ang updates, ask {reviewer} to review first. Huwag sabay-sabay mag-message sa client.\n\n"
             "7. Gusto mo ng another automatic assignment? Send /ready again when kaya mo na. "
             "Hindi ka automatically ibabalik sa ready queue after one assignment.\n\n"
             "8. Sagutan pa rin ang hourly availability polls. /ready controls automatic new-client offers; "
-            "the hourly polls remain for availability tracking and TAKE eligibility. "
-            "FREEBIE tasks keep their own FREEBIE SENT + token instructions.\n\n"
-            "After two missed offers and unsuccessful takeover windows, the client is paused for Ollie's review. "
+            "the hourly polls remain for availability tracking and TAKE eligibility.\n\n"
+            f"{workflow}"
+            f"After two missed offers and unsuccessful takeover windows, the client is paused for {reviewer}'s review. "
             "Older offers keep the deadline printed on their message. New /ready offers use 5 minutes.\n\n"
             "Quick flow: /ready → assigned → WORKING + token → owner confirmation → handle client. "
             "For takeover: OPEN TAKE → TAKE + token → owner confirmation."
         )}))
-    internal = str(abs(chat_id))[3:]
     queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
         dedupe_key=f"ready-rollout:v{GUIDE_VERSION}:{chat_id}", payload={
             "message_thread_id": AVAILABILITY_GROUPS[chat_id]["announcements"],
-            "text": "TEAM OLLIE — NEW CLIENT SYSTEM IS LIVE\n\n"
+            "text": f"{team} — NEW CLIENT SYSTEM IS LIVE\n\n"
                     "Sa NEW CLIENTS topic, send /ready kapag kaya mong tumanggap ng one client in the next 15 minutes. "
                     "Use /busy kapag unavailable. New offers have 5 minutes to accept with WORKING + the actual client token.\n\n"
                     "TAKE stays! Use it during the announced takeover window, then wait for the bot's owner confirmation. "
@@ -177,6 +193,6 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
                     "Read the step-by-step guide in NEW CLIENTS before your next assignment:\n"
                     f"https://t.me/c/{internal}/{thread_id}\n\n"
                     "Sagutan pa rin ang hourly polls. If a client already has an editor or the updates conflict, "
-                    "ask Ollie to review before contacting them.",
+                    f"ask {reviewer} to review before contacting them.",
         }))
     return queued

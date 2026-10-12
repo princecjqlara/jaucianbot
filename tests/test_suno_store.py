@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 from unittest.mock import patch
 
-from suno_store import SOURCE_ID, completed_suno_contacts, details_progress, suno_assignment_matches_project, suno_configured, suno_request
+from suno_store import SOURCE_ID, completed_suno_contacts, details_progress, suno_assignment_matches_project, suno_configured, suno_request, suno_contact_assignable
 
 
 SETTINGS = {
@@ -25,6 +25,32 @@ def client(client_id="1", **values):
 
 
 class SunoStoreTests(unittest.TestCase):
+    def test_ready_recheck_targets_the_mapped_contact_and_retains_page_identity(self):
+        action = {"payload": {"new_client_contact_id": "1", "new_client_contact_page_id": SOURCE_ID,
+                              "new_client_contact_psid": "1"}}
+        with patch.dict("os.environ", SETTINGS, clear=True), patch("suno_store.suno_request", return_value=[client()]) as request:
+            self.assertTrue(suno_contact_assignable(action))
+        query = urllib.parse.parse_qs(request.call_args.args[0].split("?", 1)[1])
+        self.assertEqual(query["id"], ["eq.1"])
+        action["payload"]["new_client_contact_page_id"] = SOURCE_ID + ":other-page"
+        with patch.dict("os.environ", SETTINGS, clear=True), patch("suno_store.suno_request", return_value=[client()]):
+            self.assertFalse(suno_contact_assignable(action))
+
+    def test_ready_recheck_never_reads_an_old_database_assignment(self):
+        action = {"payload": {"new_client_contact_id": "1", "new_client_contact_page_id": "suno:old-project"}}
+        with patch.dict("os.environ", SETTINGS, clear=True), patch("suno_store.suno_request") as read:
+            self.assertFalse(suno_contact_assignable(action))
+        read.assert_not_called()
+
+    def test_paid_and_converted_partial_handoffs_are_not_new_clients(self):
+        settings = {**SETTINGS, "SUNO_CLIENTS_TABLE": "chatbot_contact_states",
+                    "SUNO_COMPLETION_COLUMN": "stop_reason", "SUNO_COMPLETION_VALUE": "details_collected", "SUNO_MIN_DETAILS_PERCENT": "26"}
+        rows = [{"id": stage, "name": "Client", "status": "stopped", "stop_reason": "details_collected",
+                 "details": {"name": "Client"}, "missing_details": [], "contacts": {"pipeline_stage": stage}}
+                for stage in ("qualified", "paid", "converted")]
+        with patch.dict("os.environ", settings, clear=True), patch("suno_store.suno_request", return_value=rows):
+            self.assertEqual([r["id"] for r in completed_suno_contacts()], ["qualified"])
+
     def test_assignment_project_namespace_rejects_veo_and_old_suno_database(self):
         with patch.dict("os.environ", SETTINGS, clear=True):
             for page, expected in [

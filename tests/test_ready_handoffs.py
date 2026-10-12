@@ -13,6 +13,7 @@ import client_volunteers as volunteers
 import crm_store
 import new_client_automation as clients
 import ready_availability as ready
+from daily_automation import AVAILABILITY_GROUPS, GROUPS, TRABAWHO_CHAT_ID
 from test_hourly_assignments import NOW, offer
 
 
@@ -212,13 +213,104 @@ class ReadyHandoffTests(unittest.TestCase):
         guide, announcement = [c.kwargs for c in enqueue.call_args_list]
         self.assertEqual(guide["payload"]["message_thread_id"], 5758)
         self.assertEqual(announcement["payload"]["message_thread_id"], 4794)
-        self.assertIn("ready-instructions:v2:", guide["dedupe_key"])
-        self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v2:{ready.OLLIE}")
+        self.assertIn("ready-instructions:v3:", guide["dedupe_key"])
+        self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v3:{ready.OLLIE}")
         text = guide["payload"]["text"]
         for instruction in ("/ready", "/busy", "WORKING A1B2C3D4", "TAKE is STILL AVAILABLE", "YOUR TURN ENDED", "hourly availability polls", "FREEBIE SENT", "Older offers keep the deadline"):
             self.assertIn(instruction, text)
         self.assertLess(len(text), 4096)
         self.assertIn("https://t.me/c/4423057797/5758", announcement["payload"]["text"])
+
+    def test_rollout_enables_only_the_five_configured_assignment_teams(self):
+        for chat in AVAILABILITY_GROUPS:
+            self.assertTrue(ready.enabled(chat))
+        for unrelated in (-1003555676168, -1004389276294, -1004441316976, 123):
+            self.assertFalse(ready.enabled(unrelated))
+
+    def test_ready_commands_are_scoped_to_each_teams_own_client_topic(self):
+        for chat, config in AVAILABILITY_GROUPS.items():
+            with self.subTest(team=config["name"]), patch.object(ready, "request", return_value=[{"id": 900}]) as request, patch.object(ready, "enqueue_scheduled_action", return_value=True) as enqueue:
+                update = command(thread=config["contact_thread"])
+                update["message"]["chat"]["id"] = chat
+                self.assertEqual(ready.handle(update, {chat}, NOW), chat)
+                self.assertEqual(request.call_args.args[1]["dedupe_key"], f"ready-member:{chat}:11")
+                self.assertEqual(enqueue.call_args.kwargs["chat_id"], chat)
+                self.assertEqual(enqueue.call_args.kwargs["payload"]["message_thread_id"], config["contact_thread"])
+                request.reset_mock()
+                update["message"]["message_thread_id"] = config["announcements"]
+                self.assertIsNone(ready.handle(update, {chat}, NOW))
+                request.assert_not_called()
+
+    def test_guides_use_each_team_and_suno_song_instructions(self):
+        for chat, config in AVAILABILITY_GROUPS.items():
+            with self.subTest(team=config["name"]), patch.object(ready, "enqueue_scheduled_action", return_value=True) as enqueue:
+                self.assertEqual(ready.queue_instructions(chat, NOW, config["contact_thread"]), 2)
+                guide, announcement = [c.kwargs for c in enqueue.call_args_list]
+                self.assertEqual(guide["chat_id"], chat)
+                self.assertEqual(guide["payload"]["message_thread_id"], config["contact_thread"])
+                self.assertEqual(announcement["chat_id"], chat)
+                self.assertEqual(announcement["payload"]["message_thread_id"], config["announcements"])
+                self.assertTrue(guide["payload"]["text"].startswith(config["name"].upper()))
+                text = guide["payload"]["text"]
+                self.assertLess(len(text), 4096)
+                if chat != ready.OLLIE:
+                    self.assertNotIn("Ollie", text)
+                if chat == TRABAWHO_CHAT_ID:
+                    self.assertIn("SONG SENT", text)
+                    self.assertIn("within 24 hours", text)
+                    self.assertIn("https://t.me/c/2894511895/7692", text)
+                    self.assertNotIn("FREEBIE SENT", text)
+                    self.assertNotIn("Done Deal", text)
+                else:
+                    self.assertIn("FREEBIE SENT", text)
+                    self.assertNotIn("SONG SENT", text)
+
+    def test_every_team_waits_for_delivered_end_notice_before_take(self):
+        for chat, config in AVAILABILITY_GROUPS.items():
+            row = ready_offer()
+            row["chat_id"] = chat
+            row["payload"]["new_client_thread_id"] = config["contact_thread"]
+            with self.subTest(team=config["name"]), patch.object(handoffs, "request", return_value=[]), patch.object(handoffs, "enqueue_scheduled_action", return_value=True) as enqueue, patch.object(volunteers, "open_window") as take:
+                volunteers.release(row, NOW + dt.timedelta(minutes=5))
+                take.assert_not_called()
+                self.assertEqual(enqueue.call_args.kwargs["chat_id"], chat)
+                self.assertEqual(enqueue.call_args.kwargs["payload"]["message_thread_id"], config["contact_thread"])
+                if chat != ready.OLLIE:
+                    self.assertNotIn("Ollie", enqueue.call_args.kwargs["payload"]["text"])
+
+    def test_acceptance_in_one_team_does_not_consume_readiness_in_another(self):
+        row = ready_offer()
+        row["chat_id"] = TRABAWHO_CHAT_ID
+        row["payload"]["new_client_acknowledged_at"] = NOW.isoformat()
+        with patch.object(ready, "records", return_value=[person()]):
+            self.assertEqual(len(ready.available(ready.OLLIE, NOW, [row])), 1)
+
+    def test_all_veo_page_readers_use_paid_and_human_handling_checks(self):
+        for chat, config in GROUPS.items():
+            with self.subTest(team=config["name"]), patch.object(clients, "completed_detail_contacts", return_value=[]) as source:
+                clients._page_contacts(config)
+                self.assertEqual(source.call_count, len(config["crm_pages"]))
+                self.assertTrue(all(c.kwargs["exclude_handled"] for c in source.call_args_list))
+
+    def test_suno_offer_checks_do_not_use_veo_crm(self):
+        row = ready_offer()
+        row["chat_id"] = TRABAWHO_CHAT_ID
+        with patch("suno_store.suno_contact_assignable", return_value=True) as suno, patch("crm_store.contact_assignable") as veo:
+            self.assertTrue(clients._crm_offer_eligible(row))
+        suno.assert_called_once_with(row)
+        veo.assert_not_called()
+
+    def test_suno_ready_webhook_never_assigns_from_an_unconfigured_source(self):
+        update = command()
+        update["message"].update(chat={"id": TRABAWHO_CHAT_ID}, message_thread_id=7673)
+        raw = json.dumps(update).encode()
+        env = {"REQUEST_METHOD": "POST", "PATH_INFO": "/api/webhook", "CONTENT_LENGTH": str(len(raw)),
+               "wsgi.input": io.BytesIO(raw), "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN": "test"}
+        status = []
+        with patch.dict("os.environ", {"TELEGRAM_WEBHOOK_SECRET": "test", "ALLOWED_CHAT_IDS": str(TRABAWHO_CHAT_ID)}), patch.object(app, "save_update", return_value=True), patch.object(app.referral_incentives, "observe_join"), patch.object(ready, "handle", return_value=TRABAWHO_CHAT_ID), patch.object(app, "suno_configured", return_value=False), patch.object(app, "queue_new_client_assignments") as queue:
+            app.app(env, lambda s, h: status.append(s))
+        self.assertTrue(status[0].startswith("200"))
+        queue.assert_not_called()
 
 
 class EligibilityTests(unittest.TestCase):

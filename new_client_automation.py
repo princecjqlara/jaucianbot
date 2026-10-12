@@ -129,7 +129,7 @@ def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
         return list(pages.items())
     pages = list(config["crm_pages"].items())
     with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
-        if config.get("name") == "Veo Ollie" and ready.enabled(ready.OLLIE):
+        if any(GROUPS[chat_id] == config and ready.enabled(chat_id) for chat_id in GROUPS):
             contacts = list(pool.map(lambda page_id: completed_detail_contacts(page_id, exclude_handled=True), (page_id for _, page_id in pages)))
         else:
             contacts = list(pool.map(completed_detail_contacts, (page_id for _, page_id in pages)))
@@ -949,6 +949,9 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
 
 
 def _crm_offer_eligible(action: dict) -> bool:
+    if GROUPS[int(action["chat_id"])].get("client_source") == "suno":
+        from suno_store import suno_contact_assignable
+        return suno_contact_assignable(action)
     from crm_store import contact_assignable
     p = action["payload"]
     return contact_assignable(p.get("new_client_contact_page_id"), p["new_client_contact_id"])
@@ -1114,9 +1117,10 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         source_available = True
         try:
             page_contacts = _page_contacts(GROUPS[chat_id])
-        except Exception:
+        except Exception as error:
             page_contacts = []
             source_available = False
+            print(f"New-client status source read failed for {chat_id}: {type(error).__name__}")
         ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
