@@ -1137,7 +1137,8 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             page_contacts = []
             source_available = False
             source_error = {"type": type(error).__name__, "http_status": getattr(error, "http_status", None),
-                            "api_code": getattr(error, "api_code", None), "schema_error": getattr(error, "schema_error", None)}
+                            "api_code": getattr(error, "api_code", None), "schema_error": getattr(error, "schema_error", None),
+                            "query_table": getattr(error, "query_table", None)}
             print(f"New-client status source read failed for {chat_id}: {source_error}")
         ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}

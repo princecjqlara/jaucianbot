@@ -14,8 +14,9 @@ PAID_TAG = re.compile(r"^paid(?:\s*/\s*availed\s*services?)?$", re.IGNORECASE)
 
 
 class CrmSourceError(RuntimeError):
-    def __init__(self, status: int, payload: dict):
+    def __init__(self, status: int, payload: dict, table: str | None = None):
         self.http_status = status
+        self.query_table = table if table and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", table) else None
         code = str(payload.get("code") or "")
         self.api_code = code if re.fullmatch(r"[A-Z0-9]{3,12}", code) else None
         match = re.search(r"(?:column|relation) [A-Za-z_][A-Za-z_0-9.]* does not exist", str(payload.get("message") or ""))
@@ -42,7 +43,7 @@ def crm_request(path: str):
                 payload = {}
         except (ValueError, UnicodeError):
             payload = {}
-        raise CrmSourceError(error.code, payload) from None
+        raise CrmSourceError(error.code, payload, path.split("?", 1)[0]) from None
     except urllib.error.URLError as error:
         raise RuntimeError(f"CRM network error ({type(error.reason).__name__})") from error
 
@@ -179,7 +180,7 @@ def blocked_contact_ids(page_id: str, contact_id: str | None = None, *, contact_
         offset = 0
         while True:
             rows = crm_request(table + "?" + urllib.parse.urlencode({
-                **filters, "select": "id,contact_id", "order": "id.asc", "limit": 1000, "offset": offset,
+                **filters, "select": "id,contact_id", "order": "contact_id.asc,id.asc", "limit": 1000, "offset": offset,
             })) or []
             blocked.update(str(r["contact_id"]) for r in rows if r.get("contact_id"))
             if len(rows) < 1000:
