@@ -72,14 +72,28 @@ def send_scheduled_action(action: dict) -> dict:
                 result = telegram_call(operation, payload)
             except TelegramError as error:
                 detail = str(error).casefold()
-                if operation == "editMessageText" and "message to edit not found" in detail:
+                if operation == "editMessageText" and any(reason in detail for reason in (
+                    "message to edit not found", "message can't be edited", "message cannot be edited",
+                )):
                     # An admin may already have removed the old announcement.
                     # Publish the instruction-only replacement exactly once via
                     # its existing durable scheduled-action key.
-                    return telegram_call("sendMessage", {
-                        "chat_id": action["chat_id"], "text": source["text"],
-                        "disable_notification": bool(source.get("disable_notification", False)),
-                    })
+                    text = source["text"]
+                    replacement = {**common, "text": text}
+                    if source.get("parse_mode"):
+                        replacement["parse_mode"] = source["parse_mode"]
+                    if source.get("client_handoff_kind") == "closure":
+                        # Some old force-reply offers cannot be edited. Post a
+                        # short closure in the same client topic, linked to the
+                        # original offer, without repeating its client brief.
+                        replacement["text"] = text.split("\n\n", 1)[0]
+                        replacement["reply_parameters"] = {"message_id": target, "allow_sending_without_reply": True}
+                        if not replacement.get("message_thread_id"):
+                            from daily_automation import AVAILABILITY_GROUPS
+                            thread = AVAILABILITY_GROUPS.get(int(action["chat_id"]), {}).get("contact_thread")
+                            if thread:
+                                replacement["message_thread_id"] = thread
+                    return telegram_call("sendMessage", replacement)
                 already_done = (operation == "editMessageText" and "message is not modified" in detail
                                 or operation == "deleteMessage" and "message to delete not found" in detail)
                 if not already_done:

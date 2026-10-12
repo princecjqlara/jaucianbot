@@ -292,6 +292,17 @@ class ReadyHandoffTests(unittest.TestCase):
                 self.assertEqual(source.call_count, len(config["crm_pages"]))
                 self.assertTrue(all(c.kwargs["exclude_handled"] for c in source.call_args_list))
 
+    def test_all_team_status_reads_independent_sources_concurrently(self):
+        barrier = threading.Barrier(2)
+        def read(config):
+            barrier.wait(timeout=2)
+            return [(config["name"], [])]
+        teams = {ready.OLLIE, -1004461399292}
+        with patch.object(clients, "new_client_actions", return_value=[]), patch.object(clients, "_active_members", return_value=[]), patch.object(ready, "available", return_value=[]), patch.object(clients, "_page_contacts", side_effect=read):
+            result = clients.new_client_status(teams, NOW)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(all(group["source_available"] for group in result))
+
     def test_suno_offer_checks_do_not_use_veo_crm(self):
         row = ready_offer()
         row["chat_id"] = TRABAWHO_CHAT_ID

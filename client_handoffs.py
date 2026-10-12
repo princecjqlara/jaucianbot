@@ -116,6 +116,7 @@ def close_offers(row: dict, now: dt.datetime, status: str) -> None:
         enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
             dedupe_key=f"client-close:{row['id']}:{message_id}:{p.get('new_client_phase')}",
             payload={"edit_message_id": int(message_id), "disable_notification": True, "parse_mode": "HTML",
+                     "message_thread_id": p["new_client_thread_id"],
                      "client_handoff_parent_id": int(row["id"]), "client_handoff_kind": "closure",
                      "client_handoff_generation": int(p.get("new_client_offer_generation") or 0),
                      "client_handoff_phase": p.get("new_client_phase"),

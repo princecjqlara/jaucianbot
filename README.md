@@ -169,6 +169,9 @@ recorded delivery. Undelivered notices keep the client reserved. Older offers
 retain their printed acceptance deadline. Delayed warnings are suppressed after
 acceptance. Confirmations name the client, page and current owner; closed offers
 are edited with their status while preserving the original client brief.
+If Telegram cannot edit an old offer, its closure is posted as a short reply in
+the same client topic. This uses the original scheduled-action retry and does
+not repeat the brief or keep failing delivery.
 
 Two missed delivered offers followed by unsuccessful takeover windows pause the
 client for its team lead's review. The review stays reserved and does not silently reset

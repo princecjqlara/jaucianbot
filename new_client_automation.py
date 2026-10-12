@@ -1094,6 +1094,19 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
     _enrich_history_contact_identities(history)
     used_contact_keys = _reserved_contact_keys(history)
     result = []
+    # Read independent team sources together so the all-team status does not
+    # accumulate each project's API latency and exhaust the remote timeout.
+    from suno_store import suno_configured
+    source_groups = [chat for chat in sorted(allowed.intersection(GROUPS))
+                     if GROUPS[chat].get("client_source") != "suno" or suno_configured()]
+    sources = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(source_groups))) as pool:
+        reads = {chat: pool.submit(_page_contacts, GROUPS[chat]) for chat in source_groups}
+        for chat, read in reads.items():
+            try:
+                sources[chat] = read.result()
+            except Exception as error:
+                sources[chat] = error
     for chat_id in sorted(allowed.intersection(GROUPS)):
         actions = [row for row in history if int(row["chat_id"]) == chat_id and is_new_client_action(row)]
         members = _active_members(chat_id, work_date)
@@ -1116,7 +1129,9 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 continue
         source_available = True
         try:
-            page_contacts = _page_contacts(GROUPS[chat_id])
+            page_contacts = sources[chat_id]
+            if isinstance(page_contacts, Exception):
+                raise page_contacts
         except Exception as error:
             page_contacts = []
             source_available = False

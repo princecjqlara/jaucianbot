@@ -106,6 +106,33 @@ class TelegramSenderTests(unittest.TestCase):
         self.assertEqual(call.call_args.args, ("sendMessage", {
             "chat_id": -100123, "text": "Work instructions", "disable_notification": False}))
 
+    def test_uneditable_offer_posts_short_closure_in_its_client_topic(self):
+        action = {"chat_id": -100123, "action_type": "message", "payload": {
+            "text": "OFFER CLOSED — Client\nHandled by Alex.\n\nOriginal client brief",
+            "edit_message_id": 516, "client_handoff_kind": "closure", "message_thread_id": 5758,
+            "parse_mode": "HTML", "disable_notification": True,
+        }}
+        with patch("telegram_sender.telegram_call", side_effect=[
+            TelegramError("Telegram HTTP 400: Bad Request: message can't be edited"), {"message_id": 518},
+        ]) as call:
+            result = send_scheduled_action(action)
+        self.assertEqual(result["message_id"], 518)
+        self.assertEqual(call.call_args.args, ("sendMessage", {
+            "chat_id": -100123, "text": "OFFER CLOSED — Client\nHandled by Alex.",
+            "disable_notification": True, "message_thread_id": 5758, "parse_mode": "HTML",
+            "reply_parameters": {"message_id": 516, "allow_sending_without_reply": True},
+        }))
+
+    def test_already_queued_closure_recovers_its_teams_client_topic(self):
+        action = {"chat_id": -1003647732254, "action_type": "message", "payload": {
+            "text": "OFFER CLOSED — Client", "edit_message_id": 30319, "client_handoff_kind": "closure",
+        }}
+        with patch("telegram_sender.telegram_call", side_effect=[
+            TelegramError("Telegram HTTP 400: message can't be edited"), {"message_id": 31840},
+        ]) as call:
+            send_scheduled_action(action)
+        self.assertEqual(call.call_args.args[1]["message_thread_id"], 27622)
+
 
 if __name__ == "__main__":
     unittest.main()
