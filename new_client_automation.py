@@ -1128,6 +1128,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 })
                 continue
         source_available = True
+        source_error = None
         try:
             page_contacts = sources[chat_id]
             if isinstance(page_contacts, Exception):
@@ -1135,8 +1136,9 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         except Exception as error:
             page_contacts = []
             source_available = False
-            detail = str(error) if re.fullmatch(r"(?:CRM|Suno) Data API HTTP \d{3}", str(error)) else ""
-            print(f"New-client status source read failed for {chat_id}: {type(error).__name__} {detail}")
+            source_error = {"type": type(error).__name__, "http_status": getattr(error, "http_status", None),
+                            "api_code": getattr(error, "api_code", None), "schema_error": getattr(error, "schema_error", None)}
+            print(f"New-client status source read failed for {chat_id}: {source_error}")
         ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         paused = _pause_deadlines(today, members, now) if ready_rotation else {}
         open_members = {
@@ -1198,6 +1200,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "chat_id": chat_id,
             "configured": True,
             "source_available": source_available,
+            "source_error": source_error,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],
             "active_today": len(members),
             "active_now": len(current_members(members, now)),

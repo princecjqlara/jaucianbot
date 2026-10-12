@@ -5,6 +5,14 @@ import crm_store
 
 
 class CrmStoreTests(unittest.TestCase):
+    def test_source_error_keeps_schema_diagnostics_without_raw_request_values(self):
+        error = crm_store.CrmSourceError(400, {"code": "42703", "message": "column outbound_message_events.actor_user_id does not exist"})
+        self.assertEqual(error.api_code, "42703")
+        self.assertEqual(error.schema_error, "column outbound_message_events.actor_user_id does not exist")
+        error = crm_store.CrmSourceError(400, {"code": "42703", "message": "Request failed for secret-client-token", "details": "private"})
+        self.assertNotIn("secret-client-token", str(error))
+        self.assertIsNone(error.schema_error)
+
     def test_handling_checks_only_read_contacts_in_the_completed_brief_batch(self):
         row = {"collected_details": {"name": "Client"}, "contacts": {
             "id": "contact-1", "page_id": "page-1", "name": "Client", "psid": "person",

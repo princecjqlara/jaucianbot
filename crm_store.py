@@ -13,6 +13,16 @@ import urllib.request
 PAID_TAG = re.compile(r"^paid(?:\s*/\s*availed\s*services?)?$", re.IGNORECASE)
 
 
+class CrmSourceError(RuntimeError):
+    def __init__(self, status: int, payload: dict):
+        self.http_status = status
+        code = str(payload.get("code") or "")
+        self.api_code = code if re.fullmatch(r"[A-Z0-9]{3,12}", code) else None
+        match = re.search(r"(?:column|relation) [A-Za-z_][A-Za-z_0-9.]* does not exist", str(payload.get("message") or ""))
+        self.schema_error = match.group(0) if match else None
+        super().__init__(f"CRM Data API HTTP {status}" + (f" ({self.api_code})" if self.api_code else ""))
+
+
 def crm_request(path: str):
     url = os.environ.get("CRM_SUPABASE_URL", "").strip().rstrip("/")
     key = os.environ.get("CRM_SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -26,7 +36,13 @@ def crm_request(path: str):
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"CRM Data API HTTP {error.code}") from error
+        try:
+            payload = json.load(error)
+            if not isinstance(payload, dict):
+                payload = {}
+        except (ValueError, UnicodeError):
+            payload = {}
+        raise CrmSourceError(error.code, payload) from None
     except urllib.error.URLError as error:
         raise RuntimeError(f"CRM network error ({type(error.reason).__name__})") from error
 
