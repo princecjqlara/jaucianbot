@@ -66,6 +66,8 @@ def send_scheduled_action(action: dict) -> dict:
             payload = {"chat_id": action["chat_id"], "message_id": target}
             if operation == "editMessageText":
                 payload["text"] = source["text"]
+                if source.get("parse_mode"):
+                    payload["parse_mode"] = source["parse_mode"]
             try:
                 result = telegram_call(operation, payload)
             except TelegramError as error:

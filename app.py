@@ -31,6 +31,8 @@ from cloud_store import (
 from daily_automation import GROUPS, AVAILABILITY_GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
 import hourly_availability
 import client_volunteers
+import client_handoffs
+import ready_availability
 import referral_incentives
 import database_scheduler
 from daily_report_plans import planning_snapshot
@@ -52,7 +54,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-12.01"
+AUTOMATION_VERSION = "2026-10-13.02"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -419,6 +421,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if not client_handoffs.delivery_allowed(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("closed handoff notice was not finalized")
+                continue
             if int(action["chat_id"]) == referral_incentives.RECRUITS_CHAT and (
                 action.get("dedupe_key") == "referral-rules:v1"
                 or action["payload"].get("referral_poll") and (
@@ -636,6 +642,15 @@ def webhook_route(environ, start_response):
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})
+    if stored:
+        try:
+            ready_chat = ready_availability.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
+            if ready_chat is not None:
+                queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {ready_chat})
+                return response(start_response, 200, {"ok": True})
+        except Exception as error:
+            print(f"Ready queue update failed: {type(error).__name__}")
+            return response(start_response, 500, {"ok": False})
     if stored and TRABAWHO_CHAT_ID in allowed:
         handled_trabawho = False
         try:

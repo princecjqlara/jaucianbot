@@ -63,7 +63,7 @@ def paid_contacts(page_id: str) -> list[dict]:
     return list(contacts.values())
 
 
-def completed_detail_contacts(page_id: str) -> list[dict]:
+def completed_detail_contacts(page_id: str, *, exclude_handled: bool = False) -> list[dict]:
     """Return new clients whose complete chatbot details are stored in the CRM.
 
     The chatbot state is authoritative for completion. ``contacts.pipeline_stage``
@@ -91,6 +91,7 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
         if len(batch) < 1000:
             break
     contacts: dict[str, dict] = {}
+    blocked = blocked_contact_ids(page_id) if exclude_handled and rows else set()
     for row in rows:
         contact = row.get("contacts") or {}
         if isinstance(contact, list):
@@ -98,6 +99,8 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
         if (
             contact.get("page_id") == page_id
             and contact.get("id")
+            and contact["id"] not in blocked
+            and (not exclude_handled or str(contact.get("pipeline_stage") or "").casefold() not in {"paid", "converted", "won", "closed_won"})
             and (contact.get("name") or "").strip()
             and contact.get("psid")
             and isinstance(row.get("collected_details"), dict)
@@ -118,6 +121,59 @@ def completed_detail_contacts(page_id: str) -> list[dict]:
                 "last_bot_reply_at": row.get("last_bot_reply_at"),
             }
     return list(contacts.values())
+
+
+def blocked_contact_ids(page_id: str, contact_id: str | None = None) -> set[str]:
+    """Exclude paid/converted tags and recorded human intervention, read-only."""
+    blocked = set()
+    tags = crm_request("tags?" + urllib.parse.urlencode({
+        "select": "id,name,system_key", "page_id": f"eq.{page_id}", "limit": 1000,
+    })) or []
+    tag_ids = [str(t["id"]) for t in tags if PAID_TAG.fullmatch((t.get("name") or "").strip()) or
+               (t.get("name") or "").strip().casefold() == "converted" or t.get("system_key") == "converted"]
+    queries = []
+    if tag_ids:
+        queries.append(("contact_tags", {"tag_id": "in.(" + ",".join(tag_ids) + ")"}))
+    queries.extend([
+        ("outbound_message_events", {"page_id": f"eq.{page_id}", "actor_user_id": "not.is.null",
+                                     "source_type": "not.in.(campaign,chatbot,workflow)"}),
+        ("chatbot_interruption_events", {"page_id": f"eq.{page_id}", "actor_user_id": "not.is.null",
+                                         "interruption_type": "neq.lead_stage_change"}),
+    ])
+    for table, filters in queries:
+        if contact_id:
+            filters["contact_id"] = f"eq.{contact_id}"
+        offset = 0
+        while True:
+            rows = crm_request(table + "?" + urllib.parse.urlencode({
+                **filters, "select": "id,contact_id", "order": "id.asc", "limit": 1000, "offset": offset,
+            })) or []
+            blocked.update(str(r["contact_id"]) for r in rows if r.get("contact_id"))
+            if len(rows) < 1000:
+                break
+            offset += 1000
+    return blocked
+
+
+def contact_assignable(page_id: str | None, contact_id: str) -> bool:
+    if not page_id:
+        rows = crm_request("contacts?" + urllib.parse.urlencode({
+            "select": "page_id", "id": f"eq.{contact_id}", "limit": 1,
+        })) or []
+        page_id = rows[0]["page_id"] if rows else None
+    if not page_id:
+        return False
+    rows = crm_request("contacts?" + urllib.parse.urlencode({
+        "select": "id,pipeline_stage", "id": f"eq.{contact_id}", "page_id": f"eq.{page_id}", "limit": 1,
+    })) or []
+    if not rows or str(rows[0].get("pipeline_stage") or "").casefold() in {"paid", "converted", "won", "closed_won"}:
+        return False
+    states = crm_request("chatbot_contact_states?" + urllib.parse.urlencode({
+        "select": "collected_details", "contact_id": f"eq.{contact_id}", "page_id": f"eq.{page_id}",
+        "stop_reason": "eq.details_collected", "limit": 1,
+    })) or []
+    return bool(states and isinstance(states[0].get("collected_details"), dict) and states[0]["collected_details"]
+                and contact_id not in blocked_contact_ids(page_id, contact_id))
 
 
 def contact_identity_map(contact_ids: set[str]) -> dict[str, tuple[str, str]]:

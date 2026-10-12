@@ -532,6 +532,7 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_ack_pending", "new_client_ack_queued_at",
     "new_client_offer_generation",
     "new_client_original_assignee_name", "new_client_direct_timeout_minutes",
+    "new_client_ready_protocol",
 )
 
 
@@ -771,21 +772,23 @@ def restore_new_client_action(action_id: int, chat_id: int, now: dt.datetime) ->
     if not rows:
         return None
     original = rows[0]["payload"]
+    minutes = 5 if original.get("new_client_ready_protocol") else 20
+    handoff = "notify you that your turn ended, then invite " if original.get("new_client_ready_protocol") else "invite "
     text = original["text"]
     details = text.split("Please reply within ", 1)[0]
     song_footer = "\n\nAfter WORKING," + text.split("\n\nAfter WORKING,", 1)[1] if "\n\nAfter WORKING," in text else ""
     text = ("💛 Quick clarification: this latest assignment remains with you.\n\n" + details +
-            "Please reply within 20 minutes of this updated assignment. If you can't take it, we'll invite "
+            f"Please reply within {minutes} minutes of this updated assignment. If you can't take it, we'll {handoff}"
             "available teammates for 10 minutes, then offer it to the next member. Thank you!" + song_footer)
     revised = dict(original, text=text, new_client_reminder_text=text, new_client_phase="direct",
-                   new_client_response_minutes=20, new_client_volunteer_minutes=10,
+                   new_client_response_minutes=minutes, new_client_volunteer_minutes=10,
                    new_client_cancelled_reason=None, new_client_cancelled_at=None,
                    new_client_offer_generation=int(original.get("new_client_offer_generation") or 0) + 1,
                    _first_delivery_at=None, new_client_resumed_at=now.isoformat())
     changed = request("scheduled_actions?" + urllib.parse.urlencode({
         **filters, "select": "id", "updated_at": f"eq.{rows[0]['updated_at']}",
     }), {"payload": revised, "status": "pending", "scheduled_for": now.isoformat(), "updated_at": now.isoformat(),
-         "sent_at": None, "attempts": 0, "repeat_interval_minutes": 20}, method="PATCH", prefer="return=representation")
+         "sent_at": None, "attempts": 0, "repeat_interval_minutes": minutes}, method="PATCH", prefer="return=representation")
     return {"id": action_id, "payload": revised} if changed else None
 
 

@@ -151,6 +151,46 @@ The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pag
 
 ### Hourly availability and the 20 / 10-minute handoff
 
+With `NEW_CLIENT_READY_ENABLED=true`, **Veo Ollie only** uses `/ready` and
+`/busy` in its New Clients topic (`5758`). `/ready` makes the member eligible
+for one automatic assignment for 15 minutes, independently of the hourly poll.
+Readiness is consumed when an assignment is reserved; `/ready` is needed again
+for another assignment. `/busy` removes readiness and leaves accepted clients
+with their existing owner. Hourly availability and quota reports continue;
+members available in the hourly poll can still use `TAKE` without `/ready`.
+
+New ready-queue offers allow five minutes **from Telegram delivery** to accept
+with `WORKING <token>`. One warning is queued after three minutes. Before opening
+the ten-minute TAKE window or reassigning an unanswered delivered offer, the bot
+tags its previous editor with a turn-ended notice and waits for that notice's
+recorded delivery. Undelivered notices keep the client reserved. Older offers
+retain their printed acceptance deadline. Delayed warnings are suppressed after
+acceptance. Confirmations name the client, page and current owner; closed offers
+are edited with their status while preserving the original client brief.
+
+Two missed delivered offers followed by unsuccessful takeover windows pause the
+client for Ollie's review. The review stays reserved and does not silently reset
+the next day. CRM paid/converted tags and pipeline outcomes, human outbound
+events and human-intervention records exclude clients from this queue. Eligibility
+is checked again before offer delivery and acceptance. This protects **recorded**
+human handling; inbox activity missing from the CRM cannot establish ownership.
+The CRM's client-facing chatbot is a separate service: this repository does not
+change its answer extraction, inbound restart rules or queued Messenger replies.
+
+The new readiness commands use the current message webhook; no callback-query
+subscription, new poll stream, schema migration or scheduler cadence change is
+needed. Commands are restricted to the approved Ollie group and client topic;
+message edits and stale updates cannot extend readiness. The scheduler delivers
+the daily instruction and all ready/handoff notices. Do not dispatch manually
+to test them.
+
+The scheduler posts a daily Taglish guide with command examples in Ollie's New
+Clients topic and one announcement per guide version in Announcements (`4794`).
+The guide explains where to use commands, how READY differs from hourly polls,
+the acceptance and TAKE windows, official ownership confirmation, expired offers,
+and how to flag an existing owner or conflicting updates to Ollie. Guide-version
+keys publish updated instructions even if the previous guide was sent that day.
+
 With NEW_CLIENT_VOLUNTEER_ENABLED=true, all four Veo teams and Trabawho use
 20-minute direct offers followed by a 10-minute volunteer window. The direct
 timer starts at the first delivery of the client details. If the assigned member
