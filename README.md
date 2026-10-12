@@ -181,6 +181,14 @@ is checked again before offer delivery and acceptance. This protects **recorded*
 human handling; inbox activity missing from the CRM cannot establish ownership.
 The CRM's client-facing chatbot is a separate service: this repository does not
 change its answer extraction, inbound restart rules or queued Messenger replies.
+The CRM ownership lookup requires the partial index recorded in
+[`crm/20261013_human_ownership_lookup.sql`](crm/20261013_human_ownership_lookup.sql).
+Apply it to the verified CRM database using an autocommit connection, outside a
+transaction; it is separate from archive and Suno migrations. It supports the
+page/contact-filtered human-message lookup without changing client records.
+Without the index, large event histories can cause Data API statement timeouts
+(`57014`). Source status exposes sanitized HTTP, SQLSTATE and table diagnostics
+only through the authenticated endpoint.
 Suno rechecks its own mapped contact source, page and customer identity before
 delivery and acceptance. Its existing brief threshold is retained; paid and
 converted pipeline outcomes block partial handoffs. WORKING
