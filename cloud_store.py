@@ -803,7 +803,8 @@ def restore_new_client_action(action_id: int, chat_id: int, now: dt.datetime) ->
     if not rows:
         return None
     original = rows[0]["payload"]
-    minutes = 5 if original.get("new_client_ready_protocol") else 20
+    from ready_availability import ACCEPTANCE_MINUTES
+    minutes = ACCEPTANCE_MINUTES if original.get("new_client_ready_protocol") else 20
     handoff = "notify you that your turn ended, then invite " if original.get("new_client_ready_protocol") else "invite "
     text = original["text"]
     details = text.split("Please reply within ", 1)[0]

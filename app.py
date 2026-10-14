@@ -55,7 +55,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-14.02"
+AUTOMATION_VERSION = "2026-10-14.03"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -676,7 +676,14 @@ def webhook_route(environ, start_response):
                 "text": (result or "Use these buttons in your approved team's NEW CLIENTS topic.")[:200],
                 "show_alert": True})
         except Exception as error:
-            print(f"Client button failed: {type(error).__name__}")
+            import traceback
+            callback = update.get("callback_query") or {}
+            message = callback.get("message") or {}
+            frames = traceback.extract_tb(error.__traceback__)
+            location = " -> ".join(f"{os.path.basename(frame.filename)}:{frame.lineno}" for frame in frames)
+            command = str(callback.get("data") or "").split(":")[1:2]
+            command = command[0] if command and re.fullmatch(r"[a-z_]{1,32}", command[0]) else "unknown"
+            print(f"Client button failed: {type(error).__name__} chat={(message.get('chat') or {}).get('id')} message={message.get('message_id')} command={command} [{location}]")
             return response(start_response, 500, {"ok": False})
     try:
         if "poll_answer" in update:

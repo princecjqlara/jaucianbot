@@ -43,7 +43,7 @@ REMINDER_MINUTES = 60
 
 def _timeout_minutes(chat_id: int) -> int:
     if ready.enabled(chat_id):
-        return 5
+        return ready.ACCEPTANCE_MINUTES
     if volunteers.enabled():
         return 20
     return int(GROUPS[chat_id].get("new_client_timeout_minutes", 60))
@@ -639,7 +639,8 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
     if ready.enabled(chat_id):
         rotation_text = ("Reserved for you. Tap Accept client or send WORKING + this token. "
                          "Wait for the owner confirmation before contacting the client.\n"
-                         "Reminder at 3 minutes. If unanswered, we notify you that your turn ended, then open TAKE for 10 minutes. "
+                         f"Accept within {ready.ACCEPTANCE_MINUTES} minutes; reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. "
+                         "If unanswered, we notify you that your turn ended, then open TAKE for 10 minutes. "
                          "Automatic offers pause until /ready. /busy stops new offers. /clients shows all owners.")
     page_label = "Suno page" if GROUPS[chat_id].get("client_source") == "suno" else "Page"
     partial = GROUPS[chat_id].get("client_source") == "suno" and contact.get("details_complete") is False
@@ -1007,7 +1008,7 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     return is_active
 
 
-def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
+def confirm_new_client_reply(update: dict, allowed: set[int], *, queue_next: bool = True, history: list[dict] | None = None) -> bool:
     message = update.get("message") or update.get("edited_message") or {}
     chat_id = (message.get("chat") or {}).get("id")
     if chat_id not in allowed or chat_id not in GROUPS:
@@ -1015,7 +1016,7 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
     text = message.get("text") or ""
     if not any((WORKING_RE.search(text), WORKING_REPLY_RE.fullmatch(text), volunteers.CLAIM_RE.search(text), volunteers.REPLY_RE.fullmatch(text))):
         return False
-    history = [row for row in new_client_actions({chat_id}) if is_new_client_action(row) and new_client_action_matches_source(row)]
+    history = [row for row in (new_client_actions({chat_id}) if history is None else history) if is_new_client_action(row) and new_client_action_matches_source(row)]
     _enrich_history_contact_identities(history)
     _retire_superseded_claims(history, dt.datetime.now(dt.timezone.utc))
     current = _current_assignments(history)
@@ -1057,7 +1058,8 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
                 _queue_turn_notice(target, latest, message, dt.datetime.now(dt.timezone.utc))
                 return True
         return False
-    queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
+    if queue_next:
+        queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
     return True
 
 
@@ -1075,6 +1077,7 @@ def new_client_ack_delivery_allowed(action: dict) -> bool:
         action["payload"]["text"] = (f"<b>CLIENT ACCEPTED</b>\nClient: {html.escape(p.get('new_client_contact_name') or 'Client')}\n"
             f"Page: {html.escape(p.get('new_client_page') or 'Page')}\nCurrent editor: {member}\n"
             "Unavailable to other editors. Tap Hand over to transfer, or Client list to view owners.\n"
+            + (f"Paid sale? Tap Done Deal template or send /ddtemplate {p['new_client_token']} AMOUNT in NEW CLIENTS.\n" if GROUPS[int(row["chat_id"])].get("done") else "") +
             "Your /ready queue continues. Send /busy when full or leaving.")
     return bool(row and row["payload"].get("new_client_acknowledged_at") and
                 (action["payload"].get("new_client_ack_owner_id") is None or

@@ -221,6 +221,27 @@ to test them.
 
 ### Client list and editor handovers
 
+New ready-mode offers use a **15-minute** acceptance window, with one warning
+after **10 minutes**. Previously delivered offers retain their printed deadline
+and their original warning timing. TAKE remains a separate 10-minute window.
+Warning text recomputes the remaining time at delivery so a deferred notice does
+not display an old countdown.
+
+Veo editors can tap **Done Deal template** on an owner confirmation or client
+list, or send `/ddtemplate TOKEN AMOUNT` in NEW CLIENTS. Only the confirmed
+current editor can request the client's prefilled client/page/price/token block.
+The draft is sent in NEW CLIENTS and never counts as a sale; the member copies it
+into DONE DEALS only after payment. `/ddtemplate TOKEN` leaves an amount placeholder.
+Suno retains its separate receipts process. Drafts are suppressed if ownership
+changes before scheduled delivery.
+
+If a callback lacks Telegram topic metadata, the handler recovers the topic from
+the exact delivered bot message in the same group. Unknown messages and wrong
+topics are rejected. Acceptance clicks avoid synchronous CRM supply scans and
+return a clear already-accepted or unavailable result for repeated clicks.
+Matching text commands remain available in NEW CLIENTS. Callback errors log only
+the exception type, group/message IDs, action name and source locations.
+
 Veo Lyn (`-1004364797420`) uses General `1`, FREEBIES `22`, NEW CLIENTS `20`,
 CLOSE DEALS `19`, announcements `18`, ACTIVE FOR TOMORROW `16`, and DONE DEALS `15`.
 Its page mapping is pending: polls, reminders, client controls, and archiving can

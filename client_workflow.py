@@ -18,7 +18,7 @@ from cloud_store import enqueue_scheduled_action, new_client_actions, request
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, TRABAWHO_CHAT_ID, page_mapping_pending
 
 PAGE_SIZE = 12
-COMMAND = re.compile(r"^/(clients|clienthelp|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
+COMMAND = re.compile(r"^/(clients|clienthelp|ddtemplate|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
 
 
 def button(text: str, data: str) -> dict:
@@ -37,27 +37,31 @@ def offer_buttons(token: str, *, take: bool = False) -> dict:
 
 def owner_buttons(row: dict) -> dict:
     revision = int(row["payload"].get("new_client_handover_revision") or 0)
-    return {"inline_keyboard": [[button("Hand over", f"choose:{row['id']}:{revision}:0"), button("Client list", "list:0")]]}
+    keyboard = [[button("Hand over", f"choose:{row['id']}:{revision}:0"), button("Client list", "list:0")]]
+    if GROUPS[int(row["chat_id"])].get("done"):
+        keyboard.append([button("Done Deal template", f"dd:{row['id']}")])
+    return {"inline_keyboard": keyboard}
 
 
 def guide(chat_id: int) -> str:
+    import ready_availability as ready
     config = GROUPS[chat_id]
     ending = (f"Complete any missing details, then send the song today and within 24 hours. After sending it to the client, post SONG SENT + the client token in SONGS: https://t.me/c/{str(abs(chat_id))[3:]}/{config['songs']}. The original 24-hour deadline stays the same after handover."
               if config.get("songs") else
-              "When the client pays, include Client token: + the actual token in your Done Deal post. FREEBIE tasks still use FREEBIE SENT + token.")
+              "Paid sale? Tap Done Deal template or send /ddtemplate + the token in NEW CLIENTS. Copy the filled client/page/token, enter Price Deal, then post it yourself in DONE DEALS. FREEBIE tasks still use FREEBIE SENT + token.")
     setup = ("PAGE SETUP PENDING: client and freebie assignments are paused until the team page is connected. Availability polls and reminders are active.\n\n"
              if page_mapping_pending(config) else "")
     return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
             "Use the buttons or commands in NEW CLIENTS:\n"
             "1. Send /ready ONCE to receive clients. WORKING keeps you in the queue for the next client.\n"
             "2. Send /busy IMMEDIATELY when full, on break, or ending your shift. Your accepted clients stay with you.\n"
-            "3. Tap Accept client after reviewing the brief, or send WORKING A1B2C3D4 using the actual token. Accept within 5 minutes of delivery. Wait for owner confirmation before contacting the client.\n"
-            "4. Reminder at 3 minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until /ready.\n"
+            f"3. Tap Accept client after reviewing the brief, or send WORKING A1B2C3D4 using the actual token. Accept within {ready.ACCEPTANCE_MINUTES} minutes of delivery. Wait for owner confirmation before contacting the client.\n"
+            f"4. Reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until /ready.\n"
             "5. TAKE is STILL AVAILABLE: tap Take client or send TAKE + token during the 10-minute OPEN TAKE window. First eligible claim wins.\n"
             "6. Tap Client list or send /clients: see available clients, reserved offers, current editors, and pending handovers.\n"
             "7. Need to transfer? Tap Hand over on your owner confirmation and choose a teammate. Or reply to their message with /handover TOKEN and a short note. They must accept; you remain responsible until the bot confirms the new owner. They can decline, and you can cancel.\n\n"
             "Keep answering the hourly availability polls. Unclaimed clients keep rotating. Older offers keep the deadline printed on their message.\n\n"
-            + ending + "\n\nConflicting ownership or an existing CRM editor? Ask your team lead before contacting the client.")
+            + ending + "\n\nButtons not responding? Send the matching text command in your team's NEW CLIENTS topic. Use your personal Telegram account, not anonymous-admin mode.\nConflicting ownership or an existing CRM editor? Ask your team lead before contacting the client.")
 
 
 def history_for(chat_id: int) -> list[dict]:
@@ -138,6 +142,8 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
         lines.extend([f"<b>{name}</b> · {html.escape(directory_label(entry['page']))}", f"{entry['status']} · {owner}{token}", ""])
         if entry["status"] == "Assigned":
             controls.append([button("Hand over: " + entry["client"][:35], f"choose:{entry['assignment_id']}:{entry['handover_revision']}:0")])
+            if GROUPS[snapshot["chat_id"]].get("done"):
+                controls[-1].append(button("DD template", f"dd:{entry['assignment_id']}"))
         elif entry["status"] == "Available to TAKE":
             controls.append([button("Take: " + entry["client"][:35], f"take:{entry['token']}")])
     if not entries:
@@ -379,7 +385,63 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
         row = full_assignment(int(action["chat_id"]), int(p["client_transfer_assignment_id"]))
         h = (row["payload"].get("new_client_handover") or {}) if row else {}
         return h.get("revision") == p["client_transfer_revision"] and h.get("state") == p["client_transfer_state"]
+    if p.get("client_template_assignment_id"):
+        row = full_assignment(int(action["chat_id"]), int(p["client_template_assignment_id"]))
+        return bool(row and int(row["payload"]["new_client_assignee_id"]) == int(p["client_template_owner_id"]))
     return True
+
+
+def callback_topic(chat_id: int, message: dict) -> int | None:
+    """Resolve missing Telegram topic metadata from a delivered bot message only."""
+    if message.get("message_thread_id") is not None:
+        return int(message["message_thread_id"])
+    message_id = message.get("message_id")
+    if not isinstance(message_id, int) or message_id <= 0:
+        return None
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "thread:payload->>message_thread_id", "chat_id": f"eq.{chat_id}",
+        "telegram_message_id": f"eq.{message_id}", "order": "id.desc", "limit": 1,
+    })) or []
+    try:
+        return int(rows[0]["thread"]) if rows and rows[0].get("thread") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def done_deal_template(row: dict, actor: int, now: dt.datetime, event: str, amount: str = "") -> str:
+    from decimal import Decimal, InvalidOperation
+    chat_id = int(row["chat_id"])
+    p = row["payload"]
+    config = GROUPS[chat_id]
+    if not config.get("done") or not config.get("pages"):
+        return "This team uses Suno receipts or is waiting for page setup. Done Deal templates are for configured Veo pages."
+    if actor != int(p["new_client_assignee_id"]):
+        return "Only the current editor can prepare this client's Done Deal template."
+    if amount:
+        if not re.fullmatch(r"\d{1,9}(?:\.\d{1,2})?", amount):
+            return "Enter a positive Price Deal amount, for example /ddtemplate TOKEN 650."
+        try:
+            if Decimal(amount) <= 0:
+                return "Price Deal must be greater than zero."
+        except InvalidOperation:
+            return "Enter a valid Price Deal amount."
+    # Put the draft in NEW CLIENTS. A bot-authored draft must never count as a
+    # sale or assign the bot's Telegram ID to an employee's earnings.
+    value = amount or "[ENTER AMOUNT]"
+    client_name = " ".join((p.get("new_client_contact_name") or "Client").split())
+    page_name = " ".join(p["new_client_page"].split())
+    lines = [f"Client: {client_name}", f"Page: {page_name}",
+             f"Price Deal: {value}", "Paid", f"Client token: {p['new_client_token']}"]
+    target = f"https://t.me/c/{str(abs(chat_id))[3:]}/{config['done']}"
+    queue_message(chat_id, now, f"client-dd-template:{event}",
+        "<b>DONE DEAL TEMPLATE — not recorded yet</b>\n"
+        "Use this only after the client has paid. Copy the block, "
+        + ("check the amount, " if amount else "replace [ENTER AMOUNT] with Price Deal, ")
+        + f'then post it yourself in <a href="{target}">DONE DEALS</a>. Attach payment evidence if your team requires it.\n\n'
+        + "<pre>" + html.escape("\n".join(lines)) + "</pre>\n\n"
+        "Keep tips, revisions and down payments separate. This draft does not record payment or complete delivery.",
+        client_template_assignment_id=row["id"], client_template_owner_id=actor)
+    return "Template queued in NEW CLIENTS. Copy it and post it yourself in DONE DEALS after payment."
 
 
 def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
@@ -392,8 +454,11 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
     chat = (message.get("chat") or {}).get("id")
     if chat not in allowed or chat not in GROUPS or not user.get("id") or user.get("is_bot"):
         return None
-    if message.get("message_thread_id") != GROUPS[chat]["contact_thread"]:
+    thread = callback_topic(chat, message) if callback else message.get("message_thread_id")
+    if thread != GROUPS[chat]["contact_thread"]:
         return None
+    if callback and message.get("message_thread_id") is None:
+        message = {**message, "message_thread_id": thread}
     if chat == TRABAWHO_CHAT_ID:
         from suno_store import suno_configured
         if not suno_configured():
@@ -420,11 +485,23 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
         ready_availability.handle(synthetic, allowed, now)
         return "Availability updated."
     if command in {"accept", "take"} and callback and len(parts) == 2 and re.fullmatch(r"[A-F0-9]{8}", parts[1]):
+        history = history_for(chat)
+        matches = [row for row in current_rows(history) if row["payload"].get("new_client_token") == parts[1]]
+        if len(matches) != 1:
+            return "This offer is old or unavailable. Open the latest offer in NEW CLIENTS."
+        row = matches[0]
+        if row["payload"].get("new_client_acknowledged_at"):
+            if int(row["payload"]["new_client_assignee_id"]) == actor:
+                return "Already accepted. This client is yours; check your owner confirmation."
+            return "This client is already assigned to another editor."
         synthetic = {"message": {**message, "from": user, "date": int(now.timestamp()), "text": f"{'WORKING' if command == 'accept' else 'TAKE'} {parts[1]}"}}
-        if confirm_new_client_reply(synthetic, allowed):
+        handled = confirm_new_client_reply(synthetic, allowed, queue_next=False, history=history)
+        if handled and row["payload"].get("new_client_acknowledged_at") and int(row["payload"]["new_client_assignee_id"]) == actor:
             queue_board(chat, now, refresh=True)
             return "Accepted. Wait for the owner confirmation in NEW CLIENTS."
-        return "Offer unavailable, expired, or assigned to another editor. Check the latest offer."
+        if handled:
+            return "The offer changed while you were accepting it. Check the latest owner confirmation."
+        return f"Offer expired or reserved for another editor. Check the latest offer; you can also send {'WORKING' if command == 'accept' else 'TAKE'} {parts[1]}."
     if command in {"list", "view"}:
         page = int(parts[1]) if callback and len(parts) == 2 and parts[1].isdigit() else 0
         # Render at scheduled delivery so a queued response cannot show old owners.
@@ -435,6 +512,18 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
     if command == "help":
         queue_message(chat, now, f"client-help:{event}", html.escape(guide(chat)), menu())
         return "Guide queued in NEW CLIENTS."
+    if command == "dd" and callback:
+        row = full_assignment(chat, int(parts[1])) if len(parts) == 2 and parts[1].isdigit() else None
+        return done_deal_template(row, actor, now, event) if row else "Open the latest owner confirmation for this client."
+    if command == "ddtemplate" and not callback:
+        args = parts[1].strip().split()
+        token = args[0].upper() if args else ""
+        matches = [row for row in current_rows(history_for(chat)) if row["payload"].get("new_client_token") == token]
+        row = full_assignment(chat, int(matches[0]["id"])) if len(matches) == 1 and len(args) in {1, 2} else None
+        result = done_deal_template(row, actor, now, event, args[1] if len(args) == 2 else "") if row else "Use /ddtemplate TOKEN or /ddtemplate TOKEN 650 for your accepted client."
+        if not result.startswith("Template queued"):
+            queue_message(chat, now, f"client-command-result:{event}", html.escape(result))
+        return result
     if command in {"choose", "pick", "yes", "no", "cancel"} and callback:
         expected = 4 if command in {"choose", "pick"} else 3
         if len(parts) != expected or not all(part.isdigit() for part in parts[1:]):

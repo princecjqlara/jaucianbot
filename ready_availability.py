@@ -10,7 +10,9 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 5
+GUIDE_VERSION = 6
+ACCEPTANCE_MINUTES = 15
+WARNING_BEFORE_MINUTES = 5
 COMMAND = re.compile(r"^\s*/?(ready|busy)(?:@[\w]+)?\s*$", re.I)
 
 
@@ -184,14 +186,14 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
     effective_until = dt.datetime.fromisoformat(effective["ready_until"])
     if effective.get("continuous") and effective["state"] in {"ready", "reserved"}:
         detail = ("Continuous mode: stay in the queue until you send /busy or miss an acceptance deadline. WORKING keeps you in the queue for the next client; "
-                  "only one unanswered offer at a time. Accept within 5 minutes of delivery. "
+                  f"only one unanswered offer at a time. Accept within {ACCEPTANCE_MINUTES} minutes of delivery. "
                   "A missed deadline pauses automatic assignments until you send /ready again. "
                   "Send /busy as soon as you cannot take another client.")
     elif effective["state"] == "reserved":
         detail = "Your ready turn has already been used for an assignment. Follow its WORKING instructions; send /ready when you want another client."
     elif effective["state"] == "ready" and effective_until > now:
         until = effective_until
-        detail = f"Ready to receive one new client until {until.astimezone(MANILA):%I:%M %p} PHT. Once assigned, reply WORKING within 5 minutes."
+        detail = f"Ready to receive one new client until {until.astimezone(MANILA):%I:%M %p} PHT. Once assigned, reply WORKING within {ACCEPTANCE_MINUTES} minutes."
     elif effective["state"] == "ready":
         detail = "That 15-minute ready window has expired. Send /ready again when available."
     else:
@@ -214,12 +216,15 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
         dedupe_key=f"ready-rollout:v{GUIDE_VERSION}:{chat_id}", payload={
             "message_thread_id": config["announcements"],
-            "text": f"{config['name'].upper()} ? CLIENT LIST + HANDOVERS\n\n"
+            "text": f"{config['name'].upper()} - CLIENT LIST + HANDOVERS\n\n"
+                    f"New offers: {ACCEPTANCE_MINUTES} minutes to accept; warning after {ACCEPTANCE_MINUTES - WARNING_BEFORE_MINUTES} minutes. Older offers keep their printed deadline.\n"
                     "See who is available and who handles each client: /clients in NEW CLIENTS.\n"
                     "Send /ready ONCE to receive clients; WORKING keeps you queued for the next client. "
                     "Send /busy IMMEDIATELY when full or leaving. A missed acceptance deadline means PAUSED until /ready.\n\n"
                     "New buttons: Accept client, Take client, Client list, and Hand over. "
                     "Only the current editor can request a handover. The chosen teammate must accept before ownership changes.\n\n"
+                    "Buttons not working? Use /ready, /busy, WORKING + token, or TAKE + token in NEW CLIENTS. "
+                    "Veo members can use /ddtemplate TOKEN AMOUNT for a ready-to-copy paid-sale post.\n\n"
                     f"Open NEW CLIENTS for the short guide and controls:\nhttps://t.me/c/{internal}/{thread_id}",
         }))
     return queued

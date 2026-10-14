@@ -167,12 +167,18 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertTrue(all(len(b["callback_data"].encode()) <= 64 for line in keyboard for b in line))
 
     def test_accept_button_uses_clicking_member_and_current_time(self):
-        with patch.object(clients, "confirm_new_client_reply", return_value=True) as confirm, patch.object(workflow, "queue_board"):
+        row = assignment()
+        row["payload"].pop("new_client_acknowledged_at")
+        def accept(*args, **kwargs):
+            row["payload"].update(new_client_assignee_id=22, new_client_acknowledged_at=NOW.isoformat())
+            return True
+        with patch.object(workflow, "history_for", return_value=[row]), patch.object(clients, "confirm_new_client_reply", side_effect=accept) as confirm, patch.object(workflow, "queue_board"):
             workflow.handle(callback("accept:AAAABBBB", actor=22), {CHAT}, NOW)
         msg = confirm.call_args.args[0]["message"]
         self.assertEqual(msg["from"]["id"], 22)
         self.assertEqual(msg["text"], "WORKING AAAABBBB")
         self.assertEqual(msg["date"], int(NOW.timestamp()))
+        self.assertFalse(confirm.call_args.kwargs["queue_next"])
 
     def test_webhook_callback_is_acknowledged_without_dispatch_or_ingestion(self):
         with patch.dict("os.environ", {"ALLOWED_CHAT_IDS": str(CHAT), "TELEGRAM_WEBHOOK_SECRET": "test"}, clear=True), patch.object(workflow, "handle", return_value="Accepted"), patch.object(app, "save_update") as ingest, patch.object(app, "deliver_due_actions") as deliver:

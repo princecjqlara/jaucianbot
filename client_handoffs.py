@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import math
 import re
 import urllib.parse
 
@@ -56,12 +57,17 @@ def warning(row: dict, now: dt.datetime) -> None:
     from new_client_automation import _mention, _utc_time
     p = row["payload"]
     began = _utc_time(p.get("_first_delivery_at") or row.get("sent_at"))
-    if not p.get("new_client_ready_protocol") or not began or not began + dt.timedelta(minutes=3) <= now < began + dt.timedelta(minutes=5):
+    # Previously delivered offers retain their printed five-minute deadlines.
+    minutes = int(p.get("new_client_response_minutes") or 5)
+    before = 2 if minutes <= 5 else ready.WARNING_BEFORE_MINUTES
+    deadline = began + dt.timedelta(minutes=minutes) if began else None
+    if not p.get("new_client_ready_protocol") or not began or not deadline - dt.timedelta(minutes=before) <= now < deadline:
         return
+    remaining = max(1, math.ceil((deadline - now).total_seconds() / 60))
     member = _mention(int(p["new_client_assignee_id"]), p.get("new_client_assignee_name") or str(p["new_client_assignee_id"]))
     enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
         dedupe_key=marker(row, "warning"), payload={
-            "text": f"{member}, your acceptance window for {html.escape(p.get('new_client_contact_name') or 'this client')} ends in 2 minutes. "
+            "text": f"{member}, your acceptance window for {html.escape(p.get('new_client_contact_name') or 'this client')} ends in {remaining} minutes. "
                     f"Reply <code>WORKING {p['new_client_token']}</code> if you are taking it. "
                     "If unanswered, your turn ends and we notify you before opening TAKE.",
             "parse_mode": "HTML", "message_thread_id": p["new_client_thread_id"],
@@ -94,7 +100,12 @@ def delivery_allowed(action: dict, now: dt.datetime) -> bool:
         return False
     if p["client_handoff_kind"] == "warning":
         start = _utc_time(parent.get("_first_delivery_at"))
-        return bool(start and parent.get("new_client_phase") == "direct" and now < start + dt.timedelta(minutes=int(parent["new_client_response_minutes"])))
+        deadline = start + dt.timedelta(minutes=int(parent["new_client_response_minutes"])) if start else None
+        if not (start and parent.get("new_client_phase") == "direct" and now < deadline):
+            return False
+        remaining = max(1, math.ceil((deadline - now).total_seconds() / 60))
+        p["text"] = re.sub(r"ends in \d+ minutes", f"ends in {remaining} minutes", p.get("text") or "")
+        return True
     return parent.get("new_client_phase") not in {"claimed", "superseded"}
 
 

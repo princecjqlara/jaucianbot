@@ -338,7 +338,7 @@ class ReadyHandoffTests(unittest.TestCase):
             self.assertEqual(clients.queue_new_client_assignments(NOW, {ready.OLLIE}), 1)
         reserve.assert_called_once()
         p = enqueue.call_args.kwargs["payload"]
-        self.assertEqual(p["new_client_response_minutes"], 5)
+        self.assertEqual(p["new_client_response_minutes"], ready.ACCEPTANCE_MINUTES)
         self.assertTrue(p["new_client_ready_protocol"])
         self.assertIn("notify you that your turn ended", p["text"])
 

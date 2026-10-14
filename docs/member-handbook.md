@@ -31,7 +31,7 @@ Updated 14 October 2026. All work schedules and deadlines use Philippine time (P
 
 - Read the client name, page, brief, token, and deadline in the latest offer.
 - If it is reserved for you, tap **Accept client** or send `WORKING A1B2C3D4` in NEW CLIENTS. Replace the sample token with the actual token in your offer.
-- New offers allow **5 minutes from delivery** to accept. A reminder comes after 3 minutes. This is the acceptance window, not a deadline to finish the work.
+- New offers allow **15 minutes from delivery** to accept. A reminder comes after 10 minutes. This is the acceptance window, not a deadline to finish the work. Older delivered offers keep their printed deadlines.
 - Wait for the bot to confirm the owner. You may then contact the client and begin. Successful acceptance keeps your Ready queue running; you do not need to send `/ready` after every client.
 - If the offer is unanswered, the bot pauses your automatic offers and sends a turn-ended notice before opening TAKE or arranging another assignment. Send `/ready` again when you are available.
 
@@ -112,6 +112,8 @@ The handover buttons transfer accepted new-client assignments. They do not trans
 ### Post deals in the correct topic
 
 Use **CLOSE DEALS** for your readable close-deal record or summary. Use **DONE DEALS** for a paid sale. Do not report unpaid, refunded, or cancelled work as a completed paid sale. Follow any extra evidence requirements from your team lead.
+
+**Easier:** tap **Done Deal template** on your client confirmation, or send `/ddtemplate A1B2C3D4 650` in NEW CLIENTS using the actual token and Price Deal. The bot fills your client, page, token, and amount. Copy the block and post it yourself in DONE DEALS after payment. The draft alone is not a recorded sale.
 
 **Close-deal summary example** - use the correct page and your actual count:
 
@@ -199,6 +201,8 @@ Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki 
 ### If something goes wrong
 
 For an old button, expired offer, duplicate owner, wrong page, or missing confirmation: use the latest message, check `/clients`, and send the message link plus client token to your team lead. Do not keep claiming or contact the client while ownership is unclear. `/clienthelp` opens the guide in NEW CLIENTS.
+
+Buttons not responding? Type `/ready`, `/busy`, `WORKING TOKEN`, `TAKE TOKEN`, or `/ddtemplate TOKEN AMOUNT` in NEW CLIENTS. Use your personal Telegram account, not anonymous-admin mode. Only the named editor can accept a reserved client; only the chosen teammate can accept a handover.
 
 If you are a new recruit, choose the person who invited you in the [recruiter poll topic](https://t.me/c/3555676168/510) when ready to start. Ask an admin if your inviter is missing.
 
