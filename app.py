@@ -57,7 +57,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-15.01"
+AUTOMATION_VERSION = "2026-10-15.02"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -613,6 +613,7 @@ def dispatch_route(environ, start_response):
                 print(f"Scheduler guard failed: {type(guard_error).__name__}")
         try:
             queued += referral_incentives.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
+            queued += referral_incentives.queue_share_recovery(dt.datetime.now(dt.timezone.utc), allowed)
         except Exception as referral_error:
             queue_errors.append("referrals")
             print(f"Referral queue failed: {type(referral_error).__name__}")

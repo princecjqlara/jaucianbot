@@ -144,10 +144,10 @@ tracking. Pending legacy drafts, advanced sales reports and old guides are
 retired before delivery. Assignment owners, tokens, acceptance deadlines,
 handovers and historical records are preserved.
 
-All five Veo teams continue availability polls, Ready/Busy, fair client rotation,
+All six Veo teams continue availability polls, Ready/Busy, fair client rotation,
 15-minute acceptance (warning after 10 minutes), client lists, handovers and
-freebies. Veo Lyn still needs its Facebook page mapping before client/freebie
-assignment can begin. Announcements use close-deal targets only, calculated as
+freebies. Veo Lyn reads Habi Media Agency and Salin Media Agency; Veo Ollie 2
+reads AdsMoto Media Agency and AiTayo. Announcements use close-deal targets only, calculated as
 `ceil(active members × 1.6)`, and summarize readable close-deal progress at the
 existing Philippine reminder hours: 7, 10, 13, 16, 19 and 21. Daily closeout posts
 availability, close-deal activity and the simple Done Deal summary to Daily Reports. Missing polls, unreadable
@@ -159,12 +159,16 @@ worker analytics continue client acceptance/response timing, availability,
 freebies and close deals. Paid-sales and conversion fields are `null` with a
 paused coverage note, never misleading zero-earnings values.
 
-Combined recruiter-share calculations remain on hold; read-only summaries do
-not calculate commissions or verify referral eligibility. Existing recruiter registration and credit records remain
-saved. This prevents incomplete data from changing eligibility or credit caps.
+Recruiter shares run independently of advanced Done Deal controls. Readable Veo
+Done Deal posts and identifiable Suno receipts feed the existing 5% rules,
+first-eight order cap and 72-hour bonus window. Existing registration dates,
+locked credit, duplicate and ownership checks remain unchanged. A one-time
+scheduled recovery report restores the last completed day after the pause;
+regular private reports continue at 23:59 PHT. No sale template or client-token
+code is required for a readable sale record with a client or order ID.
 Suno/Trabawho receipts, receipt analytics, songs and delivery reminders continue.
 
-The optional legacy paid-sale parser and regression coverage remain available
+The optional advanced paid-sale workflows and regression coverage remain available
 for a future rollout; enabling them requires an explicit configuration change.
 Authenticated managers can preview summaries without sending messages using
 `./remote_windows.ps1 daily-summary --date YYYY-MM-DD` or the read-only
@@ -181,7 +185,7 @@ The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pag
 
 ### Hourly availability and the 20 / 10-minute handoff
 
-With `NEW_CLIENT_READY_ENABLED=true`, **all four Veo teams and Suno/Trabawho**
+With `NEW_CLIENT_READY_ENABLED=true`, **all six Veo teams and Suno/Trabawho**
 use `/ready` and `/busy` in their own New Clients topics: Veo Ollie `5758`,
 Veo Jessa `3725`, Veo `27622`, Veo Jel `4180`, and Trabawho `7673`.
 `/ready` starts continuous automatic assignments, independently of the hourly poll.
@@ -265,13 +269,20 @@ the exception type, group/message IDs, action name and source locations.
 
 Veo Lyn (`-1004364797420`) uses General `1`, FREEBIES `22`, NEW CLIENTS `20`,
 CLOSE DEALS `19`, announcements `18`, ACTIVE FOR TOMORROW `16`, and DONE DEALS `15`.
-Its page mapping is pending: polls, reminders, client controls, and archiving can
-run, while new-client and freebie assignments stay paused. Its client list and
-guide show that setup is pending instead of claiming there are no eligible leads.
-When the user supplies the page, add its verified CRM page ID and display-name
-aliases to the team's `crm_pages` and `pages` mappings.
+It reads Habi Media Agency (`e210bb1d-9326-4d02-b278-a3b625e16a06`) and
+Salin Media Agency (`c4f6f7c4-6ce7-46b4-a063-19c537a20481`). Page aliases
+support Habi and Salin in readable deal posts. Assignment follows the shared
+eligibility and Ready queue rules.
 
-All four Veo teams and Trabawho share a client list in their NEW CLIENTS topic.
+Veo Ollie 2 (`-1004435878080`) uses General `1`, announcements `26`, Active for
+Tomorrow `22`, Close Deals `18`, Done Deals `17`, New Clients `15` and Freebies
+`14`. Its pages are AdsMoto Media Agency (`48b42f01-c9de-4afa-992b-2f743d21c81d`)
+and AiTayo (`ddf67561-5dad-42ba-88e2-ef5534b45d6e`). The team participates in
+availability polls, client rotation, 15-minute acceptance, owner directories,
+handovers, freebies, quotas, planned ads and recruiter shares. Reads remain
+scoped to its exact pages and topics.
+
+All six Veo teams and Trabawho share a client list in their NEW CLIENTS topic.
 It shows eligible unassigned clients, reserved offers, open TAKE offers, confirmed
 editors, and pending handovers. Each tracked client links to its brief and includes
 its token. Long lists have pages. The scheduler edits the same overview message
@@ -317,7 +328,7 @@ the acceptance and TAKE windows, official ownership confirmation, expired offers
 and how to flag an existing owner or conflicting updates to the team lead. Guide-version
 keys publish updated instructions even if the previous guide was sent that day.
 
-When readiness is disabled and NEW_CLIENT_VOLUNTEER_ENABLED=true, all four Veo teams and Trabawho use
+When readiness is disabled and NEW_CLIENT_VOLUNTEER_ENABLED=true, all six Veo teams and Trabawho use
 20-minute direct offers followed by a 10-minute volunteer window. The direct
 timer starts at the first delivery of the client details. If the assigned member
 does not reply WORKING with their token, the bot mentions members scheduled for
@@ -459,7 +470,7 @@ receives the organized detailed report. The detailed report includes Active
 members, the four-per-member quota, planned ads budget, accepted receipt
 gross/salary, each member's recorded totals, labeled tips, receipts needing
 review, and song deliveries/outstanding jobs.
-Detailed reports for all six teams also show tomorrow's active members and
+Detailed reports for all seven teams also show tomorrow's active members and
 targets using the Philippine calendar date when the report is prepared.
 Hourly poll votes count each member once within their team. Trabawho's planned
 ads budget uses Active × 4 × ₱150; Veo uses Active × 1.6 × ₱400.
@@ -554,7 +565,7 @@ and reply processing continue on every normal dispatch. Bump the
 `referral-setup` key version whenever changing poll/instruction scheduling
 keys so a same-day deployment does not skip the new setup.
 
-Counts carry across the four configured Veo teams and Trabawho by Telegram
+Counts carry across the six configured Veo teams and Trabawho by Telegram
 user ID. Order IDs, or page-scoped client names when an ID is absent, prevent
 reposts from consuming another commissioned sale. Include an order ID for
 separate repeat orders from one client. Tips, extras, deposits/close-deal
@@ -570,4 +581,4 @@ Veo Ollie reads only Loki Media and Vista Media Agency for new-client topic `575
 
 Only members who selected Active for that Philippine day participate. The bot gives each Active member one client before anyone can move ahead to the next round. A member replies `WORKING ABCD1234` as soon as they start handling the assigned client; a direct `WORKING` reply to the assignment is also accepted. That acknowledgment stops reminders and makes the member eligible when the round robin reaches them again. Before timing out an assignment, the bot reconciles archived replies so a confirmation cannot be missed and reassigned. If no valid `WORKING` reply arrives within one hour, the assignment is cancelled and the same contact is reassigned to a different Active member. If the original member replies after that timeout, the earliest valid `WORKING` reply wins and any duplicate open assignment is cancelled. Contacts are tracked by their stable page-scoped PSID, with legacy fallbacks, so changing contact details or replacing a CRM row does not create a new assignment. A faster member cannot receive a third client while another Active member has received only one. Acknowledged contacts are never assigned again.
 
-When volunteer mode is disabled, Veo, Veo Ollie, and Veo Jessa use a 30-minute reply deadline measured from first delivery and rotation among ready Active members. Members with an unacknowledged assignment are skipped so they do not block the ready team. A member who times out enters a 30-minute cooldown, then automatically rejoins while still Active. Selecting Not Active and then Active in today's poll, or a newer valid WORKING reply, resumes availability sooner. Timed-out contacts are offered to a different eligible member before fresh contacts. Rotation favors fewer non-cancelled or acknowledged assignments today, then fewer assignments over the previous seven days, then the member who has waited longest since their last assignment; failed offers do not reduce future access after the member returns. One unacknowledged client per member is allowed. This does not track unfinished work after acknowledgment. The new-client status endpoint reports each team's reply deadline, ready count, paused members, and each Active member's offers, deliveries, confirmations, waiting reason, and cooldown retry time. All four teams carry assignment order across days using the previous seven days as a tie breaker, so scarce supply does not repeatedly favor the same names each morning. These fallback settings are in `daily_automation.py`; Veo Jel retains the one-hour deadline and full-team round rule when volunteer mode is disabled. With `NEW_CLIENT_VOLUNTEER_ENABLED=true`, all four Veo teams use the shared 20-minute direct offer followed by a 10-minute volunteer window described above.
+When volunteer mode is disabled, Veo, Veo Ollie, and Veo Jessa use a 30-minute reply deadline measured from first delivery and rotation among ready Active members. Members with an unacknowledged assignment are skipped so they do not block the ready team. A member who times out enters a 30-minute cooldown, then automatically rejoins while still Active. Selecting Not Active and then Active in today's poll, or a newer valid WORKING reply, resumes availability sooner. Timed-out contacts are offered to a different eligible member before fresh contacts. Rotation favors fewer non-cancelled or acknowledged assignments today, then fewer assignments over the previous seven days, then the member who has waited longest since their last assignment; failed offers do not reduce future access after the member returns. One unacknowledged client per member is allowed. This does not track unfinished work after acknowledgment. The new-client status endpoint reports each team's reply deadline, ready count, paused members, and each Active member's offers, deliveries, confirmations, waiting reason, and cooldown retry time. All six teams carry assignment order across days using the previous seven days as a tie breaker, so scarce supply does not repeatedly favor the same names each morning. These fallback settings are in `daily_automation.py`; Veo Jel retains the one-hour deadline and full-team round rule when volunteer mode is disabled. With `NEW_CLIENT_VOLUNTEER_ENABLED=true`, all six Veo teams use the shared 20-minute direct offer followed by a 10-minute volunteer window described above.

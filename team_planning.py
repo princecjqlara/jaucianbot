@@ -2,7 +2,7 @@
 from decimal import Decimal, ROUND_CEILING
 import datetime as dt
 
-PLAN_VERSION = "2026-10-15.1"
+PLAN_VERSION = "2026-10-15.2"
 VEO_CLIENTS_PER_MEMBER = Decimal("1.6")
 VEO_ADS_PER_CLIENT = Decimal("400")
 SUNO_CLIENTS_PER_MEMBER = Decimal("4")

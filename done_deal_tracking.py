@@ -33,7 +33,7 @@ def delivery_allowed(action: dict) -> bool:
     if key.startswith(("daily-reminder:", "daily-quota:", "daily-report:", "historical-report:")) and payload.get("done_deal_tracking") is not False:
         return False
     guide = re.match(r"ready-(?:instructions|rollout):v(\d+):", key)
-    if guide and int(guide.group(1)) < 8:
+    if guide and int(guide.group(1)) < 9:
         return False
     if key.startswith("client-help:"):
         from client_workflow import guide

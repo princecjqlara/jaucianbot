@@ -15,7 +15,13 @@ NOW = dt.datetime(2026, 10, 14, 4, tzinfo=dt.timezone.utc)
 PERSON = {"user_id": 11, "user_name": "Alex"}
 
 
-class VeoLynTests(unittest.TestCase):
+class PendingPageSetupTests(unittest.TestCase):
+    def setUp(self):
+        # Preserve the unconnected-page safeguard after Lyn's pages go live.
+        config = patch.dict(daily.GROUPS[LYN], {"crm_pages": {}, "pages": {}})
+        config.start()
+        self.addCleanup(config.stop)
+
     def test_availability_and_reminders_use_lyn_topics_without_page_mapping(self):
         with patch.dict("os.environ", {"HOURLY_AVAILABILITY_START_DATE": "2026-10-09"}), patch.object(hourly, "enqueue_scheduled_action", return_value=True) as queue:
             self.assertEqual(hourly.queue_polls(NOW.date(), NOW, daily.AVAILABILITY_GROUPS, {LYN}), 3)

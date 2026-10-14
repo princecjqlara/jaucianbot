@@ -125,12 +125,12 @@ class PausedTrackingTests(unittest.TestCase):
             self.assertIsNone(worker["dd"])
             self.assertIsNone(worker["client_performance"]["conversion_percent"])
 
-    def test_recruiter_calculations_pause_without_changing_previous_credits(self):
-        with patch.object(referrals, "read_records") as read, patch.object(referrals, "lock_credit") as lock:
+    def test_recruiter_shares_are_independent_of_advanced_done_deal_controls(self):
+        with patch.dict("os.environ", {"REFERRAL_START_DATE": "2026-10-09", "REFERRAL_COMMISSION_BASIS": "gross", "REFERRAL_WINDOW_START": "join_or_vote"}), patch.object(referrals, "read_records", return_value=[]) as read, patch.object(referrals, "lock_credit") as lock:
             report = referrals.build_report(NOW.date(), NOW, referrals.WORK_TEAMS)
-        self.assertIn("on hold", report)
-        self.assertIn("does not mean members earned zero", report)
-        read.assert_not_called()
+        self.assertIn("RECRUITER DAILY REPORT", report)
+        self.assertNotIn("on hold", report)
+        self.assertEqual(read.call_count, 2)
         lock.assert_not_called()
 
     def test_delivery_never_sends_old_paid_sale_output(self):

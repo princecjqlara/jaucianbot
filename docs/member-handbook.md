@@ -123,7 +123,7 @@ Price Deal: 650
 
 Use the actual client, page, and deal amount. Keep tips, revisions and down payments separate. A payment screenshot needs readable text for the bot to include its amount.
 
-The bot reads these posts and adds the **deal count, recorded total, and average amount** to DAILY REPORTS at daily closeout. Identifiable duplicates count once. Unreadable or conflicting posts are flagged for review. These are observed sale amounts; earnings and combined recruiter-share calculations remain on hold.
+The bot adds the **deal count, recorded total, and average amount** to DAILY REPORTS at closeout. Identifiable duplicates count once; unreadable or conflicting posts need review. Recruiter shares are recorded automatically in the private recruiter reports. Ask your team lead about editor earnings and payouts.
 
 ### Keep close-deal updates simple
 
@@ -162,9 +162,10 @@ Reminders show the remaining time and continue until delivery is recorded. If yo
 
 ### Record a payment in RECEIPTS
 
-Post readable text with the correct Suno page and the approved amounts. Attach any required payment evidence. The amount **outside parentheses** is gross; the amount **inside parentheses** is recorded member earnings.
+Post readable text with the client name, correct Suno page, and approved amounts. The name lets recruiter reports identify the sale without a bot code. Attach any required payment evidence. The amount **outside parentheses** is gross; the amount **inside parentheses** is recorded member earnings.
 
 ```text
+Client: Maria Santos
 HIRAYA
 699 (140)
 100 (50) tip
@@ -186,13 +187,14 @@ Tap a link in the PDF to open Telegram. You need membership in that group. Use y
 | --- | --- | --- | --- | --- | --- | --- |
 | Veo | [Open](https://t.me/c/3647732254/25893) | [Open](https://t.me/c/3647732254/27622) | [Open](https://t.me/c/3647732254/26249) | [Open](https://t.me/c/3647732254/1132) | [Open](https://t.me/c/3647732254/1135) | [Open](https://t.me/c/3647732254/248) |
 | Veo Ollie | [Open](https://t.me/c/4423057797/4536) | [Open](https://t.me/c/4423057797/5758) | [Open](https://t.me/c/4423057797/4811) | [Open](https://t.me/c/4423057797/16) | [Open](https://t.me/c/4423057797/17) | [Open](https://t.me/c/4423057797/4794) |
+| Veo Ollie 2 | [Open](https://t.me/c/4435878080/22) | [Open](https://t.me/c/4435878080/15) | [Open](https://t.me/c/4435878080/14) | [Open](https://t.me/c/4435878080/18) | [Open](https://t.me/c/4435878080/17) | [Open](https://t.me/c/4435878080/26) |
 | Veo Jessa | [Open](https://t.me/c/3962888977/3050) | [Open](https://t.me/c/3962888977/3725) | [Open](https://t.me/c/3962888977/3240) | [Open](https://t.me/c/3962888977/6) | [Open](https://t.me/c/3962888977/7) | [Open](https://t.me/c/3962888977/5) |
 | Veo Jel | [Open](https://t.me/c/4461399292/2917) | [Open](https://t.me/c/4461399292/4180) | [Open](https://t.me/c/4461399292/3003) | [Open](https://t.me/c/4461399292/8) | [Open](https://t.me/c/4461399292/6) | [Open](https://t.me/c/4461399292/2) |
 | Veo Lyn | [Open](https://t.me/c/4364797420/16) | [Open](https://t.me/c/4364797420/20) | [Open](https://t.me/c/4364797420/22) | [Open](https://t.me/c/4364797420/19) | [Open](https://t.me/c/4364797420/15) | [Open](https://t.me/c/4364797420/18) |
 
-Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki Media; Jessa - Manawari Studios; Jel - Onset Media Agency.
+Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki Media; Ollie 2 - AdsMoto Media Agency / AiTayo; Jessa - Manawari Studios; Jel - Onset Media Agency; Lyn - Habi Media Agency / Salin Media Agency.
 
-**Veo Lyn:** page setup is pending as of this handbook's date. Polls, reminders, and client controls are live. Client and freebie assignments stay paused until its page is connected. [General chat](https://t.me/c/4364797420/1).
+General chats: [Veo Lyn](https://t.me/c/4364797420/1) / [Veo Ollie 2](https://t.me/c/4435878080/1). Use your own team's pages and topics.
 
 | Suno / Trabawho topic | Link |
 | --- | --- |

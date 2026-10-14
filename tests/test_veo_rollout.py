@@ -1,4 +1,4 @@
-"""Exercise Ollie and Jessa's CRM routing and shared assignment workflows."""
+"""Exercise mapped teams' CRM routing and shared assignment workflows."""
 import datetime as dt
 import json
 import unittest
@@ -17,6 +17,8 @@ NOW = dt.datetime(2026, 10, 9, 1, tzinfo=dt.timezone.utc)  # 9 AM PHT
 TEAMS = {
     -1004423057797: (5758, {"Loki Media", "Vista Media Agency"}),
     -1003962888977: (3725, {"Manawari Studios"}),
+    -1004364797420: (20, {"Habi Media Agency", "Salin Media Agency"}),
+    -1004435878080: (15, {"AdsMoto Media Agency", "AiTayo"}),
 }
 MEMBERS = [
     {"user_id": 11, "user_name": "Alex", "available_hours": [9]},
@@ -75,7 +77,7 @@ class VeoRolloutTests(unittest.TestCase):
         ), patch.object(clients, "_active_members", return_value=MEMBERS), patch.object(
             clients, "completed_detail_contacts", side_effect=read
         ) as crm, patch.object(clients, "enqueue_scheduled_action", return_value=True) as enqueue:
-            self.assertEqual(clients.queue_new_client_assignments(NOW, set(TEAMS)), 3)
+            self.assertEqual(clients.queue_new_client_assignments(NOW, set(TEAMS)), 7)
         self.assertEqual({call.args[0] for call in crm.call_args_list}, set(pages))
         for call in enqueue.call_args_list:
             chat, payload = call.kwargs["chat_id"], call.kwargs["payload"]
@@ -159,7 +161,7 @@ class VeoRolloutTests(unittest.TestCase):
         ), patch.object(freebies, "paid_contacts", side_effect=read) as crm, patch.object(
             freebies, "_queue_no_contact_notice", return_value=False
         ), patch.object(freebies, "enqueue_scheduled_action", return_value=True) as enqueue:
-            self.assertEqual(freebies.queue_freebie_assignments(NOW, set(TEAMS)), 3)
+            self.assertEqual(freebies.queue_freebie_assignments(NOW, set(TEAMS)), 7)
         self.assertEqual({call.args[0] for call in crm.call_args_list}, {
             page_id for chat in TEAMS for page_id in daily.GROUPS[chat]["crm_pages"].values()
         })
@@ -170,14 +172,14 @@ class VeoRolloutTests(unittest.TestCase):
             self.assertIn(payload["freebie_page"], TEAMS[chat][1])
             self.assertIn(payload["freebie_assignee_id"], {11, 22})
 
-    def test_quota_reminders_reach_both_teams_announcement_topics(self):
+    def test_quota_reminders_reach_all_mapped_team_announcement_topics(self):
         progress = {"dd_total": 0, "cd_total": 0, "capped": False, "uncertain": False}
         with patch.object(daily, "existing_daily_reminder_chats", return_value=set()), patch.object(
             daily, "daily_poll_counts", return_value={}
         ), patch.object(daily, "deal_progress_for_day", return_value=progress), patch.object(
             daily, "enqueue_scheduled_action", return_value=True
         ) as enqueue:
-            self.assertEqual(daily.queue_daily_reminders(NOW.date(), 7, NOW, set(TEAMS)), 2)
+            self.assertEqual(daily.queue_daily_reminders(NOW.date(), 7, NOW, set(TEAMS)), len(TEAMS))
         self.assertEqual({call.kwargs["chat_id"] for call in enqueue.call_args_list}, set(TEAMS))
         for call in enqueue.call_args_list:
             self.assertEqual(call.kwargs["payload"]["message_thread_id"],
