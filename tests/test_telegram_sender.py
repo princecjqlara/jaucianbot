@@ -94,6 +94,42 @@ class TelegramSenderTests(unittest.TestCase):
                 with self.assertRaises(TelegramError):
                     send_scheduled_action(action)
 
+    def test_old_recruiter_poll_that_cannot_be_deleted_is_closed(self):
+        action = {"chat_id": -1003555676168, "action_type": "message",
+                  "dedupe_key": "referral-public-poll-remove:539",
+                  "payload": {"text": "Replacing the registration poll", "delete_message_id": 539}}
+        with patch("telegram_sender.telegram_call", side_effect=[
+            TelegramError("Telegram HTTP 400: Bad Request: message can't be deleted"),
+            {"id": "old-poll", "is_closed": True},
+        ]) as call:
+            result = send_scheduled_action(action)
+        self.assertEqual(call.call_args.args, ("stopPoll", {"chat_id": -1003555676168, "message_id": 539}))
+        self.assertTrue(result["is_closed"])
+        self.assertEqual(result["_telegram_operation"], "stopPoll")
+
+    def test_already_closed_recruiter_poll_cleanup_is_idempotent(self):
+        action = {"chat_id": -1003555676168, "action_type": "message",
+                  "dedupe_key": "referral-public-poll-remove:539", "payload": {"delete_message_id": 539}}
+        with patch("telegram_sender.telegram_call", side_effect=[
+            TelegramError("Telegram HTTP 400: message can't be deleted"),
+            TelegramError("Telegram HTTP 400: poll has already been closed"),
+        ]):
+            self.assertEqual(send_scheduled_action(action)["message_id"], 539)
+
+    def test_poll_cleanup_does_not_hide_permission_errors_or_change_other_deletions(self):
+        action = {"chat_id": -1003555676168, "action_type": "message",
+                  "dedupe_key": "referral-public-poll-remove:539", "payload": {"delete_message_id": 539}}
+        with patch("telegram_sender.telegram_call", side_effect=[
+            TelegramError("Telegram HTTP 400: message can't be deleted"), TelegramError("Telegram HTTP 403: forbidden"),
+        ]):
+            with self.assertRaises(TelegramError):
+                send_scheduled_action(action)
+        action["dedupe_key"] = "referral-public-instruction-remove:539"
+        with patch("telegram_sender.telegram_call", side_effect=TelegramError("Telegram HTTP 400: message can't be deleted")) as call:
+            with self.assertRaises(TelegramError):
+                send_scheduled_action(action)
+            self.assertEqual(call.call_count, 1)
+
     def test_missing_old_announcement_posts_instruction_only_replacement(self):
         action = {"chat_id": -100123, "action_type": "message",
                   "payload": {"text": "Work instructions", "edit_message_id": 516}}

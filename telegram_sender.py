@@ -75,6 +75,20 @@ def send_scheduled_action(action: dict) -> dict:
                 result = telegram_call(operation, payload)
             except TelegramError as error:
                 detail = str(error).casefold()
+                if (operation == "deleteMessage"
+                        and str(action.get("dedupe_key") or "").startswith("referral-public-poll-remove:")
+                        and any(reason in detail for reason in ("message can't be deleted", "message cannot be deleted"))):
+                    # Telegram limits deletion of older messages. Close the
+                    # obsolete bot poll so members use the replacement roster.
+                    try:
+                        result = telegram_call("stopPoll", payload)
+                    except TelegramError as stop_error:
+                        if not any(reason in str(stop_error).casefold() for reason in (
+                            "poll has already been closed", "poll is already closed", "message to stop poll not found",
+                        )):
+                            raise
+                        result = {}
+                    return {**result, "message_id": target, "_telegram_operation": "stopPoll"}
                 if operation == "editMessageText" and any(reason in detail for reason in (
                     "message to edit not found", "message can't be edited", "message cannot be edited",
                 )):
