@@ -109,11 +109,19 @@ The handover buttons transfer accepted new-client assignments. They do not trans
 - After sending it, reply to the task with `FREEBIE SENT A1B2C3D4` using that task's actual token. Only the assigned member can confirm it.
 - If you cannot complete it, tell your team lead. Busy alone does not close the task. A completed freebie gives that client a 14-day break before another is assigned.
 
-### Done Deal tracking is paused
+### Done Deals: post once, the bot summarizes
 
-You do not need to use Done Deal buttons, sale codes, or the DONE DEALS topic. Keep serving your clients and follow your team lead's payment and payout instructions.
+After a client pays, post your usual readable sale record in **DONE DEALS**. No sale command, client-token code, or Done Deal button is needed.
 
-Old Done Deal buttons will explain that tracking is paused. Previous messages and records remain saved. Automatic Veo earnings, sales conversion, and combined recruiter-share calculations are on hold; missing tracking does not mean you earned zero.
+```text
+Client: Maria Santos
+Page: Vista Media Agency
+Price Deal: 650
+```
+
+Use the actual client, page, and deal amount. Keep tips, revisions and down payments separate. A payment screenshot needs readable text for the bot to include its amount.
+
+The bot reads these posts and adds the **deal count, recorded total, and average amount** to DAILY REPORTS at daily closeout. Identifiable duplicates count once. Unreadable or conflicting posts are flagged for review. These are observed sale amounts; earnings and combined recruiter-share calculations remain on hold.
 
 ### Keep close-deal updates simple
 
@@ -133,8 +141,6 @@ Replace both example values. Your team lead can help with the page name or a cor
 - Use **Client list** to check who handles each client.
 - Keep your client informed and use **Hand over** if another teammate needs to take over.
 - Confirm a freebie after sending it. Keep hourly availability polls accurate.
-
-Announcements and daily reports continue to show availability and close-deal progress. Suno members still use SONGS and RECEIPTS as explained on the next page.
 
 <!-- page -->
 
@@ -174,13 +180,13 @@ Label tips clearly. Put each amount on its own line. Do not add a total/subtotal
 
 Tap a link in the PDF to open Telegram. You need membership in that group. Use your own team row; do not put another team's client or sale in these topics.
 
-| Veo team | Availability | New clients | Freebies | Close deals | News |
-| --- | --- | --- | --- | --- | --- |
-| Veo | [Open](https://t.me/c/3647732254/25893) | [Open](https://t.me/c/3647732254/27622) | [Open](https://t.me/c/3647732254/26249) | [Open](https://t.me/c/3647732254/1132) | [Open](https://t.me/c/3647732254/248) |
-| Veo Ollie | [Open](https://t.me/c/4423057797/4536) | [Open](https://t.me/c/4423057797/5758) | [Open](https://t.me/c/4423057797/4811) | [Open](https://t.me/c/4423057797/16) | [Open](https://t.me/c/4423057797/4794) |
-| Veo Jessa | [Open](https://t.me/c/3962888977/3050) | [Open](https://t.me/c/3962888977/3725) | [Open](https://t.me/c/3962888977/3240) | [Open](https://t.me/c/3962888977/6) | [Open](https://t.me/c/3962888977/5) |
-| Veo Jel | [Open](https://t.me/c/4461399292/2917) | [Open](https://t.me/c/4461399292/4180) | [Open](https://t.me/c/4461399292/3003) | [Open](https://t.me/c/4461399292/8) | [Open](https://t.me/c/4461399292/2) |
-| Veo Lyn | [Open](https://t.me/c/4364797420/16) | [Open](https://t.me/c/4364797420/20) | [Open](https://t.me/c/4364797420/22) | [Open](https://t.me/c/4364797420/19) | [Open](https://t.me/c/4364797420/18) |
+| Veo team | Availability | New clients | Freebies | Close deals | Done deals | News |
+| --- | --- | --- | --- | --- | --- | --- |
+| Veo | [Open](https://t.me/c/3647732254/25893) | [Open](https://t.me/c/3647732254/27622) | [Open](https://t.me/c/3647732254/26249) | [Open](https://t.me/c/3647732254/1132) | [Open](https://t.me/c/3647732254/1135) | [Open](https://t.me/c/3647732254/248) |
+| Veo Ollie | [Open](https://t.me/c/4423057797/4536) | [Open](https://t.me/c/4423057797/5758) | [Open](https://t.me/c/4423057797/4811) | [Open](https://t.me/c/4423057797/16) | [Open](https://t.me/c/4423057797/17) | [Open](https://t.me/c/4423057797/4794) |
+| Veo Jessa | [Open](https://t.me/c/3962888977/3050) | [Open](https://t.me/c/3962888977/3725) | [Open](https://t.me/c/3962888977/3240) | [Open](https://t.me/c/3962888977/6) | [Open](https://t.me/c/3962888977/7) | [Open](https://t.me/c/3962888977/5) |
+| Veo Jel | [Open](https://t.me/c/4461399292/2917) | [Open](https://t.me/c/4461399292/4180) | [Open](https://t.me/c/4461399292/3003) | [Open](https://t.me/c/4461399292/8) | [Open](https://t.me/c/4461399292/6) | [Open](https://t.me/c/4461399292/2) |
+| Veo Lyn | [Open](https://t.me/c/4364797420/16) | [Open](https://t.me/c/4364797420/20) | [Open](https://t.me/c/4364797420/22) | [Open](https://t.me/c/4364797420/19) | [Open](https://t.me/c/4364797420/15) | [Open](https://t.me/c/4364797420/18) |
 
 Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki Media; Jessa - Manawari Studios; Jel - Onset Media Agency.
 

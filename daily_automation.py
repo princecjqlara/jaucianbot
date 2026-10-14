@@ -177,10 +177,17 @@ def build_group_report(
 ) -> str:
     config = GROUPS[chat_id]
     if not done_deal_tracking.enabled():
-        progress = deal_progress_for_day(chat_id, work_date)
+        rows, capped = messages_for_day(chat_id, work_date)
+        progress = deal_progress_for_day(chat_id, work_date, source=(rows, capped))
         report = quota_reminder(config, work_date, 21, count_row, 0,
                                progress["cd_total"], progress["capped"], progress["uncertain"])
         report = report.replace("TEAM CHECK-IN", "DAILY CLIENT ACTIVITY REPORT")
+        lines = report.splitlines()
+        lines[1] = f"{work_date:%A, %B %d, %Y} (PHT)"
+        report = "\n".join(lines)
+        if done_deal_tracking.summary_enabled():
+            import done_deal_summary
+            report += "\n\n" + done_deal_summary.render(done_deal_summary.summarize(rows, config, historical=historical, capped=capped))
         if plan_date is not None:
             from daily_report_plans import plan_lines
             report += "\n\n" + "\n".join(plan_lines(chat_id, plan_date, plan_count))
@@ -457,7 +464,7 @@ def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None,
         target = (f"{quota} close deals ({workers} active members)." if workers else "Waiting for active members.") if has_poll else "Waiting for the availability poll."
         return (f"{config['name'].upper()} — TEAM PLAN\n{work_date:%A, %B %d, %Y} (PHT)\n\n"
                 f"Target: {target}\nKeep your availability current and follow up your assigned clients.\n"
-                "Done Deal tracking and automatic Veo earnings reports are paused.")
+                "Done Deal summaries appear in DAILY REPORTS. Automatic Veo earnings reports are paused.")
     date_label = work_date.strftime("%A, %B %d, %Y")
     heading = "TODAY'S QUOTA" if today == work_date else "TOMORROW'S QUOTA"
     if not has_poll:
@@ -496,10 +503,10 @@ def deal_totals_for_day(chat_id: int, work_date: dt.date) -> tuple[int, int, boo
     )
 
 
-def deal_progress_for_day(chat_id: int, work_date: dt.date) -> dict:
+def deal_progress_for_day(chat_id: int, work_date: dt.date, *, source: tuple[list[dict], bool] | None = None) -> dict:
     """Return team totals plus per-worker activity for an in-day reminder."""
     config = GROUPS[chat_id]
-    rows, capped = messages_for_day(chat_id, work_date)
+    rows, capped = source if source is not None else messages_for_day(chat_id, work_date)
     if not done_deal_tracking.enabled():
         rows = [row for row in rows if row.get("thread_id") == config["close"]]
     dd_total = cd_total = 0
@@ -549,7 +556,7 @@ def quota_reminder(
         if has_poll and workers and not capped and not uncertain:
             lines.append(f"Close deals still needed: {max(quota - cd_total, 0)}")
         lines += ["", "Keep clients updated. Tap Busy before a break, and use Hand over if a teammate needs to take over.",
-                  "Done Deal tracking and automatic Veo earnings reports are paused. No Done Deal posts are needed."]
+                  "The bot reads DONE DEALS posts for a simple daily summary. No sale codes or Done Deal buttons are needed."]
         return "\n".join(lines)
     encouragement = {
         7: "Good morning, team! Let's start strong—follow up with interested clients and remember to record each deal in the right topic.",
@@ -756,7 +763,7 @@ def queue_historical_reports(
                 if enqueue_scheduled_action(
                     chat_id=DAILY_REPORTS_CHAT_ID,
                     action_type="message",
-                    payload={"text": part, "disable_notification": False},
+                    payload={"text": part, "disable_notification": False, "done_deal_tracking": done_deal_tracking.enabled()},
                     scheduled_for=now,
                     dedupe_key=f"historical-report:{version}:{work_date.isoformat()}:{chat_id}:{part_number}",
                 ):

@@ -312,7 +312,7 @@ class WorkflowTests(unittest.TestCase):
                             for action in actions))
         self.assertEqual([call.args[0] for call in read.call_args_list],
                          ["referral-poll:", "referral-instructions:"])
-        self.assertTrue(insert.call_args.args[0].startswith("referral-setup:v3:"))
+        self.assertTrue(insert.call_args.args[0].startswith("referral-setup:v4:"))
 
     def test_pending_old_roster_poll_is_suppressed_after_roster_change(self):
         action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT, "action_type": "poll",

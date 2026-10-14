@@ -242,7 +242,7 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         ),
     }
     if not done_deal_tracking.enabled():
-        report["done_deal_tracking"] = "paused"
+        report["done_deal_tracking"] = done_deal_tracking.mode()
         report["score_formula"] = "Close-deal activity score = 2 points per CD; availability, freebies and client responses are tracked separately."
         for name in ("sales", "done_deals", "client_conversion"):
             report["leaders"][name] = None
@@ -255,4 +255,7 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         report["coverage_note"] = ("Done Deal tracking is paused. Paid-sale totals, earnings and conversion are unavailable, not zero. "
                                    "Metrics cover availability votes, close-deal posts, freebie confirmations and client acceptance/response history. "
                                    "Best hour means close-deal posting time, not login time.")
+        if done_deal_tracking.summary_enabled():
+            report["coverage_note"] = ("Advanced paid-sale and conversion analytics are off. Simple Done Deal counts, totals and averages appear in DAILY REPORTS. "
+                                       "Worker metrics cover availability, close deals, freebies and client responses; earnings and conversion are unavailable, not zero.")
     return report

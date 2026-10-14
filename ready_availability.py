@@ -10,7 +10,7 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 7
+GUIDE_VERSION = 8
 ACCEPTANCE_MINUTES = 15
 WARNING_BEFORE_MINUTES = 5
 COMMAND = re.compile(r"^\s*/?(ready|busy)(?:@[\w]+)?\s*$", re.I)
@@ -224,7 +224,7 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
                     "New buttons: Accept client, Take client, Client list, and Hand over. "
                     "Only the current editor can request a handover. The chosen teammate must accept before ownership changes.\n\n"
                     "Buttons not working? Use /ready, /busy, WORKING + token, or TAKE + token in NEW CLIENTS. "
-                    "Veo Done Deal tracking is paused; no sale codes or Done Deal posts are needed.\n\n"
+                    "Veo Done Deal tracking is read-only: post readable client, page and Price Deal text in DONE DEALS. The bot summarizes it in DAILY REPORTS. No sale codes or Done Deal buttons are needed.\n\n"
                     f"Open NEW CLIENTS for the short guide and controls:\nhttps://t.me/c/{internal}/{thread_id}",
         }))
     return queued

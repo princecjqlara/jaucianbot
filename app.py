@@ -28,7 +28,7 @@ from cloud_store import (
     save_poll_answer,
     save_update,
 )
-from daily_automation import GROUPS, AVAILABILITY_GROUPS, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
+from daily_automation import GROUPS, AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
 import hourly_availability
 import client_volunteers
 import client_handoffs
@@ -56,7 +56,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-14.04"
+AUTOMATION_VERSION = "2026-10-14.05"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -90,7 +90,7 @@ def status_route(environ, start_response):
             payload["restriction"] = getattr(error, "restriction", None) or "unknown"
         return response(start_response, 503, payload)
     return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
-                                        "done_deal_tracking": "enabled" if done_deal_tracking.enabled() else "paused"})
+                                        "done_deal_tracking": done_deal_tracking.mode()})
 
 
 def health_route(environ, start_response):
@@ -227,6 +227,45 @@ def referrals_audit_route(environ, start_response):
         })
     except Exception as error:
         print(f"Referral audit failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+
+
+def daily_summary_route(environ, start_response):
+    """Preview observed deals without queueing reports, payment or member actions."""
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    allowed = allowed_chat_ids()
+    if DAILY_REPORTS_CHAT_ID not in allowed:
+        return response(start_response, 403, {"ok": False})
+    args = parse_qs(environ.get("QUERY_STRING", ""))
+    now = dt.datetime.now(dt.timezone.utc)
+    try:
+        date = dt.date.fromisoformat(args["date"][0]) if args.get("date") else now.astimezone(MANILA).date()
+        chat = int(args["group"][0]) if args.get("group") else None
+    except (ValueError, IndexError):
+        return response(start_response, 400, {"ok": False})
+    teams = allowed.intersection(GROUPS)
+    if chat is not None:
+        if chat not in teams:
+            return response(start_response, 404, {"ok": False})
+        teams = {chat}
+    if not done_deal_tracking.summary_enabled():
+        return response(start_response, 409, {"ok": False, "error": "done_deal_summary_disabled"})
+    try:
+        import done_deal_summary
+        from daily_automation import messages_for_day
+        reports = []
+        for chat_id in sorted(teams):
+            rows, capped = messages_for_day(chat_id, date)
+            summary = done_deal_summary.summarize(rows, GROUPS[chat_id], capped=capped)
+            reports.append({"chat_id": chat_id, "team": GROUPS[chat_id]["name"],
+                            "done_deals": summary["count"], "recorded_total": str(summary["total"]),
+                            "average_amount": str(summary["average"]) if summary["average"] is not None else None,
+                            "posts_needing_review": summary["review_count"], "partial_coverage": capped,
+                            "report_preview": done_deal_summary.render(summary)})
+        return response(start_response, 200, {"ok": True, "read_only": True, "work_date": date.isoformat(), "groups": reports})
+    except Exception as error:
+        print(f"Done Deal summary failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
 
 
@@ -785,6 +824,8 @@ def app(environ, start_response):
         return referrals_audit_route(environ, start_response)
     if path == "/api/reports/plan" and method == "GET":
         return daily_plan_route(environ, start_response)
+    if path == "/api/reports/daily-summary" and method == "GET":
+        return daily_summary_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/scheduler" and method in {"GET", "POST"}:
@@ -793,6 +834,6 @@ def app(environ, start_response):
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/reports/daily-summary", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

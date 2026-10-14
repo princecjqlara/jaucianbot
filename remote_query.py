@@ -26,6 +26,9 @@ def main() -> None:
     scheduler_setup = commands.add_parser("configure-scheduler", help="Install or repair the database's one-minute dispatcher")
     scheduler_setup.add_argument("--verify-recovery", action="store_true", help="Test watchdog repair inside a rolled-back savepoint")
     commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
+    summary = commands.add_parser("daily-summary", help="Read-only Done Deal counts, total and average preview")
+    summary.add_argument("--group", type=int)
+    summary.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
     referrals = commands.add_parser("referrals")
     referrals.add_argument("--audit", action="store_true", help="Read-only report preview using live sales sources")
     commands.add_parser("dispatch", help="Run the shared dispatcher for all approved teams")
@@ -82,6 +85,9 @@ def main() -> None:
             body = json.dumps({"verify_recovery": args.verify_recovery}).encode("utf-8")
     elif args.command == "daily-plan":
         path = "/api/reports/plan"
+    elif args.command == "daily-summary":
+        params = {k: v for k, v in {"group": args.group, "date": args.date}.items() if v is not None}
+        path = "/api/reports/daily-summary?" + urllib.parse.urlencode(params)
     elif args.command == "referrals":
         path = "/api/referrals/audit" if args.audit else "/api/referrals/status"
     elif args.command == "dispatch":

@@ -16,7 +16,7 @@ from test_new_client_automation import contact
 
 class PausedTrackingTests(unittest.TestCase):
     def setUp(self):
-        environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "false", "NEW_CLIENT_READY_ENABLED": "true"})
+        environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "false", "DONE_DEAL_SUMMARY_ENABLED": "false", "NEW_CLIENT_READY_ENABLED": "true"})
         environment.start()
         self.addCleanup(environment.stop)
 

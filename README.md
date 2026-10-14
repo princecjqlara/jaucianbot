@@ -127,12 +127,22 @@ Add `--repeat-minutes 1440` for a daily repeat, `--silent` to suppress notificat
 
 ## Daily availability and client activity
 
-Done Deal tracking is paused by default (`DONE_DEAL_TRACKING_ENABLED=false`).
-Veo members no longer receive Done Deal buttons, draft templates, sale-token
-instructions, paid-sale targets, or automatic earnings/conversion rankings.
-Old draft buttons return a clear paused notice. Pending legacy drafts, paid-sale
-reports and old guides are retired before delivery; assignment owners, tokens,
-acceptance deadlines, handovers and historical records are preserved.
+Done Deal tracking uses a simple read-only summary by default:
+`DONE_DEAL_SUMMARY_ENABLED=true`, `DONE_DEAL_TRACKING_ENABLED=false`.
+Members post their usual readable sale text in their team's DONE DEALS topic;
+Client, Page and Price Deal fields are enough. No client token, bot command,
+draft button or acceptance step is needed for a sale record. The bot counts
+readable posts, sums recorded deal amounts, computes the average per deal, and
+includes per-page counts/totals in the daily closeout sent to DAILY REPORTS.
+The shared parser excludes identifiable duplicates and flags unreadable,
+conflicting or unsupported posts. Partial coverage is disclosed; no readable
+sales means the average is unavailable, rather than guessed.
+
+Advanced templates, paid-sale targets, payroll and client-conversion workflows
+remain disabled. Old template buttons give a short explanation of read-only
+tracking. Pending legacy drafts, advanced sales reports and old guides are
+retired before delivery. Assignment owners, tokens, acceptance deadlines,
+handovers and historical records are preserved.
 
 All five Veo teams continue availability polls, Ready/Busy, fair client rotation,
 15-minute acceptance (warning after 10 minutes), client lists, handovers and
@@ -140,7 +150,7 @@ freebies. Veo Lyn still needs its Facebook page mapping before client/freebie
 assignment can begin. Announcements use close-deal targets only, calculated as
 `ceil(active members ? 0.8)`, and summarize readable close-deal progress at the
 existing Philippine reminder hours: 7, 10, 13, 16, 19 and 21. Daily closeout posts
-availability and close-deal activity to Daily Reports. Missing polls, unreadable
+availability, close-deal activity and the simple Done Deal summary to Daily Reports. Missing polls, unreadable
 posts and capped message reads are disclosed rather than guessed.
 
 Close-deal summaries use `Page name:` and `Close Deal:`. The shared parser
@@ -149,14 +159,17 @@ worker analytics continue client acceptance/response timing, availability,
 freebies and close deals. Paid-sales and conversion fields are `null` with a
 paused coverage note, never misleading zero-earnings values.
 
-Combined recruiter-share calculations are on hold while Veo paid-sale records
-are incomplete. Existing recruiter registration and credit records remain
+Combined recruiter-share calculations remain on hold; read-only summaries do
+not calculate commissions or verify referral eligibility. Existing recruiter registration and credit records remain
 saved. This prevents incomplete data from changing eligibility or credit caps.
 Suno/Trabawho receipts, receipt analytics, songs and delivery reminders continue.
 
 The optional legacy paid-sale parser and regression coverage remain available
 for a future rollout; enabling them requires an explicit configuration change.
-No Done Deal instruction is part of the current member workflow.
+Authenticated managers can preview summaries without sending messages using
+`./remote_windows.ps1 daily-summary --date YYYY-MM-DD` or the read-only
+`GET /api/reports/daily-summary` endpoint. It requires Daily Reports approval and
+includes only approved Veo teams; Suno receipts remain separate.
 
 Scheduled delivery preserves reply IDs and delivery timestamps when a reminder is deferred. Retries stop after five consecutive failures and reset on success; completion checks the current claim before changing an action. Queue failures are reported without blocking already due messages. Completed CRM client reads paginate and require a non-empty details object. Client details are truncated before HTML escaping. New-client timeouts start from first delivery, expired undelivered contacts become available again, and acknowledgment reports use the actual Philippine confirmation date. The authenticated status response includes an automation version for deployment verification. Local archive replays preserve newer edits and never rewind the collector cursor.
 
@@ -238,9 +251,9 @@ and their original warning timing. TAKE remains a separate 10-minute window.
 Warning text recomputes the remaining time at delivery so a deferred notice does
 not display an old countdown.
 
-Done Deal templates and `/ddtemplate` are paused. Owner confirmations and
+Done Deal templates and `/ddtemplate` are disabled in read-only mode. Owner confirmations and
 client lists show handover controls without sale buttons. Old buttons and text
-commands explain the pause. Pending sale drafts are suppressed before delivery.
+commands explain that summaries read existing posts without sale codes. Pending sale drafts are suppressed before delivery.
 Suno retains its separate receipts process.
 
 If a callback lacks Telegram topic metadata, the handler recovers the topic from
@@ -283,7 +296,7 @@ cannot take ownership. Notices recover through the scheduled outbox after webhoo
 failures. Client lists are rebuilt at delivery to show current owners.
 
 Handovers retain the client token and initial offer/response evidence. Optional
-legacy sale attribution remains dormant while Done Deal tracking is paused. Trabawho's unfinished
+legacy sale attribution remains dormant in read-only Done Deal mode. Trabawho's unfinished
 song jobs follow the new editor while retaining the original 24-hour deadline;
 previous-owner reminders and completion replies are rejected. Song jobs that
 were already completed keep their completion evidence.
@@ -295,7 +308,7 @@ source failure is reported rather than presented as an empty client supply.
 The scheduler posts a daily Taglish guide with command examples in each team's
 New Clients topic and one announcement per guide version in its Announcements.
 Suno's guide includes song-delivery instructions; Veo's guide includes freebie
-instructions and the Done Deal pause notice. Other teams' notices refer to their team lead;
+instructions and the read-only Done Deal instructions. Other teams' notices refer to their team lead;
 Ollie's notices continue to name Ollie.
 The daily guide and rollout announcement emphasize `/ready` once, `WORKING` to
 continue, `/busy` before breaks or shift end, and `/ready` to resume after a missed
@@ -476,7 +489,7 @@ Deadlines and confirmations reuse durable scheduled-action markers, requiring
 no new database table or collector/webhook setup.
 
 Veo teams retain close-deal targets, client activity reports, CRM sources and
-freebie completion rules. Done Deal tracking and related earnings reports are paused. Their availability and
+freebie completion rules. Done Deal counts and averages are read-only; related earnings reports remain paused. Their availability and
 new-client timing use the hourly and volunteer settings above. The Veo daily scheduler excludes
 Trabawho; Trabawho source/planning/report failures are caught separately and do
 not stop Veo delivery. A Trabawho poll-lookup failure does not consume a Veo poll

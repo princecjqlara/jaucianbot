@@ -1,13 +1,25 @@
-"""Optional Veo paid-sale tracking; paused by default at the team's request."""
+"""Veo read-only deal summaries, with advanced sale workflows disabled."""
 import os
 import re
 
 
 def enabled() -> bool:
+    """Advanced templates, linked conversion, targets and earnings calculations."""
     return os.environ.get("DONE_DEAL_TRACKING_ENABLED", "false").strip().lower() == "true"
 
 
-PAUSED_NOTICE = "Done Deal tracking is paused. You do not need to post Done Deals or use sale codes. Keep your client updated and arrange a handover if needed."
+def summary_enabled() -> bool:
+    return os.environ.get("DONE_DEAL_SUMMARY_ENABLED", "true").strip().lower() == "true"
+
+
+def mode() -> str:
+    return "enabled" if enabled() else "read_only" if summary_enabled() else "paused"
+
+
+def notice() -> str:
+    if summary_enabled():
+        return "Done Deal buttons and sale codes are off. The bot reads DONE DEALS posts and summarizes counts, totals and averages in DAILY REPORTS. No client-token code is needed for a sale post."
+    return "Done Deal tracking is paused. You do not need to post Done Deals or use sale codes. Keep your client updated and arrange a handover if needed."
 
 
 def delivery_allowed(action: dict) -> bool:
@@ -20,7 +32,8 @@ def delivery_allowed(action: dict) -> bool:
         return False
     if key.startswith(("daily-reminder:", "daily-quota:", "daily-report:", "historical-report:")) and payload.get("done_deal_tracking") is not False:
         return False
-    if key.startswith(("ready-instructions:v", "ready-rollout:v")) and not key.startswith(("ready-instructions:v7:", "ready-rollout:v7:")):
+    guide = re.match(r"ready-(?:instructions|rollout):v(\d+):", key)
+    if guide and int(guide.group(1)) < 8:
         return False
     if key.startswith("client-help:"):
         from client_workflow import guide
