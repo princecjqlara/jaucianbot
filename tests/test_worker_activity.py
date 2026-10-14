@@ -9,6 +9,17 @@ CHAT = -1003647732254
 NOW = dt.datetime(2026, 9, 22, 4, tzinfo=dt.timezone.utc)
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class WorkerActivityTests(unittest.TestCase):
     def test_zero_cd_is_readable_and_uncertain_activity_is_not_a_confirmed_missing_day(self):
         messages = [

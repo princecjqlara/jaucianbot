@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import done_deal_tracking
 from collections import Counter
 from decimal import Decimal
 
@@ -36,6 +37,13 @@ def _poll_date(row: dict) -> dt.date | None:
 
 
 def _recommendations(worker: dict) -> list[str]:
+    if not done_deal_tracking.enabled():
+        suggestions = ["Keep availability accurate, update assigned clients, and arrange handovers before leaving."]
+        if (worker.get("client_performance") or {}).get("missed_offers"):
+            suggestions.append("Some client offers passed the acceptance deadline. Tap Ready only when able to respond within 15 minutes.")
+        if worker["unreadable_posts"]:
+            suggestions.append("Ask your team lead to review unreadable close-deal posts.")
+        return suggestions
     suggestions: list[str] = []
     clients = worker.get("client_performance") or {}
     if clients.get("missed_offers"):
@@ -81,8 +89,10 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         chat_id,
         start_local.astimezone(dt.timezone.utc),
         end_local.astimezone(dt.timezone.utc),
-        {config["done"], config["close"]},
+        {config["done"], config["close"]} if done_deal_tracking.enabled() else {config["close"]},
     )
+    if not done_deal_tracking.enabled():
+        rows = [row for row in rows if row.get("thread_id") == config["close"]]
     answers = poll_answers_for_range(chat_id, start_date, local_today)
     people: dict[tuple[str, object], dict] = {}
 
@@ -203,7 +213,7 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
         return [{"name": item["name"], "value": item["client_performance"][metric],
                  "sample_size": item["client_performance"][sample]} for item in ranked[:5]]
 
-    return {
+    report = {
         "team": config["name"],
         "chat_id": chat_id,
         "start_date": start_date,
@@ -231,3 +241,18 @@ def worker_activity_report(chat_id: int, days: int, now: dt.datetime) -> dict:
             " Client conversion requires an explicit token or CRM contact ID in the DD post; historical unlinked sales are not inferred."
         ),
     }
+    if not done_deal_tracking.enabled():
+        report["done_deal_tracking"] = "paused"
+        report["score_formula"] = "Close-deal activity score = 2 points per CD; availability, freebies and client responses are tracked separately."
+        for name in ("sales", "done_deals", "client_conversion"):
+            report["leaders"][name] = None
+        for worker in workers:
+            worker["dd"] = worker["gross"] = None
+            for name in ("converted_clients", "linked_dd_posts", "unlinked_dd_posts", "linked_gross", "conversion_percent"):
+                worker["client_performance"][name] = None
+        for name in ("conversion", "linking"):
+            report["client_performance_definitions"].pop(name, None)
+        report["coverage_note"] = ("Done Deal tracking is paused. Paid-sale totals, earnings and conversion are unavailable, not zero. "
+                                   "Metrics cover availability votes, close-deal posts, freebie confirmations and client acceptance/response history. "
+                                   "Best hour means close-deal posting time, not login time.")
+    return report

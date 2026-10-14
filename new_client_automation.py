@@ -1,6 +1,7 @@
 """Round-robin complete CRM leads across today's active Telegram workers."""
 
 from __future__ import annotations
+import done_deal_tracking
 
 import datetime as dt
 import html
@@ -675,7 +676,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
             f"Track delivery in https://t.me/c/2894511895/{GROUPS[chat_id]['songs']}. "
             f"After sending it to the client, post <code>SONG SENT {token}</code> there."
         )
-    else:
+    elif done_deal_tracking.enabled():
         details += ("\n\nWhen this client pays, include "
                     f"<code>Client token: {token}</code> in your Done Deal post, "
                     "along with the page, client name and price, so we can link the sale to this assignment.")
@@ -1077,7 +1078,7 @@ def new_client_ack_delivery_allowed(action: dict) -> bool:
         action["payload"]["text"] = (f"<b>CLIENT ACCEPTED</b>\nClient: {html.escape(p.get('new_client_contact_name') or 'Client')}\n"
             f"Page: {html.escape(p.get('new_client_page') or 'Page')}\nCurrent editor: {member}\n"
             "Unavailable to other editors. Tap Hand over to transfer, or Client list to view owners.\n"
-            + (f"Paid sale? Tap Done Deal template or send /ddtemplate {p['new_client_token']} AMOUNT in NEW CLIENTS.\n" if GROUPS[int(row["chat_id"])].get("done") else "") +
+            + (f"Paid sale? Tap Done Deal template or send /ddtemplate {p['new_client_token']} AMOUNT in NEW CLIENTS.\n" if done_deal_tracking.enabled() and GROUPS[int(row["chat_id"])].get("done") else "") +
             "Your /ready queue continues. Send /busy when full or leaving.")
     return bool(row and row["payload"].get("new_client_acknowledged_at") and
                 (action["payload"].get("new_client_ack_owner_id") is None or

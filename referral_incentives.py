@@ -5,6 +5,7 @@ import datetime as dt
 import os
 import re
 import urllib.parse
+import done_deal_tracking
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, ROUND_HALF_UP
@@ -31,8 +32,8 @@ PUBLIC_INSTRUCTIONS = (
     "Once you're added to a work team:\n"
     "• Answer the availability polls and select the hours you can work.\n"
     "• Follow the client-assignment instructions and reply promptly when taking a client.\n"
-    "• Post completed sales in your team's receipt or Done Deals topic. "
-    "Include the correct page, client name or order ID, and payment details.\n"
+    "• Suno members: post payments in RECEIPTS with the correct page, client or order ID, and payment details. "
+    "Veo Done Deal tracking is paused; no Done Deal posts are needed.\n"
     "• Keep your client updated and confirm delivery when the work is sent.\n\n"
     "If you need help or your inviter isn't listed, ask a team admin. "
     "Thank you, and welcome aboard! 💛"
@@ -376,6 +377,11 @@ def format_report(result: list[dict], work_date: dt.date, as_of: dt.datetime,
 
 
 def build_report(work_date: dt.date, now: dt.datetime, allowed: set[int], *, lock: bool = True) -> str:
+    if not done_deal_tracking.enabled():
+        return (f"RECRUITER REPORT • {work_date:%B %d, %Y} (PHT)\n\n"
+                "Veo Done Deal tracking is paused. Combined recruiter share calculations are on hold because paid-sale data is incomplete. "
+                "This does not mean members earned zero. Previous sales, registration and credit records are preserved.\n\n"
+                "Suno receipt records and song delivery tracking continue. Ask your team lead about payouts.")
     referrals = [r["payload"] for r in read_records("referral-person:", {RECRUITS_CHAT})]
     joins = [r["payload"] for r in read_records("referral-join:", {RECRUITS_CHAT})]
     basis = os.environ.get("REFERRAL_COMMISSION_BASIS", "").strip()
@@ -441,7 +447,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     today = now.astimezone(MANILA).date()
     # Scheduling is daily; pending deliveries and replies still run independently.
     # Include the reporting approval so adding it during a day queues its reports.
-    setup_key = (f"referral-setup:v2:{RECRUITS_THREAD}:"
+    setup_key = (f"referral-setup:v3:{RECRUITS_THREAD}:"
                  f"{SHARES_CHAT if SHARES_CHAT in allowed else 0}:{today.isoformat()}")
     if setup_complete(setup_key):
         return 0
@@ -472,7 +478,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
                 scheduled_for=now, dedupe_key=f"referral-public-instruction-remove:{target}"))
     instructions = {"text": PUBLIC_INSTRUCTIONS, "disable_notification": False, "message_thread_id": RECRUITS_THREAD}
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="message",
-        payload=instructions, scheduled_for=now, dedupe_key=f"referral-instructions:v4:{RECRUITS_THREAD}"))
+        payload=instructions, scheduled_for=now, dedupe_key=f"referral-instructions:v5:{RECRUITS_THREAD}"))
     queued += int(enqueue_scheduled_action(chat_id=RECRUITS_CHAT, action_type="poll",
         payload={"question": "Who invited you to join the team? 👋\nNot starting yet? Please don't vote. "
                              "Vote just before your first sale, and choose one name.\n"
@@ -508,7 +514,8 @@ def status(allowed: set[int], now: dt.datetime) -> dict:
         "chat_id": f"eq.{SHARES_CHAT}", "dedupe_key": "like.referral-report:*",
         "order": "id.desc", "limit": 20,
     })) if active and SHARES_CHAT in allowed else []
-    return {"enabled": active, "recruits_chat_id": RECRUITS_CHAT, "recruits_topic": RECRUITS_THREAD, "shares_chat_id": SHARES_CHAT,
+    return {"enabled": active, "share_calculations_paused": not done_deal_tracking.enabled(),
+            "recruits_chat_id": RECRUITS_CHAT, "recruits_topic": RECRUITS_THREAD, "shares_chat_id": SHARES_CHAT,
             "shares_topic": SHARES_THREAD, "report_time_pht": "23:59", "commission_percent": 5,
             "base_sales": 8, "maximum_sales": 16, "bonus_window_hours": 72,
             "base_sales_expire": False, "bonus_sales_expire": False,

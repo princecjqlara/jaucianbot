@@ -36,6 +36,7 @@ import ready_availability
 import client_workflow
 import referral_incentives
 import database_scheduler
+import done_deal_tracking
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -55,7 +56,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-14.03"
+AUTOMATION_VERSION = "2026-10-14.04"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -88,7 +89,8 @@ def status_route(environ, start_response):
             payload["error"] = "archive_service_restricted"
             payload["restriction"] = getattr(error, "restriction", None) or "unknown"
         return response(start_response, 503, payload)
-    return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION})
+    return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
+                                        "done_deal_tracking": "enabled" if done_deal_tracking.enabled() else "paused"})
 
 
 def health_route(environ, start_response):
@@ -446,6 +448,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if not done_deal_tracking.delivery_allowed(action):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("paused sale output was not finalized")
+                continue
             if not client_workflow.prepare_delivery(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("obsolete client update was not finalized")

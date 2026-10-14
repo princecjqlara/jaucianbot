@@ -22,6 +22,17 @@ from daily_automation import (
 )
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class DailyAutomationTests(unittest.TestCase):
     def test_report_reminder_and_worker_data_share_corrected_totals(self):
         text = "October 5, 2026\nClient A\nPD: 650 + 550 (two videos) = 1,200\nPage: Manawari Studios"

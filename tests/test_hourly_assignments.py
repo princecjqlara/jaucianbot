@@ -155,6 +155,7 @@ class HourlyTests(unittest.TestCase):
             poll["payload"]["work_date"] = "2026-10-10"
             self.assertIsNone(poll_answer_chat_today("actual-id", {CHAT}, NOW))
 
+    @patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
     def test_quota_reminders_do_not_call_out_members_before_their_selected_hour(self):
         from daily_automation import quota_reminder
         users = [{"user_id": 11, "user_name": "Early", "available_hours": [10]},

@@ -12,6 +12,7 @@ import json
 import math
 import re
 import urllib.parse
+import done_deal_tracking
 from collections import Counter
 
 from cloud_store import enqueue_scheduled_action, new_client_actions, request
@@ -38,7 +39,7 @@ def offer_buttons(token: str, *, take: bool = False) -> dict:
 def owner_buttons(row: dict) -> dict:
     revision = int(row["payload"].get("new_client_handover_revision") or 0)
     keyboard = [[button("Hand over", f"choose:{row['id']}:{revision}:0"), button("Client list", "list:0")]]
-    if GROUPS[int(row["chat_id"])].get("done"):
+    if done_deal_tracking.enabled() and GROUPS[int(row["chat_id"])].get("done"):
         keyboard.append([button("Done Deal template", f"dd:{row['id']}")])
     return {"inline_keyboard": keyboard}
 
@@ -49,6 +50,8 @@ def guide(chat_id: int) -> str:
     ending = (f"Complete any missing details, then send the song today and within 24 hours. After sending it to the client, post SONG SENT + the client token in SONGS: https://t.me/c/{str(abs(chat_id))[3:]}/{config['songs']}. The original 24-hour deadline stays the same after handover."
               if config.get("songs") else
               "Paid sale? Tap Done Deal template or send /ddtemplate + the token in NEW CLIENTS. Copy the filled client/page/token, enter Price Deal, then post it yourself in DONE DEALS. FREEBIE tasks still use FREEBIE SENT + token.")
+    if not config.get("songs") and not done_deal_tracking.enabled():
+        ending = done_deal_tracking.PAUSED_NOTICE + " FREEBIE tasks still use FREEBIE SENT + token."
     setup = ("PAGE SETUP PENDING: client and freebie assignments are paused until the team page is connected. Availability polls and reminders are active.\n\n"
              if page_mapping_pending(config) else "")
     return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
@@ -142,7 +145,7 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
         lines.extend([f"<b>{name}</b> · {html.escape(directory_label(entry['page']))}", f"{entry['status']} · {owner}{token}", ""])
         if entry["status"] == "Assigned":
             controls.append([button("Hand over: " + entry["client"][:35], f"choose:{entry['assignment_id']}:{entry['handover_revision']}:0")])
-            if GROUPS[snapshot["chat_id"]].get("done"):
+            if done_deal_tracking.enabled() and GROUPS[snapshot["chat_id"]].get("done"):
                 controls[-1].append(button("DD template", f"dd:{entry['assignment_id']}"))
         elif entry["status"] == "Available to TAKE":
             controls.append([button("Take: " + entry["client"][:35], f"take:{entry['token']}")])
@@ -386,6 +389,8 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
         h = (row["payload"].get("new_client_handover") or {}) if row else {}
         return h.get("revision") == p["client_transfer_revision"] and h.get("state") == p["client_transfer_state"]
     if p.get("client_template_assignment_id"):
+        if not done_deal_tracking.enabled():
+            return False
         row = full_assignment(int(action["chat_id"]), int(p["client_template_assignment_id"]))
         return bool(row and int(row["payload"]["new_client_assignee_id"]) == int(p["client_template_owner_id"]))
     return True
@@ -409,6 +414,8 @@ def callback_topic(chat_id: int, message: dict) -> int | None:
 
 
 def done_deal_template(row: dict, actor: int, now: dt.datetime, event: str, amount: str = "") -> str:
+    if not done_deal_tracking.enabled():
+        return done_deal_tracking.PAUSED_NOTICE
     from decimal import Decimal, InvalidOperation
     chat_id = int(row["chat_id"])
     p = row["payload"]
@@ -512,6 +519,10 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
     if command == "help":
         queue_message(chat, now, f"client-help:{event}", html.escape(guide(chat)), menu())
         return "Guide queued in NEW CLIENTS."
+    if command in {"dd", "ddtemplate"} and not done_deal_tracking.enabled():
+        if not callback:
+            queue_message(chat, now, f"client-command-result:{event}", html.escape(done_deal_tracking.PAUSED_NOTICE))
+        return done_deal_tracking.PAUSED_NOTICE
     if command == "dd" and callback:
         row = full_assignment(chat, int(parts[1])) if len(parts) == 2 and parts[1].isdigit() else None
         return done_deal_template(row, actor, now, event) if row else "Open the latest owner confirmation for this client."

@@ -100,45 +100,41 @@ The handover buttons transfer accepted new-client assignments. They do not trans
 
 <!-- page -->
 
-# Veo teams: freebies and deals
+# Veo teams: freebies and client updates
 
 ### Complete a freebie task
 
-- Follow the assignment in your team's FREEBIES topic. These tasks use hourly availability and their own token; `/ready` controls new clients separately.
+- Follow the assignment in your team's FREEBIES topic. These tasks use hourly availability and their own token; Ready controls new clients separately.
 - Review the conversation, prepare a suitable freebie, and send it to the client. Do not send a freebie another editor already sent.
 - After sending it, reply to the task with `FREEBIE SENT A1B2C3D4` using that task's actual token. Only the assigned member can confirm it.
-- If you cannot complete it, tell your team lead. `/busy` alone does not close the task. A completed freebie gives that client a 14-day break before another is assigned.
+- If you cannot complete it, tell your team lead. Busy alone does not close the task. A completed freebie gives that client a 14-day break before another is assigned.
 
-### Post deals in the correct topic
+### Done Deal tracking is paused
 
-Use **CLOSE DEALS** for your readable close-deal record or summary. Use **DONE DEALS** for a paid sale. Do not report unpaid, refunded, or cancelled work as a completed paid sale. Follow any extra evidence requirements from your team lead.
+You do not need to use Done Deal buttons, sale codes, or the DONE DEALS topic. Keep serving your clients and follow your team lead's payment and payout instructions.
 
-**Easier:** tap **Done Deal template** on your client confirmation, or send `/ddtemplate A1B2C3D4 650` in NEW CLIENTS using the actual token and Price Deal. The bot fills your client, page, token, and amount. Copy the block and post it yourself in DONE DEALS after payment. The draft alone is not a recorded sale.
+Old Done Deal buttons will explain that tracking is paused. Previous messages and records remain saved. Automatic Veo earnings, sales conversion, and combined recruiter-share calculations are on hold; missing tracking does not mean you earned zero.
 
-**Close-deal summary example** - use the correct page and your actual count:
+### Keep close-deal updates simple
+
+Use **CLOSE DEALS** for your close-deal record or daily summary. Enter your actual count and the page assigned to your team. Do not repeat individual entries and summaries as separate new deals.
 
 ```text
 Page name: Vista Media Agency
 Close Deal: 2
 ```
 
-**Paid Done Deal example** - one client, readable amounts, correct token:
+Replace both example values. Your team lead can help with the page name or a correction. Close-deal updates remain separate from client acceptance and handover.
 
-```text
-Client: Maria Santos
-Page: Vista Media Agency
-Price Deal: 650
-Paid
-Client token: A1B2C3D4
-```
+### What you still need to do
 
-Replace every example value. Use the real page assigned to your team; do not copy Vista Media Agency into another team's post. Keep tips, revisions, and down payments separate from Price Deal. A payment screenshot alone does not give the bot readable client, page, and price details.
+- Tap **Ready** in NEW CLIENTS when able to take clients; tap **Busy** before a break or leaving.
+- Accept the offer within 15 minutes and wait for owner confirmation.
+- Use **Client list** to check who handles each client.
+- Keep your client informed and use **Hand over** if another teammate needs to take over.
+- Confirm a freebie after sending it. Keep hourly availability polls accurate.
 
-### Targets and reports
-
-Announcements show the team's DD and CD targets, progress, and remaining work. Daily reports use Price Deal amounts and flag unreadable or conflicting posts. The current Veo report uses 40% of Price Deal when both team targets are met; otherwise 35%. A missing poll or unresolved tier can require review. Recorded earnings are separate from payout confirmation.
-
-Avoid posting the same sale again as a new sale. If a post is wrong, reply to the original with the issue and ask your lead to confirm the correction.
+Announcements and daily reports continue to show availability and close-deal progress. Suno members still use SONGS and RECEIPTS as explained on the next page.
 
 <!-- page -->
 
@@ -178,13 +174,13 @@ Label tips clearly. Put each amount on its own line. Do not add a total/subtotal
 
 Tap a link in the PDF to open Telegram. You need membership in that group. Use your own team row; do not put another team's client or sale in these topics.
 
-| Veo team | Availability | New clients | Freebies | Close deals | Done deals | News |
-| --- | --- | --- | --- | --- | --- | --- |
-| Veo | [Open](https://t.me/c/3647732254/25893) | [Open](https://t.me/c/3647732254/27622) | [Open](https://t.me/c/3647732254/26249) | [Open](https://t.me/c/3647732254/1132) | [Open](https://t.me/c/3647732254/1135) | [Open](https://t.me/c/3647732254/248) |
-| Veo Ollie | [Open](https://t.me/c/4423057797/4536) | [Open](https://t.me/c/4423057797/5758) | [Open](https://t.me/c/4423057797/4811) | [Open](https://t.me/c/4423057797/16) | [Open](https://t.me/c/4423057797/17) | [Open](https://t.me/c/4423057797/4794) |
-| Veo Jessa | [Open](https://t.me/c/3962888977/3050) | [Open](https://t.me/c/3962888977/3725) | [Open](https://t.me/c/3962888977/3240) | [Open](https://t.me/c/3962888977/6) | [Open](https://t.me/c/3962888977/7) | [Open](https://t.me/c/3962888977/5) |
-| Veo Jel | [Open](https://t.me/c/4461399292/2917) | [Open](https://t.me/c/4461399292/4180) | [Open](https://t.me/c/4461399292/3003) | [Open](https://t.me/c/4461399292/8) | [Open](https://t.me/c/4461399292/6) | [Open](https://t.me/c/4461399292/2) |
-| Veo Lyn | [Open](https://t.me/c/4364797420/16) | [Open](https://t.me/c/4364797420/20) | [Open](https://t.me/c/4364797420/22) | [Open](https://t.me/c/4364797420/19) | [Open](https://t.me/c/4364797420/15) | [Open](https://t.me/c/4364797420/18) |
+| Veo team | Availability | New clients | Freebies | Close deals | News |
+| --- | --- | --- | --- | --- | --- |
+| Veo | [Open](https://t.me/c/3647732254/25893) | [Open](https://t.me/c/3647732254/27622) | [Open](https://t.me/c/3647732254/26249) | [Open](https://t.me/c/3647732254/1132) | [Open](https://t.me/c/3647732254/248) |
+| Veo Ollie | [Open](https://t.me/c/4423057797/4536) | [Open](https://t.me/c/4423057797/5758) | [Open](https://t.me/c/4423057797/4811) | [Open](https://t.me/c/4423057797/16) | [Open](https://t.me/c/4423057797/4794) |
+| Veo Jessa | [Open](https://t.me/c/3962888977/3050) | [Open](https://t.me/c/3962888977/3725) | [Open](https://t.me/c/3962888977/3240) | [Open](https://t.me/c/3962888977/6) | [Open](https://t.me/c/3962888977/5) |
+| Veo Jel | [Open](https://t.me/c/4461399292/2917) | [Open](https://t.me/c/4461399292/4180) | [Open](https://t.me/c/4461399292/3003) | [Open](https://t.me/c/4461399292/8) | [Open](https://t.me/c/4461399292/2) |
+| Veo Lyn | [Open](https://t.me/c/4364797420/16) | [Open](https://t.me/c/4364797420/20) | [Open](https://t.me/c/4364797420/22) | [Open](https://t.me/c/4364797420/19) | [Open](https://t.me/c/4364797420/18) |
 
 Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki Media; Jessa - Manawari Studios; Jel - Onset Media Agency.
 
@@ -202,7 +198,7 @@ Veo pages: Veo - Azshinari / SAMA KANA MEDIA; Ollie - Vista Media Agency / Loki 
 
 For an old button, expired offer, duplicate owner, wrong page, or missing confirmation: use the latest message, check `/clients`, and send the message link plus client token to your team lead. Do not keep claiming or contact the client while ownership is unclear. `/clienthelp` opens the guide in NEW CLIENTS.
 
-Buttons not responding? Type `/ready`, `/busy`, `WORKING TOKEN`, `TAKE TOKEN`, or `/ddtemplate TOKEN AMOUNT` in NEW CLIENTS. Use your personal Telegram account, not anonymous-admin mode. Only the named editor can accept a reserved client; only the chosen teammate can accept a handover.
+Buttons not responding? Type `/ready`, `/busy`, `WORKING TOKEN`, `TAKE TOKEN` in NEW CLIENTS. Use your personal Telegram account, not anonymous-admin mode. Only the named editor can accept a reserved client; only the chosen teammate can accept a handover.
 
 If you are a new recruit, choose the person who invited you in the [recruiter poll topic](https://t.me/c/3555676168/510) when ready to start. Ask an admin if your inviter is missing.
 

@@ -14,6 +14,17 @@ DAY = dt.date(2026, 10, 9)
 NOW = dt.datetime(2026, 10, 9, 16, 5, tzinfo=UTC)
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class PlanTests(unittest.TestCase):
     def test_snapshot_uses_manila_tomorrow_and_only_approved_work_teams(self):
         with patch("daily_report_plans.daily_poll_counts", return_value={

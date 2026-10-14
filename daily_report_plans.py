@@ -1,5 +1,6 @@
 """Manager-only staffing plans from distinct poll voters, separate from spending."""
 from __future__ import annotations
+import done_deal_tracking
 
 import datetime as dt
 from decimal import Decimal
@@ -24,7 +25,8 @@ def plan_lines(chat_id: int, work_date: dt.date, count: dict | None) -> list[str
                       f"Planned ads budget: {money(Decimal(budget))} (Active × 2 × ₱150)"]
         else:
             _, quota, _ = quota_for(count)
-            lines.append(f"Team target: {quota} DD • {quota} CD" if active else "Team target: waiting for Active members.")
+            target = f"{quota} DD • {quota} CD" if done_deal_tracking.enabled() else f"{quota} close deals"
+            lines.append(f"Team target: {target}" if active else "Team target: waiting for Active members.")
     if chat_id != TRABAWHO_CHAT_ID:
         lines.append("Planned ads budget: no budget rule configured for this team.")
     lines.append("Availability is a snapshot of votes; each member counts once per team.")

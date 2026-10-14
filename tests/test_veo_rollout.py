@@ -38,6 +38,17 @@ def team_offer(chat_id, *, volunteer=False):
     return row
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class VeoRolloutTests(unittest.TestCase):
     def setUp(self):
         for target, value in (

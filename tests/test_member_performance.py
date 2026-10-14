@@ -50,6 +50,17 @@ def members(result):
     return {r["user_id"]: r for r in result["members"]}
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class MemberPerformanceTests(unittest.TestCase):
     def test_history_projection_preserves_deadline_and_original_member_name(self):
         with patch.object(cloud_store, "request", return_value=[]) as request:

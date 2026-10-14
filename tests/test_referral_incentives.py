@@ -38,6 +38,17 @@ def row(text, number=101, user=11, thread=4):
             "thread_id": thread, "source": "bot", "content_type": "photo"}
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class CommissionTests(unittest.TestCase):
     def test_first_eight_have_no_expiry_and_ninth_is_excluded_without_bonus(self):
         got = result([sale(i, hours=1000 + i) for i in range(9)])
@@ -301,7 +312,7 @@ class WorkflowTests(unittest.TestCase):
                             for action in actions))
         self.assertEqual([call.args[0] for call in read.call_args_list],
                          ["referral-poll:", "referral-instructions:"])
-        self.assertTrue(insert.call_args.args[0].startswith("referral-setup:v2:"))
+        self.assertTrue(insert.call_args.args[0].startswith("referral-setup:v3:"))
 
     def test_pending_old_roster_poll_is_suppressed_after_roster_change(self):
         action = {"id": 1, "chat_id": referrals.RECRUITS_CHAT, "action_type": "poll",

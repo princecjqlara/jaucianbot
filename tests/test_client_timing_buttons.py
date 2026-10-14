@@ -16,6 +16,17 @@ from test_client_workflow import assignment, callback, NOW, CHAT
 from test_ready_handoffs import ready_offer
 
 
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
+
+
 class TimingAndButtonTests(unittest.TestCase):
     def test_new_offers_use_fifteen_minutes_in_every_configured_team(self):
         with patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"}):

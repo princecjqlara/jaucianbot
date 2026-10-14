@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from decimal import Decimal
 
 from daily_automation import GROUPS
@@ -11,6 +12,17 @@ CONFIG = GROUPS[-1003962888977]
 def post(mid, text, *, author_id=1, thread=7, sent="2026-10-05T00:00:00+00:00", media="text"):
     return {"message_id": mid, "text": text, "author_id": author_id, "author_name": "Alex",
             "thread_id": thread, "sent_utc": sent, "content_type": media}
+
+
+# Preserve optional paid-sale regression coverage; paused mode has its own tests.
+def setUpModule():
+    global _tracking_environment
+    _tracking_environment = patch.dict("os.environ", {"DONE_DEAL_TRACKING_ENABLED": "true"})
+    _tracking_environment.start()
+
+
+def tearDownModule():
+    _tracking_environment.stop()
 
 
 class DealParserTests(unittest.TestCase):
