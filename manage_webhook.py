@@ -33,8 +33,9 @@ def main() -> None:
         result = api_request(token, "setWebhook", {
             "url": args.url,
             "secret_token": secret,
-            "allowed_updates": json.dumps(["message", "edited_message", "my_chat_member", "poll_answer"]),
+            "allowed_updates": json.dumps(["message", "edited_message", "my_chat_member", "poll_answer", "callback_query"]),
             "max_connections": 10,
+            "drop_pending_updates": "false",
         })
         print(json.dumps({"webhook_registered": result, "url": args.url}))
     else:

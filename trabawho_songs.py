@@ -10,6 +10,8 @@ import re
 from cloud_store import (
     complete_song_job, create_song_job, enqueue_scheduled_action, new_client_actions,
     song_jobs, song_job_state, song_notices, song_reply_messages, mark_song_ack_queued,
+    sync_song_owner,
+    song_assignment_owner,
 )
 from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID
 from suno_store import suno_assignment_matches_project
@@ -24,13 +26,20 @@ def timestamp(value) -> dt.datetime:
 
 
 def ensure_song_jobs(now: dt.datetime) -> None:
-    existing = {j["payload"]["song_assignment_id"] for j in song_jobs(TRABAWHO_CHAT_ID)}
+    existing = {j["payload"]["song_assignment_id"]: j for j in song_jobs(TRABAWHO_CHAT_ID)}
     for assignment in new_client_actions({TRABAWHO_CHAT_ID}):
-        if assignment["id"] in existing:
-            continue
         payload = assignment.get("payload") or {}
         started = payload.get("new_client_acknowledged_at")
         if not started or not payload.get("new_client_token") or not suno_assignment_matches_project(assignment):
+            continue
+        old = existing.get(assignment["id"])
+        if old:
+            events = [e for e in payload.get("new_client_handover_events") or [] if e.get("state") == "accepted"]
+            if (not old["payload"].get("song_completed_at") and
+                    (old["payload"].get("song_assignee_id") != payload["new_client_assignee_id"] or
+                     events and old["payload"].get("song_owner_since") != events[-1]["resolved_at"])):
+                if not sync_song_owner(int(old["id"]), assignment, now):
+                    raise RuntimeError("Song owner changed concurrently; retry synchronization")
             continue
         start = timestamp(started)
         create_song_job(TRABAWHO_CHAT_ID, int(assignment["id"]), {
@@ -39,6 +48,7 @@ def ensure_song_jobs(now: dt.datetime) -> None:
             "song_assignee_name": payload.get("new_client_assignee_name") or str(payload["new_client_assignee_id"]),
             "song_contact_name": payload.get("new_client_contact_name") or "Client",
             "song_started_at": start.isoformat(), "song_deadline_at": (start + dt.timedelta(hours=24)).isoformat(),
+            "song_owner_since": ([e for e in payload.get("new_client_handover_events") or [] if e.get("state") == "accepted"] or [{}])[-1].get("resolved_at") or started,
         }, now)
 
 
@@ -101,6 +111,11 @@ def _record_completion(message: dict, job: dict, now: dt.datetime) -> bool:
     sent = timestamp(value) if value else dt.datetime.fromtimestamp(
         message.get("edit_date") or message.get("date") or now.timestamp(), dt.timezone.utc)
     if not timestamp(payload["song_started_at"]) <= sent <= now:
+        return False
+    if payload.get("song_owner_since") and sent < timestamp(payload["song_owner_since"]):
+        return False
+    if (payload.get("song_owner_since") and
+            song_assignment_owner(int(payload["song_assignment_id"]), TRABAWHO_CHAT_ID) != int(payload["song_assignee_id"])):
         return False
     if not payload.get("song_completed_at"):
         if not complete_song_job(int(job["id"]), sent, int(message["message_id"])):
@@ -171,8 +186,8 @@ def queue_song_followups(now: dt.datetime, allowed: set[int]) -> int:
             chat_id=TRABAWHO_CHAT_ID, action_type="message",
             payload={"text": notice_text(job, now), "parse_mode": "HTML",
                 "message_thread_id": TRABAWHO["songs"], "disable_notification": False,
-                "song_job_id": job["id"], "song_stage": stage},
-            scheduled_for=now, dedupe_key=f"trabawho-song-notice:{job['id']}:{stage}",
+                "song_job_id": job["id"], "song_stage": stage, "song_owner_id": job["payload"]["song_assignee_id"]},
+            scheduled_for=now, dedupe_key=f"trabawho-song-notice:{job['id']}:owner-{job['payload']['song_assignee_id']}:{stage}",
         ))
     return queued
 
@@ -185,6 +200,13 @@ def song_notice_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     job = song_job_state(int(action["payload"]["song_job_id"]), TRABAWHO_CHAT_ID)
     if not job or job["payload"].get("song_completed_at"):
         return False
+    if action["payload"].get("song_owner_id") is not None and action["payload"]["song_owner_id"] != job["payload"]["song_assignee_id"]:
+        return False
+    if (job["payload"].get("song_owner_since") and
+            song_assignment_owner(int(job["payload"]["song_assignment_id"]), TRABAWHO_CHAT_ID) != int(job["payload"]["song_assignee_id"])):
+        return False
+    # Legacy queued reminders should also name the current owner.
+    action["payload"]["text"] = notice_text(job, now)
     # Suppress stale milestones after cron downtime, then send only the current stage.
     if action["payload"]["song_stage"] != due_stage(job, now):
         return False

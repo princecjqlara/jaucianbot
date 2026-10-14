@@ -33,6 +33,7 @@ import hourly_availability
 import client_volunteers
 import client_handoffs
 import ready_availability
+import client_workflow
 import referral_incentives
 import database_scheduler
 from daily_report_plans import planning_snapshot
@@ -54,7 +55,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-13.07"
+AUTOMATION_VERSION = "2026-10-14.01"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -171,6 +172,29 @@ def new_clients_status_route(environ, start_response):
         print(f"New-client status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, "groups": groups})
+
+
+def client_directory_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    allowed = allowed_chat_ids().intersection(AVAILABILITY_GROUPS)
+    args = parse_qs(environ.get("QUERY_STRING", ""))
+    if args.get("group"):
+        try:
+            group = int(args["group"][0])
+        except ValueError:
+            return response(start_response, 400, {"ok": False, "error": "invalid group"})
+        if group not in allowed:
+            return response(start_response, 404, {"ok": False})
+        allowed = {group}
+    snapshots = []
+    for chat in sorted(allowed):
+        try:
+            snapshots.append(client_workflow.directory(chat, dt.datetime.now(dt.timezone.utc)))
+        except Exception as error:
+            print(f"Client directory read failed: {type(error).__name__}")
+            snapshots.append({"chat_id": chat, "team": AVAILABILITY_GROUPS[chat]["name"], "ok": False, "error": "client_source_unavailable"})
+    return response(start_response, 200, {"ok": all(s.get("ok", True) for s in snapshots), "groups": snapshots})
 
 
 def referrals_status_route(environ, start_response):
@@ -421,6 +445,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
     for action in actions:
         try:
             now = dt.datetime.now(dt.timezone.utc)
+            if not client_workflow.prepare_delivery(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete client update was not finalized")
+                continue
             if not client_handoffs.delivery_allowed(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("closed handoff notice was not finalized")
@@ -600,6 +628,12 @@ def dispatch_route(environ, start_response):
             except Exception as suno_error:
                 queue_errors.append("suno_new_client")
                 print(f"Suno assignment queue failed: {type(suno_error).__name__}")
+        try:
+            if os.environ.get("SUPABASE_URL") or os.environ.get("SUPABASE_DB_URL"):
+                client_workflow.maintain(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as workflow_error:
+            queue_errors.append("client_directory")
+            print(f"Client directory queue failed: {type(workflow_error).__name__}")
         processed, sent, failed = deliver_due_actions(allowed, limit=25)
     except Exception as error:
         print(f"Schedule claim failed: {type(error).__name__}")
@@ -631,6 +665,18 @@ def webhook_route(environ, start_response):
         return response(start_response, 400, {"ok": False, "error": "invalid update"})
     except RuntimeError:
         return response(start_response, 503, {"ok": False, "error": "invalid configuration"})
+    if "callback_query" in update:
+        try:
+            result = client_workflow.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
+            # Telegram executes this callback acknowledgment from the webhook
+            # response. All group messages stay in the scheduled outbox.
+            return response(start_response, 200, {"method": "answerCallbackQuery",
+                "callback_query_id": update["callback_query"].get("id"),
+                "text": (result or "Use these buttons in your approved team's NEW CLIENTS topic.")[:200],
+                "show_alert": True})
+        except Exception as error:
+            print(f"Client button failed: {type(error).__name__}")
+            return response(start_response, 500, {"ok": False})
     try:
         if "poll_answer" in update:
             referral_stored = referral_incentives.save_answer(update, allowed)
@@ -644,6 +690,8 @@ def webhook_route(environ, start_response):
         return response(start_response, 500, {"ok": False})
     if stored:
         try:
+            if client_workflow.handle(update, allowed, dt.datetime.now(dt.timezone.utc)) is not None:
+                return response(start_response, 200, {"ok": True})
             ready_chat = ready_availability.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
             if ready_chat is not None:
                 if ready_chat != TRABAWHO_CHAT_ID or suno_configured():
@@ -715,6 +763,8 @@ def app(environ, start_response):
         return freebies_status_route(environ, start_response)
     if path == "/api/new-clients/status" and method == "GET":
         return new_clients_status_route(environ, start_response)
+    if path == "/api/clients" and method == "GET":
+        return client_directory_route(environ, start_response)
     if path == "/api/referrals/status" and method == "GET":
         return referrals_status_route(environ, start_response)
     if path == "/api/referrals/audit" and method == "GET":
@@ -729,6 +779,6 @@ def app(environ, start_response):
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

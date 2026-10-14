@@ -20,6 +20,8 @@ def main() -> None:
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
+    clients = commands.add_parser("clients", help="Read current client availability, editors and handover history")
+    clients.add_argument("--group", type=int)
     commands.add_parser("scheduler-status", help="Read database scheduler configuration and recent HTTP results")
     scheduler_setup = commands.add_parser("configure-scheduler", help="Install or repair the database's one-minute dispatcher")
     scheduler_setup.add_argument("--verify-recovery", action="store_true", help="Test watchdog repair inside a rolled-back savepoint")
@@ -71,6 +73,8 @@ def main() -> None:
         path = "/api/freebies/status"
     elif args.command == "new-clients":
         path = "/api/new-clients/status"
+    elif args.command == "clients":
+        path = "/api/clients" + ("?" + urllib.parse.urlencode({"group": args.group}) if args.group is not None else "")
     elif args.command in {"scheduler-status", "configure-scheduler"}:
         path = "/api/scheduler"
         if args.command == "configure-scheduler":

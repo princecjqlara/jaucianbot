@@ -102,7 +102,7 @@ class NewClientAutomationTests(unittest.TestCase):
         self.assertEqual(second["payload"]["new_client_contact_id"], "new")
         self.assertEqual(first["payload"]["new_client_round"], 1)
         self.assertEqual(first["payload"]["message_thread_id"], 4180)
-        self.assertIn("Complete details from Supabase", first["payload"]["text"])
+        self.assertIn("Client brief", first["payload"]["text"])
         self.assertIn("Business old", first["payload"]["text"])
         self.assertIn("WORKING", first["payload"]["text"])
         self.assertNotIn("freebie", first["payload"]["text"].casefold())

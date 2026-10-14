@@ -6,6 +6,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import app
 import client_handoffs as handoffs
@@ -25,10 +26,11 @@ def ready_offer():
     return row
 
 
-def person(state="ready", minutes=15):
+def person(state="ready", minutes=15, continuous=False):
     return {"id": 900, "updated_at": NOW.isoformat(), "payload": {
         "user_id": 11, "user_name": "Alex", "state": state, "ready_at": NOW.isoformat(),
-        "ready_until": (NOW + dt.timedelta(minutes=minutes)).isoformat(), "update_id": 100}}
+        "ready_until": (NOW + dt.timedelta(minutes=minutes)).isoformat(), "update_id": 100,
+        "continuous": continuous}}
 
 
 def command(text="/ready", *, update_id=101, minutes=0, thread=5758):
@@ -47,6 +49,133 @@ class ReadyHandoffTests(unittest.TestCase):
         with patch.object(ready, "records", return_value=[person()]):
             self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=14, seconds=59), [])), 1)
             self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=15), []), [])
+
+    def test_fresh_ready_starts_continuous_mode_and_stale_ready_does_not(self):
+        for age, continuous in ((0, True), (-16, False)):
+            with patch.object(ready, "request", return_value=[{"id": 900}]) as request, patch.object(ready, "enqueue_scheduled_action"):
+                ready.handle(command(minutes=age), {ready.OLLIE}, NOW)
+            self.assertEqual(request.call_args.args[1]["payload"]["continuous"], continuous)
+
+    def test_continuous_ready_survives_fifteen_minutes_and_day_boundary(self):
+        with patch.object(ready, "records", return_value=[person(continuous=True)]):
+            self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(days=1), [])), 1)
+
+    def test_working_reuses_reservation_for_next_client_without_another_ready(self):
+        row = ready_offer()
+        row.update(status="cancelled")
+        row["payload"].update(new_client_acknowledged_at=(NOW + dt.timedelta(minutes=1)).isoformat(),
+                              new_client_reservation_key="client-1")
+        member = person("reserved", continuous=True)
+        member["payload"]["reservation_key"] = "client-1"
+        with patch.object(ready, "records", return_value=[member]):
+            self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=20), [row])), 1)
+            member["payload"]["state"] = "busy"
+            self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=20), [row]), [])
+
+    def test_continuous_ready_does_not_receive_two_unanswered_clients(self):
+        row = ready_offer()
+        with patch.object(ready, "records", return_value=[person(continuous=True)]):
+            self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=1), [row]), [])
+
+    def test_assignment_loop_continues_after_working_then_stops_on_missed_deadline(self):
+        member = person(continuous=True)
+        history = []
+        contacts = [{"id": f"client-{n}", "page_id": "page", "psid": f"person-{n}",
+                     "name": f"Client {n}", "collected_details": {"purpose": "ad"}} for n in range(3)]
+        def cas(path, changes, **kwargs):
+            filters = parse_qs(urlsplit(path).query)
+            self.assertEqual(filters["updated_at"], ["eq." + member["updated_at"]])
+            member.update(changes)
+            return [{"id": 900}]
+        def enqueue(**kwargs):
+            if kwargs["payload"].get("new_client_token"):
+                history.append({"id": 100 + len(history), "chat_id": ready.OLLIE,
+                                "status": "pending", "sent_at": None,
+                                "payload": copy.deepcopy(kwargs["payload"])})
+            return True
+        with patch.object(ready, "records", side_effect=lambda chat: [copy.deepcopy(member)]), patch.object(ready, "request", side_effect=cas), patch.object(ready, "queue_instructions", return_value=0), patch.object(clients, "new_client_actions", side_effect=lambda allowed: history), patch.object(clients, "_page_contacts", return_value=[("Page", contacts)]), patch.object(clients, "_reconcile_archived_confirmations"), patch.object(clients, "enqueue_scheduled_action", side_effect=enqueue), patch.object(clients, "_crm_offer_eligible", return_value=True), patch.object(clients, "update_new_client_action", return_value=True), patch.object(handoffs, "close_offers"), patch.object(handoffs, "end_delivered", return_value=False), patch.object(handoffs, "enqueue_scheduled_action"):
+            self.assertEqual(clients.queue_new_client_assignments(NOW, {ready.OLLIE}), 1)
+            first = history[0]
+            first["payload"]["_first_delivery_at"] = NOW.isoformat()
+            msg = command(f"WORKING {first['payload']['new_client_token']}", minutes=1)["message"]
+            self.assertTrue(clients._record_confirmation(first, msg, NOW + dt.timedelta(minutes=1), history=history))
+            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=1), {ready.OLLIE}), 1)
+            self.assertNotEqual(history[0]["payload"]["new_client_contact_id"], history[1]["payload"]["new_client_contact_id"])
+            history[1]["payload"]["_first_delivery_at"] = (NOW + dt.timedelta(minutes=1)).isoformat()
+            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=6), {ready.OLLIE}), 0)
+        self.assertEqual(len(history), 2)
+
+    def test_reservation_without_committed_assignment_is_not_reused(self):
+        member = person("reserved", continuous=True)
+        member["payload"]["reservation_key"] = "client-1"
+        with patch.object(ready, "records", return_value=[member]):
+            self.assertEqual(ready.available(ready.OLLIE, NOW, []), [])
+
+    def test_missed_deadline_pauses_across_days_until_new_ready_even_after_take(self):
+        row = ready_offer()
+        row.update(status="cancelled")
+        row["payload"].update(new_client_phase="claimed", new_client_original_assignee_id=11,
+                              new_client_assignee_id=22, new_client_acknowledged_at=(NOW + dt.timedelta(minutes=7)).isoformat())
+        member = person(continuous=True)
+        later = NOW + dt.timedelta(days=1)
+        with patch.object(ready, "records", return_value=[member]):
+            self.assertEqual(ready.available(ready.OLLIE, later, [row]), [])
+            member["payload"]["ready_at"] = later.isoformat()
+            self.assertEqual(len(ready.available(ready.OLLIE, later, [row])), 1)
+
+    def test_pause_starts_at_delivery_deadline_without_waiting_for_end_notice(self):
+        row = ready_offer()
+        with patch.object(ready, "records", return_value=[person(continuous=True)]):
+            self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=5), [row]), [])
+        self.assertEqual(ready.missed_deadlines([row], NOW + dt.timedelta(minutes=5)), {11: NOW + dt.timedelta(minutes=5)})
+        row["sent_at"] = row["payload"]["_first_delivery_at"] = None
+        self.assertEqual(ready.missed_deadlines([row], NOW + dt.timedelta(days=1)), {})
+
+    def test_concurrent_dispatchers_cannot_reuse_same_accepted_reservation(self):
+        row = person("reserved", continuous=True)
+        row["payload"]["reservation_key"] = "old-client"
+        user = {"user_id": 11, "ready_record": copy.deepcopy(row)}
+        lock = threading.Lock()
+        def cas(path, changes, **kwargs):
+            filters = parse_qs(urlsplit(path).query)
+            with lock:
+                if filters["updated_at"] != ["eq." + row["updated_at"]]:
+                    return []
+                row.update(changes)
+                return [{"id": 900}]
+        with patch.object(ready, "request", side_effect=cas):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda key: ready.reserve(user, key, NOW), ["client-1", "client-2"]))
+        self.assertEqual(sum(results), 1)
+
+    def test_busy_withdraws_queued_offer_before_first_delivery(self):
+        row = ready_offer()
+        row.update(status="processing", sent_at=None)
+        row["payload"].update(_first_delivery_at=None, new_client_reservation_key="client-1")
+        with patch.object(clients, "_crm_offer_eligible", return_value=True), patch.object(clients, "new_client_action_state", return_value=row), patch.object(ready, "request", return_value=[]), patch.object(clients, "update_new_client_action", return_value=True) as cancel:
+            self.assertFalse(clients.new_client_delivery_allowed(row, NOW))
+        self.assertEqual(cancel.call_args.args[1]["new_client_cancelled_reason"], "assignee_inactive_before_first_delivery")
+
+    def test_legacy_missed_offer_hold_resumes_but_accepted_client_stays_reserved(self):
+        row = ready_offer()
+        row.update(status="cancelled")
+        row["payload"].update(new_client_phase="review", new_client_cancelled_reason=handoffs.REVIEW)
+        with patch.object(handoffs, "end_delivered", return_value=True), patch.object(handoffs, "update_new_client_action", return_value=True), patch.object(handoffs, "close_offers"):
+            handoffs.resume_missed_offers([row], NOW)
+        self.assertEqual(row["payload"]["new_client_cancelled_reason"], volunteers.EXPIRED)
+        with patch.object(handoffs, "ended", return_value=True):
+            self.assertNotIn("id:client", clients._reserved_contact_keys([row]))
+        row["payload"]["new_client_acknowledged_at"] = NOW.isoformat()
+        self.assertIn("id:client", clients._reserved_contact_keys([row]))
+
+    def test_old_review_notice_is_suppressed_and_closure_banner_is_replaced(self):
+        self.assertFalse(handoffs.delivery_allowed({"dedupe_key": "client-review:100", "payload": {}}, NOW))
+        row = ready_offer()
+        row["payload"]["new_client_phase"] = "claimed"
+        notice = {"payload": {"text": "OFFER CLOSED - Client", "client_handoff_kind": "closure", "client_handoff_parent_id": 100, "client_handoff_phase": "claimed"}}
+        with patch.object(handoffs, "request", return_value=[row]):
+            self.assertTrue(handoffs.delivery_allowed(notice, NOW))
+        self.assertTrue(notice["payload"]["text"].startswith("CLIENT STATUS"))
 
     def test_busy_and_reserved_people_are_out_of_the_queue(self):
         for state in ("busy", "reserved"):
@@ -173,18 +302,34 @@ class ReadyHandoffTests(unittest.TestCase):
             action["payload"]["client_handoff_phase"] = "claimed"
             self.assertTrue(handoffs.delivery_allowed(action, NOW))
 
-    def test_two_missed_offers_go_to_review_and_reserve_the_client(self):
+    def test_two_missed_offers_keep_rotating_without_review(self):
         first, latest = ready_offer(), ready_offer()
         latest["id"] = 101
         for row in (first, latest):
             row.update(status="cancelled")
             row["payload"].update(new_client_phase="expired", new_client_cancelled_reason=volunteers.EXPIRED)
         with patch.object(handoffs, "end_delivered", return_value=True), patch.object(handoffs, "update_new_client_action", return_value=True), patch.object(handoffs, "enqueue_scheduled_action", return_value=True) as enqueue, patch.object(handoffs, "close_offers"):
-            handoffs.bound_missed_offers([first, latest], NOW)
-        self.assertEqual(latest["payload"]["new_client_cancelled_reason"], handoffs.REVIEW)
-        self.assertEqual(enqueue.call_count, 1)
+            handoffs.resume_missed_offers([first, latest], NOW)
+        self.assertEqual(latest["payload"]["new_client_cancelled_reason"], volunteers.EXPIRED)
+        enqueue.assert_not_called()
         with patch.object(handoffs, "ended", return_value=True):
-            self.assertIn("id:client", clients._reserved_contact_keys([first, latest]))
+            self.assertNotIn("id:client", clients._reserved_contact_keys([first, latest]))
+
+    def test_third_offer_prioritizes_missed_client_with_volunteer_feature_disabled(self):
+        first, latest = ready_offer(), ready_offer()
+        latest["id"] = 101
+        for row, member_id in ((first, 11), (latest, 22)):
+            row.update(status="cancelled")
+            row["payload"].update(new_client_assignee_id=member_id, new_client_phase="expired", new_client_cancelled_reason=volunteers.EXPIRED)
+        user = {"user_id": 33, "user_name": "Cathy", "ready_record": person(continuous=True)}
+        contact = {"id": "client", "page_id": "page", "psid": "person", "name": "Missed client", "collected_details": {"purpose": "ad"}}
+        fresh = dict(contact, id="fresh", psid="fresh-person", name="Fresh client")
+        with patch.dict("os.environ", {"NEW_CLIENT_VOLUNTEER_ENABLED": "false"}), patch.object(clients, "new_client_actions", return_value=[first, latest]), patch.object(clients, "_reconcile_archived_confirmations"), patch.object(handoffs, "ended", return_value=True), patch.object(ready, "queue_instructions", return_value=0), patch.object(ready, "available", return_value=[user]), patch.object(ready, "reserve", return_value=True), patch.object(clients, "_page_contacts", return_value=[("Page", [fresh, contact])]), patch.object(clients, "enqueue_scheduled_action", return_value=True) as enqueue:
+            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=20), {ready.OLLIE}), 1)
+        p = enqueue.call_args.kwargs["payload"]
+        self.assertEqual(p["new_client_contact_id"], "client")
+        self.assertEqual(p["new_client_assignment_attempt"], 3)
+        self.assertEqual(p["new_client_assignee_id"], 33)
 
     def test_new_assignment_uses_ready_once_and_has_five_minute_deadline(self):
         user = {"user_id": 11, "user_name": "Alex", "ready_record": person()}
@@ -213,13 +358,16 @@ class ReadyHandoffTests(unittest.TestCase):
         guide, announcement = [c.kwargs for c in enqueue.call_args_list]
         self.assertEqual(guide["payload"]["message_thread_id"], 5758)
         self.assertEqual(announcement["payload"]["message_thread_id"], 4794)
-        self.assertIn("ready-instructions:v3:", guide["dedupe_key"])
-        self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v3:{ready.OLLIE}")
+        self.assertIn(f"ready-instructions:v{ready.GUIDE_VERSION}:", guide["dedupe_key"])
+        self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v{ready.GUIDE_VERSION}:{ready.OLLIE}")
         text = guide["payload"]["text"]
         for instruction in ("/ready", "/busy", "WORKING A1B2C3D4", "TAKE is STILL AVAILABLE", "YOUR TURN ENDED", "hourly availability polls", "FREEBIE SENT", "Older offers keep the deadline"):
             self.assertIn(instruction, text)
         self.assertLess(len(text), 4096)
         self.assertIn("https://t.me/c/4423057797/5758", announcement["payload"]["text"])
+        for instruction in ("/ready ONCE", "/busy IMMEDIATELY", "PAUSED", "next client"):
+            self.assertIn(instruction, text)
+            self.assertIn(instruction, announcement["payload"]["text"])
 
     def test_rollout_enables_only_the_five_configured_assignment_teams(self):
         for chat in AVAILABILITY_GROUPS:

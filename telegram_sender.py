@@ -68,6 +68,9 @@ def send_scheduled_action(action: dict) -> dict:
                 payload["text"] = source["text"]
                 if source.get("parse_mode"):
                     payload["parse_mode"] = source["parse_mode"]
+                # Explicitly remove old acceptance buttons on closure edits.
+                if source.get("reply_markup") or source.get("client_handoff_kind") == "closure":
+                    payload["reply_markup"] = source.get("reply_markup") or {"inline_keyboard": []}
             try:
                 result = telegram_call(operation, payload)
             except TelegramError as error:
@@ -82,6 +85,8 @@ def send_scheduled_action(action: dict) -> dict:
                     replacement = {**common, "text": text}
                     if source.get("parse_mode"):
                         replacement["parse_mode"] = source["parse_mode"]
+                    if source.get("reply_markup"):
+                        replacement["reply_markup"] = source["reply_markup"]
                     if source.get("client_handoff_kind") == "closure":
                         # Some old force-reply offers cannot be edited. Post a
                         # short closure in the same client topic, linked to the

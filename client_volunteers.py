@@ -36,6 +36,7 @@ def start(row: dict) -> dt.datetime | None:
 
 
 def open_window(row: dict, now: dt.datetime) -> None:
+    import client_workflow
     from new_client_automation import _active_members, _mention
     from daily_automation import MANILA
     payload = row["payload"]
@@ -50,7 +51,7 @@ def open_window(row: dict, now: dt.datetime) -> None:
     header = (f"👋 Who would like this client?\n"
               f"Client: {html.escape(payload.get('new_client_contact_name') or 'Client')}\n"
               f"Page: {html.escape(payload.get('new_client_page') or 'Unknown page')}\n\n")
-    next_step = (f"If nobody takes it, we try the next ready editor; after two missed offers, {ready.review_contact(int(row['chat_id']))} reviews the client. "
+    next_step = ("If nobody takes it, we try the next available editor. Unclaimed clients keep rotating until accepted. "
                  if ready.enabled(int(row["chat_id"])) else
                  "If nobody takes it, we'll offer it to the next member in the round robin. ")
     footer = (f"\n\nIf you're available, reply <code>TAKE {payload['new_client_token']}</code>. "
@@ -70,7 +71,8 @@ def open_window(row: dict, now: dt.datetime) -> None:
             payload={"text": header + (mentions or "Select your available hours in today's poll to join in.") + footer,
                      "parse_mode": "HTML", "message_thread_id": payload["new_client_thread_id"],
                      "disable_notification": False, "volunteer_parent_id": int(row["id"]),
-                     "volunteer_generation": generation},
+                     "volunteer_generation": generation,
+                     "reply_markup": client_workflow.offer_buttons(payload["new_client_token"], take=True)},
             scheduled_for=now, dedupe_key=f"{prefix}{part}")
     changed = dict(payload, new_client_phase="volunteer", new_client_cancelled_reason=OPEN,
                    new_client_cancelled_at=now.isoformat(),
@@ -142,9 +144,10 @@ def accepts(message: dict, row: dict, author_id: int) -> bool:
         eligible += ready.available(int(row["chat_id"]), at, history)
         # Do not let a TAKE leave another reserved client unattended.
         if any(int(a["id"]) != int(row["id"]) and
+               int(a.get("chat_id", 0)) == int(row["chat_id"]) and
                int(a["payload"].get("new_client_assignee_id") or 0) == author_id and
                not a["payload"].get("new_client_acknowledged_at") and
-               (a.get("status") != "cancelled" or a["payload"].get("new_client_phase") == "volunteer")
+               a.get("status") != "cancelled"
                for a in history):
             return False
     if author_id not in {int(user["user_id"]) for user in eligible}:
@@ -193,5 +196,5 @@ def release(row: dict, now: dt.datetime) -> bool:
         if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
             row.update(payload=changed, status="cancelled")
             import ready_availability as ready
-            client_handoffs.close_offers(row, now, f"The takeover window ended. Wait for the next assignment or {ready.review_contact(int(row['chat_id']))}'s review.")
+            client_handoffs.close_offers(row, now, "Waiting for the next available editor. Unclaimed clients keep rotating until accepted.")
     return True

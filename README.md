@@ -154,10 +154,14 @@ The freebie dispatcher reads paid-tagged CRM contacts for the configured Veo pag
 With `NEW_CLIENT_READY_ENABLED=true`, **all four Veo teams and Suno/Trabawho**
 use `/ready` and `/busy` in their own New Clients topics: Veo Ollie `5758`,
 Veo Jessa `3725`, Veo `27622`, Veo Jel `4180`, and Trabawho `7673`.
-`/ready` makes the member eligible
-for one automatic assignment for 15 minutes, independently of the hourly poll.
-Readiness is consumed when an assignment is reserved; `/ready` is needed again
-for another assignment. `/busy` removes readiness and leaves accepted clients
+`/ready` starts continuous automatic assignments, independently of the hourly poll.
+After valid `WORKING`, the member stays in the queue for the next client until
+`/busy`. Only one unanswered offer is allowed at a time. Missing a delivered
+acceptance deadline pauses automatic offers until a newer `/ready`, even across
+work dates and even if another member later takes the missed client.
+Legacy 15-minute readiness records keep their original expiry until a fresh `/ready`.
+Delayed READY commands older than 15 minutes cannot activate continuous mode.
+`/busy` removes readiness and leaves accepted clients
 with their existing owner. Hourly availability and quota reports continue;
 members available in the hourly poll can still use `TAKE` without `/ready`.
 
@@ -167,15 +171,19 @@ the ten-minute TAKE window or reassigning an unanswered delivered offer, the bot
 tags its previous editor with a turn-ended notice and waits for that notice's
 recorded delivery. Undelivered notices keep the client reserved. Older offers
 retain their printed acceptance deadline. Delayed warnings are suppressed after
-acceptance. Confirmations name the client, page and current owner; closed offers
-are edited with their status while preserving the original client brief.
+acceptance. Confirmations name the client, page and current owner and remind members
+to use `/busy` when unavailable. Old offers show CLIENT STATUS with the original
+brief, without the OFFER CLOSED banner.
 If Telegram cannot edit an old offer, its closure is posted as a short reply in
 the same client topic. This uses the original scheduled-action retry and does
 not repeat the brief or keep failing delivery.
 
-Two missed delivered offers followed by unsuccessful takeover windows pause the
-client for its team lead's review. The review stays reserved and does not silently reset
-the next day. CRM paid/converted tags and pipeline outcomes, human outbound
+Unclaimed clients keep rotating without an attempt cap. Legacy automatic
+two-missed-offer holds rejoin the queue after the previous end notice is delivered.
+Each new offer gets a fresh token; old tokens cannot replace the current owner.
+Missed clients take priority over fresh clients. If nobody is ready, they wait
+for an available editor rather than repeatedly assigning to an absent member.
+CRM paid/converted tags and pipeline outcomes, human outbound
 events and human-intervention records exclude clients from the Veo queue. Eligibility
 is checked again before offer delivery and acceptance. This protects **recorded**
 human handling; inbox activity missing from the CRM cannot establish ownership.
@@ -195,19 +203,60 @@ converted pipeline outcomes block partial handoffs. WORKING
 still starts the song job's separate 24-hour deadline. Confirm song delivery
 with `SONG SENT <token>` in Trabawho's SONGS topic (`7692`).
 
-The new readiness commands use the current message webhook; no callback-query
-subscription, new poll stream, schema migration or scheduler cadence change is
-needed. Commands are restricted to an approved configured team and its client topic;
+The readiness and handover text commands use the current message webhook; no new
+poll stream, schema migration or scheduler cadence change is needed. Inline buttons
+also require `callback_query` in the existing webhook's `allowed_updates`. The
+registration helper includes it, but changing webhook configuration requires an
+explicit exception to the workspace's AGENTS.md instruction. Commands and buttons
+are restricted to an approved configured team and its client topic;
 message edits and stale updates cannot extend readiness. The scheduler delivers
 the daily instruction and all ready/handoff notices. Do not dispatch manually
 to test them.
+
+### Client list and editor handovers
+
+All four Veo teams and Trabawho share a client list in their NEW CLIENTS topic.
+It shows eligible unassigned clients, reserved offers, open TAKE offers, confirmed
+editors, and pending handovers. Each tracked client links to its brief and includes
+its token. Long lists have pages. The scheduler edits the same overview message
+every five minutes and refreshes it on assignment or ownership changes. `/clients`
+queues the latest list; `/clienthelp` queues the short guide. The authenticated
+`./remote_windows.ps1 clients --group CHAT_ID` command reads the full list and audit
+history through `/api/clients` without changing state.
+
+The current editor can tap **Hand over**, select a current team member, and wait
+for that member to **Accept handover** or **Decline**. The current editor can
+**Cancel handover**. To add context, reply to the receiving member's message in
+NEW CLIENTS with `/handover TOKEN Your handover note`. `/handover TOKEN` without a
+member reply opens the teammate picker. Text alternatives for the recipient are
+`/accept_handover TOKEN` and `/decline_handover TOKEN`; the requester can use
+`/cancel_handover TOKEN`.
+
+The original editor remains responsible during a pending request. Acceptance
+changes the editor atomically and records both editors, the note, timestamps, and
+the Telegram update identifiers. Declines and cancellations are also retained.
+Old buttons, replies predating a new request, nonmembers, and conflicting updates
+cannot take ownership. Notices recover through the scheduled outbox after webhook
+failures. Client lists are rebuilt at delivery to show current owners.
+
+Handovers retain the client token and initial offer/response evidence. Veo sales
+link to whoever owned the client when the DD was posted. Trabawho's unfinished
+song jobs follow the new editor while retaining the original 24-hour deadline;
+previous-owner reminders and completion replies are rejected. Song jobs that
+were already completed keep their completion evidence.
+
+The directory covers bot-tracked assignments and currently eligible CRM/Suno
+briefs. An external or untracked assignment does not appear automatically. A
+source failure is reported rather than presented as an empty client supply.
 
 The scheduler posts a daily Taglish guide with command examples in each team's
 New Clients topic and one announcement per guide version in its Announcements.
 Suno's guide includes its song-delivery instructions instead of Veo's freebie
 and Done Deal instructions. Other teams' notices refer to their team lead;
 Ollie's notices continue to name Ollie.
-The guide explains where to use commands, how READY differs from hourly polls,
+The daily guide and rollout announcement emphasize `/ready` once, `WORKING` to
+continue, `/busy` before breaks or shift end, and `/ready` to resume after a missed
+deadline. The guide explains where to use commands, how READY differs from hourly polls,
 the acceptance and TAKE windows, official ownership confirmation, expired offers,
 and how to flag an existing owner or conflicting updates to the team lead. Guide-version
 keys publish updated instructions even if the previous guide was sent that day.

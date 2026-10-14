@@ -532,7 +532,9 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_ack_pending", "new_client_ack_queued_at",
     "new_client_offer_generation",
     "new_client_original_assignee_name", "new_client_direct_timeout_minutes",
-    "new_client_ready_protocol",
+    "new_client_ready_protocol", "new_client_reservation_key",
+    "new_client_handover_revision", "new_client_handover", "new_client_handover_events",
+    "new_client_initial_assignee_id", "new_client_initial_assignee_name",
 )
 
 
@@ -621,6 +623,7 @@ SONG_JOB_KEYS = (
     "song_completion_message_id",
     "song_ack_queued_at",
     "song_cancelled_at", "song_cancelled_reason",
+    "song_owner_since",
 )
 
 
@@ -658,6 +661,34 @@ def song_job_state(job_id: int, chat_id: int) -> dict | None:
         "dedupe_key": "like.trabawho-song-job:*", "limit": 1,
     })) or []
     return rows[0] if rows and not rows[0]["payload"].get("song_cancelled_at") else None
+
+
+def sync_song_owner(job_id: int, assignment: dict, now: dt.datetime) -> bool:
+    """Change an outstanding song's editor without resetting its deadline."""
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id,payload,updated_at", "id": f"eq.{job_id}", "chat_id": f"eq.{assignment['chat_id']}",
+        "dedupe_key": "like.trabawho-song-job:*", "limit": 1,
+    })) or []
+    if not rows or rows[0]["payload"].get("song_completed_at") or rows[0]["payload"].get("song_cancelled_at"):
+        return False
+    row = rows[0]
+    p = assignment["payload"]
+    events = [e for e in p.get("new_client_handover_events") or [] if e.get("state") == "accepted"]
+    changed = dict(row["payload"], song_assignee_id=p["new_client_assignee_id"],
+                   song_assignee_name=p.get("new_client_assignee_name") or str(p["new_client_assignee_id"]),
+                   song_owner_since=events[-1]["resolved_at"] if events else p["new_client_acknowledged_at"])
+    return bool(request("scheduled_actions?" + urllib.parse.urlencode({"id": f"eq.{job_id}",
+        "updated_at": f"eq.{row['updated_at']}", "payload->>song_completed_at": "is.null", "select": "id"}),
+        {"payload": changed, "updated_at": now.isoformat()}, method="PATCH", prefer="return=representation"))
+
+
+def song_assignment_owner(assignment_id: int, chat_id: int) -> int | None:
+    """Check assignment ownership even before the next song-job synchronization."""
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "owner:payload->>new_client_assignee_id,accepted:payload->>new_client_acknowledged_at",
+        "id": f"eq.{assignment_id}", "chat_id": f"eq.{chat_id}", "dedupe_key": "like.new-client:*", "limit": 1,
+    })) or []
+    return int(rows[0]["owner"]) if rows and rows[0].get("accepted") and rows[0].get("owner") else None
 
 
 def song_reply_messages(chat_id: int, thread_id: int, since: dt.datetime,

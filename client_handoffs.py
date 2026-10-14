@@ -33,6 +33,7 @@ def end_delivered(row: dict, now: dt.datetime) -> bool:
         dedupe_key=marker(row, "turn-ended"), payload={
             "text": f"{member}, your acceptance turn has ended for {html.escape(p.get('new_client_contact_name') or 'this client')} "
                     f"({html.escape(p.get('new_client_page') or 'Page')}). No WORKING confirmation was recorded within your acceptance window. "
+                    "Your automatic assignments are paused. Send /ready when available again; use /busy when you need to stop. "
                     "Please stop using the old offer. We will open TAKE or arrange the next handoff after this notice. "
                     f"If you already have an ongoing conversation, ask {ready.review_contact(int(row['chat_id']))} to review ownership before anyone continues.",
             "parse_mode": "HTML", "message_thread_id": p["new_client_thread_id"],
@@ -72,6 +73,8 @@ def warning(row: dict, now: dt.datetime) -> None:
 def delivery_allowed(action: dict, now: dt.datetime) -> bool:
     from new_client_automation import _utc_time
     p = action["payload"]
+    if (action.get("dedupe_key") or "").startswith("client-review:"):
+        return False
     parent_id = p.get("client_handoff_parent_id")
     if parent_id is None:
         return True
@@ -84,7 +87,9 @@ def delivery_allowed(action: dict, now: dt.datetime) -> bool:
     if int(parent.get("new_client_offer_generation") or 0) != int(p.get("client_handoff_generation") or 0):
         return False
     if p["client_handoff_kind"] == "closure":
-        return parent.get("new_client_phase") == p.get("client_handoff_phase")
+        p["text"] = p.get("text", "").replace("OFFER CLOSED", "CLIENT STATUS", 1)
+        return (parent.get("new_client_phase") == p.get("client_handoff_phase") and
+                int(parent.get("new_client_handover_revision") or 0) == int(p.get("client_handoff_revision") or 0))
     if parent.get("new_client_acknowledged_at"):
         return False
     if p["client_handoff_kind"] == "warning":
@@ -114,39 +119,29 @@ def close_offers(row: dict, now: dt.datetime, status: str) -> None:
         brief = html.escape(brief)
     for message_id in filter(None, ids):
         enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
-            dedupe_key=f"client-close:{row['id']}:{message_id}:{p.get('new_client_phase')}",
+            dedupe_key=f"client-close:{row['id']}:{message_id}:{p.get('new_client_phase')}:owner-{int(p.get('new_client_handover_revision') or 0)}",
             payload={"edit_message_id": int(message_id), "disable_notification": True, "parse_mode": "HTML",
                      "message_thread_id": p["new_client_thread_id"],
                      "client_handoff_parent_id": int(row["id"]), "client_handoff_kind": "closure",
                      "client_handoff_generation": int(p.get("new_client_offer_generation") or 0),
                      "client_handoff_phase": p.get("new_client_phase"),
-                     "text": f"OFFER CLOSED — {html.escape(p.get('new_client_contact_name') or 'Client')}\nPage: {html.escape(p.get('new_client_page') or 'Page')}\n{html.escape(status)}\nThe old WORKING/TAKE token is closed. Follow the latest status for this client."
+                     "client_handoff_revision": int(p.get("new_client_handover_revision") or 0),
+                     "text": f"CLIENT STATUS — {html.escape(p.get('new_client_contact_name') or 'Client')}\nPage: {html.escape(p.get('new_client_page') or 'Page')}\n{html.escape(status)}\nUse the latest offer and wait for its owner confirmation before contacting this client."
                              + ("\n\n" + brief if message_id == row.get("telegram_message_id") else "")})
 
 
-def bound_missed_offers(history: list[dict], now: dt.datetime) -> None:
-    from new_client_automation import _action_contact_keys, _current_assignments, REASSIGN_REASONS
+def resume_missed_offers(history: list[dict], now: dt.datetime) -> None:
+    """Release only legacy automatic missed-offer holds; new offers have no attempt cap."""
+    from new_client_automation import _current_assignments
+    from client_volunteers import EXPIRED
     current = _current_assignments(history)
     for row in history:
         if not managed(row) or current[int(row["id"])]["id"] != row["id"] or row["payload"].get("new_client_acknowledged_at"):
             continue
         p = row["payload"]
-        if p.get("new_client_cancelled_reason") != REVIEW:
-            if row.get("status") != "cancelled" or p.get("new_client_cancelled_reason") not in REASSIGN_REASONS.union({"assignment_day_ended"}):
-                continue
-            keys = _action_contact_keys(row)
-            missed = sum(bool(a.get("sent_at") or a["payload"].get("_first_delivery_at")) and
-                         not a["payload"].get("new_client_acknowledged_at")
-                         for a in history if int(a["chat_id"]) == int(row["chat_id"]) and keys.intersection(_action_contact_keys(a)))
-            if missed < 2 or not end_delivered(row, now):
-                continue
-            changed = dict(p, new_client_phase="review", new_client_cancelled_reason=REVIEW)
-            if not update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=True):
-                continue
-            row["payload"] = p = changed
-        enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
-            dedupe_key=f"client-review:{row['id']}", payload={"message_thread_id": p["new_client_thread_id"],
-                "text": f"CLIENT NEEDS TEAM LEAD REVIEW\nClient: {p.get('new_client_contact_name') or 'Client'}\nPage: {p.get('new_client_page') or 'Page'}\n"
-                        "Two or more acceptance offers were missed. Automatic reassignment and TAKE are paused for this client. "
-                        "Please check its payment status and existing editor before arranging a handoff."})
-        close_offers(row, now, f"Paused for {ready.review_contact(int(row['chat_id']))}'s ownership review after missed offers.")
+        if row.get("status") != "cancelled" or p.get("new_client_cancelled_reason") != REVIEW or not end_delivered(row, now):
+            continue
+        changed = dict(p, new_client_phase="expired", new_client_cancelled_reason=EXPIRED)
+        if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=True):
+            row["payload"] = changed
+            close_offers(row, now, "Waiting for the next available editor. Unclaimed clients keep rotating until accepted.")

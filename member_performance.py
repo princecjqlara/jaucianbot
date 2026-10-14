@@ -49,6 +49,25 @@ def build_client_performance(history, entries, config, start, end, now):
     members = {}
     evidence = []
     offers = [r for r in history if (r.get("payload") or {}).get("new_client_token")]
+    # Keep the initial response metrics with the editor who accepted the offer.
+    # Each accepted handover starts a new ownership period for sale attribution.
+    periods = []
+    for row in offers:
+        p = row["payload"]
+        if p.get("new_client_initial_assignee_id"):
+            initial = {**p, "new_client_assignee_id": p["new_client_initial_assignee_id"],
+                       "new_client_assignee_name": p.get("new_client_initial_assignee_name")}
+            periods.append({**row, "payload": initial})
+            for transfer in p.get("new_client_handover_events") or []:
+                if transfer.get("state") != "accepted":
+                    continue
+                periods.append({**row, "sent_at": None, "_handover_only": True, "payload": {
+                    **p, "new_client_assignee_id": transfer["to_id"], "new_client_assignee_name": transfer["to_name"],
+                    "new_client_acknowledged_at": transfer["resolved_at"], "_first_delivery_at": None,
+                    "new_client_original_assignee_id": None, "new_client_assigned_at": None}})
+        else:
+            periods.append(row)
+    offers = periods
     # Merge CRM row replacements using page-scoped identities when available.
     identities = {r["payload"]["new_client_contact_id"]: contact_key(r) for r in offers
                   if r["payload"].get("new_client_contact_id") and

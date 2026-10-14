@@ -371,6 +371,7 @@ def _record_confirmation(row: dict, message: dict, acknowledged: dt.datetime, *,
 
 
 def _queue_confirmation_ack(row: dict, now: dt.datetime) -> None:
+    import client_workflow
     payload = row["payload"]
     member = _mention(
         int(payload["new_client_assignee_id"]),
@@ -382,8 +383,9 @@ def _queue_confirmation_ack(row: dict, now: dt.datetime) -> None:
         payload={
             "text": (f"✅ {html.escape(payload.get('new_client_contact_name') or 'Client')} "
                      f"({html.escape(payload.get('new_client_page') or 'Page')}) is now handled by {member}. "
-                     "Takeover closed. This is the official handoff; the accepted client stays with this editor. "
-                     "Send /ready when you want another new client."
+                     "This client is unavailable to other editors.\n"
+                     "Tap Hand over to transfer it, or Client list to see all owners.\n"
+                     "Your /ready queue continues. Send /busy when full or leaving."
                      if client_handoffs.managed(row) else (
                 f"✅ Thanks, {member}! I recorded that you are working on this client. "
                 "The bot will send your next client when the round robin reaches you again."
@@ -392,6 +394,8 @@ def _queue_confirmation_ack(row: dict, now: dt.datetime) -> None:
             "disable_notification": False,
             "message_thread_id": payload["new_client_thread_id"],
             "new_client_ack_assignment_id": int(row["id"]),
+            "new_client_ack_owner_id": int(payload["new_client_assignee_id"]),
+            "reply_markup": client_workflow.owner_buttons(row),
         },
         scheduled_for=now,
         dedupe_key=f"new-client-ack:{row['id']}",
@@ -615,7 +619,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
     member = _mention(user_id, user.get("user_name") or str(user_id))
     stage = contact.get("pipeline_stage")
     stage_line = f"\nPipeline stage: {html.escape(str(stage))}" if stage else ""
-    ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
+    ready_rotation = ready.enabled(chat_id) or volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
     rotation_text = (
         "Assignments rotate among ready Active members, prioritizing those with fewer clients and "
         "then those who have waited longest. Members awaiting a reply or paused after a missed assignment are skipped. "
@@ -631,12 +635,13 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
                          "for 10 minutes. If nobody takes it, the next available member gets a fresh 20-minute turn. "
                          "Choose your available hours in the poll so we can send clients when you're ready. 💛")
     if ready.enabled(chat_id):
-        rotation_text = ("This client is reserved for you. Accept within 5 minutes from delivery; there is one reminder after 3 minutes. "
-                         "If unanswered, we notify you that your turn ended, then open TAKE for 10 minutes. "
-                         "An accepted client stays with its editor. Send /ready again when you want another client.")
+        rotation_text = ("Reserved for you. Tap Accept client or send WORKING + this token. "
+                         "Wait for the owner confirmation before contacting the client.\n"
+                         "Reminder at 3 minutes. If unanswered, we notify you that your turn ended, then open TAKE for 10 minutes. "
+                         "Automatic offers pause until /ready. /busy stops new offers. /clients shows all owners.")
     page_label = "Suno page" if GROUPS[chat_id].get("client_source") == "suno" else "Page"
     partial = GROUPS[chat_id].get("client_source") == "suno" and contact.get("details_complete") is False
-    detail_heading = "Collected client details" if partial else "Complete details from Supabase"
+    detail_heading = "Collected client details" if partial else "Client brief"
     missing = contact.get("missing_details") or []
     missing_text = (
         "Still to confirm with the client:\n"
@@ -654,11 +659,11 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
         f"{stage_line}\n\n"
         f"{progress_line}{detail_heading}:\n{_detail_lines(contact)}\n\n"
         f"{missing_text}"
-        "Please review the CRM conversation and start working on this client. "
-        "As soon as you are working on it, reply to this message with: "
+        "Please review the CRM conversation before accepting. "
+        "Tap Accept client or reply: "
         f"<code>WORKING {token}</code>\n\n"
         f"Please reply within {_timeout_minutes(chat_id)} minutes of receiving this assignment, "
-        "so we know you're ready to help this client.\n\n"
+        "then wait for the bot's owner confirmation before contacting the client.\n\n"
         f"{rotation_text}"
     )
     if GROUPS[chat_id].get("songs"):
@@ -678,6 +683,7 @@ def _assignment_text(user: dict, page: str, contact: dict, token: str, round_num
 
 
 def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
+    import client_workflow
     work_date = now.astimezone(MANILA).date()
     eligible = allowed.intersection(GROUPS)
     if not eligible:
@@ -686,7 +692,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     _enrich_history_contact_identities(history)
     _reconcile_archived_confirmations(history, now)
     _release_stale_assignments(history, now)
-    client_handoffs.bound_missed_offers(history, now)
+    client_handoffs.resume_missed_offers(history, now)
     used_contact_keys = _reserved_contact_keys(history)
     contact_attempts: Counter[str] = Counter()
     for row in history:
@@ -741,10 +747,10 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
             for row in today
-            if (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer")
+            if (row.get("status") != "cancelled" or (not ready.enabled(chat_id) and row["payload"].get("new_client_phase") == "volunteer"))
             and not row["payload"].get("new_client_acknowledged_at")
         }
-        ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
+        ready_rotation = ready.enabled(chat_id) or volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
         if ready_rotation:
             # Failed offers do not count as clients received; queued offers and
             # acknowledged clients do. Keep the attempt count separate for dedupe.
@@ -753,12 +759,12 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 for row in today
                 if row["payload"].get("new_client_acknowledged_at") or row.get("status") != "cancelled"
             )
-            paused = _pause_deadlines(today, members, now)
+            paused = {} if ready.enabled(chat_id) else _pause_deadlines(today, members, now)
             members = [user for user in members if int(user["user_id"]) not in paused]
             member_ids = {int(user["user_id"]) for user in members}
         if not members:
             continue
-        if volunteers.enabled():
+        if volunteers.enabled() or ready.enabled(chat_id):
             latest_by_key = {}
             for row in sorted(today, key=lambda item: int(item["id"])):
                 for key in _action_contact_keys(row):
@@ -866,11 +872,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 "text": message,
                 "new_client_reminder_text": reminder,
                 "parse_mode": "HTML",
-                "reply_markup": {
-                    "force_reply": True,
-                    "selective": True,
-                    "input_field_placeholder": f"WORKING {token}",
-                },
+                "reply_markup": client_workflow.offer_buttons(token),
                 "disable_notification": False,
                 "message_thread_id": GROUPS[chat_id]["contact_thread"],
                 "new_client_token": token,
@@ -906,6 +908,8 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             dedupe_key = f"new-client:{chat_id}:{dedupe_identity}"
             if attempt_number > 1:
                 dedupe_key += f":attempt-{attempt_number}"
+            if ready.enabled(chat_id):
+                payload["new_client_reservation_key"] = dedupe_key
             if ready.enabled(chat_id) and not ready.reserve(user, dedupe_key, now):
                 continue
             if enqueue_scheduled_action(
@@ -991,6 +995,8 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
         int(user["user_id"]) == int(payload["new_client_assignee_id"])
         for user in current_members(_active_members(chat_id, local_now.date()), now)
     )
+    if payload.get("new_client_reservation_key") and not (action.get("sent_at") or payload.get("_first_delivery_at")):
+        is_active = ready.reservation_active(action)
     if not is_active and not action.get("sent_at"):
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
@@ -1054,12 +1060,23 @@ def confirm_new_client_reply(update: dict, allowed: set[int]) -> bool:
 
 
 def new_client_ack_delivery_allowed(action: dict) -> bool:
+    import client_workflow
     assignment_id = action["payload"].get("new_client_ack_assignment_id")
     if assignment_id is None:
         return True
     history = [row for row in new_client_actions({int(action["chat_id"])}) if new_client_action_matches_source(row)]
     row = next((item for item in history if int(item["id"]) == int(assignment_id)), None)
+    if row:
+        action["payload"]["reply_markup"] = client_workflow.owner_buttons(row)
+        p = row["payload"]
+        member = _mention(int(p["new_client_assignee_id"]), p.get("new_client_assignee_name") or "Editor")
+        action["payload"]["text"] = (f"<b>CLIENT ACCEPTED</b>\nClient: {html.escape(p.get('new_client_contact_name') or 'Client')}\n"
+            f"Page: {html.escape(p.get('new_client_page') or 'Page')}\nCurrent editor: {member}\n"
+            "Unavailable to other editors. Tap Hand over to transfer, or Client list to view owners.\n"
+            "Your /ready queue continues. Send /busy when full or leaving.")
     return bool(row and row["payload"].get("new_client_acknowledged_at") and
+                (action["payload"].get("new_client_ack_owner_id") is None or
+                 int(action["payload"]["new_client_ack_owner_id"]) == int(row["payload"]["new_client_assignee_id"])) and
                 _current_assignments(history)[int(assignment_id)]["id"] == int(assignment_id))
 
 
@@ -1073,8 +1090,8 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
         if _acknowledged_date(payload) != work_date:
             continue
         pages[payload.get("new_client_page") or "Unknown page"] += 1
-        user_id = int(payload["new_client_assignee_id"])
-        name, count = people.get(user_id, (payload.get("new_client_assignee_name") or str(user_id), 0))
+        user_id = int(payload.get("new_client_initial_assignee_id") or payload["new_client_assignee_id"])
+        name, count = people.get(user_id, (payload.get("new_client_initial_assignee_name") or payload.get("new_client_assignee_name") or str(user_id), 0))
         people[user_id] = (name, count + 1)
     page_heading = "By Suno page:" if GROUPS[chat_id].get("client_source") == "suno" else "By page:"
     configured_pages = list(GROUPS[chat_id]["crm_pages"])
@@ -1140,11 +1157,16 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                             "api_code": getattr(error, "api_code", None), "schema_error": getattr(error, "schema_error", None),
                             "query_table": getattr(error, "query_table", None)}
             print(f"New-client status source read failed for {chat_id}: {source_error}")
-        ready_rotation = volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
-        paused = _pause_deadlines(today, members, now) if ready_rotation else {}
+        ready_rotation = ready.enabled(chat_id) or volunteers.enabled() or GROUPS[chat_id].get("new_client_ready_rotation", False)
+        paused = _pause_deadlines(today, members, now) if ready_rotation and not ready.enabled(chat_id) else {}
+        ready_ids = {int(u["user_id"]) for u in ready_members or []}
+        awaiting_ready = {
+            user_id for user_id in ready.missed_deadlines(actions, now)
+            if ready.enabled(chat_id) and user_id not in ready_ids
+        }
         open_members = {
             int(row["payload"]["new_client_assignee_id"])
-            for row in today if (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer") and not row["payload"].get("new_client_acknowledged_at")
+            for row in today if (row.get("status") != "cancelled" or (not ready.enabled(chat_id) and row["payload"].get("new_client_phase") == "volunteer")) and not row["payload"].get("new_client_acknowledged_at")
         }
         available = {
             page: sum(
@@ -1173,7 +1195,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             open_rows = [
                 row for row in rows
                 if not row["payload"].get("new_client_acknowledged_at")
-                and (row.get("status") != "cancelled" or row["payload"].get("new_client_phase") == "volunteer")
+                and (row.get("status") != "cancelled" or (not ready.enabled(chat_id) and row["payload"].get("new_client_phase") == "volunteer"))
             ]
             reason = (
                 "awaiting_volunteer_claim" if any(row["payload"].get("new_client_phase") == "volunteer" for row in open_rows) else
@@ -1182,6 +1204,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 "awaiting_working_reply" if user_id in open_members else
                 "outside_selected_hours" if "available_hours" in user and now.astimezone(MANILA).hour not in user["available_hours"] else
                 "reply_cooldown" if user_id in paused else
+                "awaiting_ready_after_missed_offer" if user_id in awaiting_ready else
                 "not_ready_now" if ready_members is not None and user_id not in {int(u["user_id"]) for u in ready_members} else
                 "source_read_error" if not source_available else
                 "no_available_complete_clients" if not sum(available.values()) else
@@ -1207,12 +1230,14 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "active_now": len(current_members(members, now)),
             "volunteer_window_minutes": 10 if volunteers.enabled() or ready.enabled(chat_id) else None,
             "reply_deadline_minutes": _timeout_minutes(chat_id),
-            "ready_window_minutes": 15 if ready.enabled(chat_id) else None,
+            "ready_window_minutes": None,
+            "continuous_ready_enabled": ready.enabled(chat_id),
+            "missed_offer_resume": "ready_command" if ready.enabled(chat_id) else None,
             "ready_today": sum(int(user["user_id"]) not in set(paused).union(open_members) for user in (ready_members if ready_members is not None else current_members(members, now))),
-            "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30) if ready_rotation else None,
+            "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30) if ready_rotation and not ready.enabled(chat_id) else None,
             "paused_members": [
                 {"user_id": user["user_id"], "name": user.get("user_name")}
-                for user in members if int(user["user_id"]) in paused
+                for user in members if int(user["user_id"]) in set(paused).union(awaiting_ready)
             ],
             "assigned_today": sum(row["payload"].get("new_client_work_date") == work_date.isoformat() for row in actions),
             "acknowledged_today": sum(
