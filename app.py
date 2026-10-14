@@ -37,6 +37,7 @@ import client_workflow
 import referral_incentives
 import database_scheduler
 import done_deal_tracking
+import team_planning
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -56,7 +57,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-14.07"
+AUTOMATION_VERSION = "2026-10-15.01"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -495,6 +496,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("obsolete client update was not finalized")
                 continue
+            if not team_planning.prepare_delivery(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete team plan was not finalized")
+                continue
             if not client_handoffs.delivery_allowed(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("closed handoff notice was not finalized")
@@ -622,7 +627,7 @@ def dispatch_route(environ, start_response):
                 queue_errors.append("hourly_polls")
                 print(f"Hourly poll queue failed: {type(hourly_error).__name__}")
         try:
-            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - {TRABAWHO_CHAT_ID})
+            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - {TRABAWHO_CHAT_ID}, planning_allowed=allowed)
         except Exception as daily_error:
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")

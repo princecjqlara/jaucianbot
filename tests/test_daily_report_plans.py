@@ -34,10 +34,10 @@ class PlanTests(unittest.TestCase):
         count.assert_called_once_with({TRABAWHO_CHAT_ID, VEO}, dt.date(2026, 10, 11))
         self.assertEqual(data["work_date"], "2026-10-11")
         self.assertEqual(len(data["teams"]), 2)
-        self.assertIn("Planned client quota: 6", data["report_preview"])
-        self.assertIn("Planned ads budget: ₱900", data["report_preview"])
-        self.assertIn("Team target: 4 DD • 4 CD", data["report_preview"])
-        self.assertIn("no budget rule configured for this team", data["report_preview"])
+        self.assertIn("Planned client quota: 12", data["report_preview"])
+        self.assertIn("Planned ads budget: ₱1,800", data["report_preview"])
+        self.assertIn("Team target: 8 DD • 8 CD", data["report_preview"])
+        self.assertIn("Planned ads budget: ₱3,200", data["report_preview"])
         self.assertIn("Not reported yet", data["report_preview"])
 
     def test_missing_poll_differs_from_confirmed_zero_and_no_spend_is_inferred(self):
@@ -71,7 +71,7 @@ class PlanTests(unittest.TestCase):
         section = text.split("TOMORROW'S TEAM PLAN", 1)[1]
         self.assertIn("Sunday, October 11, 2026", section)
         self.assertIn("Active members: 3", section)
-        self.assertIn("Planned ads budget: ₱900", section)
+        self.assertIn("Planned ads budget: ₱1,800", section)
         self.assertNotIn("₱3,000", section)
         self.assertIn("Actual ad spend: not reported", text)
         self.assertEqual(count.call_args.args[1], dt.date(2026, 10, 11))

@@ -148,7 +148,7 @@ All five Veo teams continue availability polls, Ready/Busy, fair client rotation
 15-minute acceptance (warning after 10 minutes), client lists, handovers and
 freebies. Veo Lyn still needs its Facebook page mapping before client/freebie
 assignment can begin. Announcements use close-deal targets only, calculated as
-`ceil(active members ? 0.8)`, and summarize readable close-deal progress at the
+`ceil(active members × 1.6)`, and summarize readable close-deal progress at the
 existing Philippine reminder hours: 7, 10, 13, 16, 19 and 21. Daily closeout posts
 availability, close-deal activity and the simple Done Deal summary to Daily Reports. Missing polls, unreadable
 posts and capped message reads are disclosed rather than guessed.
@@ -381,9 +381,12 @@ that dated workday arrives, using only that workday's Active voters.
 Announcements update when the recorded Active count changes. Group announcements
 use short, friendly status messages and do not expose the quota formula or ads
 budget. The detailed plan, receipt, salary, review, and song figures are kept in
-the approved Daily Reports group. Internally, quota is `active members × 2` and
-the planned ads budget is `active members × 2 × ₱150`; these settings do not apply
-Veo's DD/CD targets, commission rules, or freebie topics.
+the approved Daily Reports group. Suno's quota is `active members × 4` and its
+planned ads budget is `active members × 4 × ₱150`. Veo uses a whole-client quota
+of `ceil(active members × 1.6)` and budget `active members × 1.6 × ₱400`.
+The Veo budget uses the exact multiplier before quota rounding: one Active
+member means 2 planned clients and ₱640, not ₱800. Plans use each dated workday's
+distinct availability voters; tomorrow's votes do not change today's plan.
 
 At the daily check-in times, Trabawho's general topic receives a gentle
 availability reminder. It mentions people who selected Active but have not yet
@@ -453,14 +456,18 @@ Daily Trabawho reports are queued at 00:05 PHT for the previous calendar day;
 a later cron run that day catches up if necessary. Announcements topic `16`
 receives a short, friendly summary, while the approved Daily Reports group
 receives the organized detailed report. The detailed report includes Active
-members, the two-per-member quota, planned ads budget, accepted receipt
+members, the four-per-member quota, planned ads budget, accepted receipt
 gross/salary, each member's recorded totals, labeled tips, receipts needing
 review, and song deliveries/outstanding jobs.
-Detailed reports for all five teams also show tomorrow's active members and
+Detailed reports for all six teams also show tomorrow's active members and
 targets using the Philippine calendar date when the report is prepared.
 Hourly poll votes count each member once within their team. Trabawho's planned
-ads budget uses Active × 2 × ₱150; this rule does not apply to Veo teams, whose
-ads budgets remain unconfigured. Actual ad spending is explicitly unreported
+ads budget uses Active × 4 × ₱150; Veo uses Active × 1.6 × ₱400.
+All formulas come from `team_planning.py`. Missing polls leave both quota and
+budget pending; a confirmed zero-member poll produces a zero plan. Plans and
+reminders prepared before a formula change are refreshed before delivery.
+The scheduled rollout publishes current-day and tomorrow plans once per day
+and formula version, with budgets only in approved Daily Reports. Actual ad spending is explicitly unreported
 until a verified spending source is supplied. Profit figures exclude those
 unreported advertising costs and other expenses. The authenticated read-only
 `./remote_windows.ps1 daily-plan` command previews current tomorrow staffing

@@ -3,7 +3,7 @@
 
 Simple instructions for working together, owning clients, and recording your work.
 
-Updated 14 October 2026. All work schedules and deadlines use Philippine time (PHT).
+Updated 15 October 2026. All work schedules and deadlines use Philippine time (PHT).
 
 ### Start your workday
 
@@ -12,6 +12,8 @@ Updated 14 October 2026. All work schedules and deadlines use Philippine time (P
 - In NEW CLIENTS, tap **Ready** or send `/ready` once when you can accept new clients. This stays on until `/busy` or a missed acceptance deadline. Keep your hourly polls accurate too.
 - Review each offer before accepting. Wait for the bot's confirmation naming you as the editor before contacting the client.
 - Tap **Busy** or send `/busy` before a break, leaving, or when your workload is full. Update your polls if your available hours change.
+
+Your team target is based on the dated availability polls. Each member counts once per team. Check Announcements for the updated target; tomorrow's votes apply to tomorrow. Planned advertising budgets appear in the manager reports.
 
 ### Work together: one client, one confirmed editor
 

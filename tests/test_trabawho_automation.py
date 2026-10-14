@@ -38,8 +38,8 @@ class TrabawhoAutomationTests(unittest.TestCase):
         self.assertNotIn("done", TRABAWHO)
 
     def test_user_formulas_and_zero_active_members(self):
-        self.assertEqual(plan_totals(10), (20, 3000))
-        self.assertEqual(plan_totals(1), (2, 300))
+        self.assertEqual(plan_totals(10), (40, 6000))
+        self.assertEqual(plan_totals(1), (4, 600))
         self.assertEqual(plan_totals(0), (0, 0))
         with self.assertRaises(ValueError):
             plan_totals(-1)
@@ -69,7 +69,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
 
     def test_changed_active_count_updates_announcements_and_unchanged_count_is_deduped(self):
         with patch("trabawho_automation.daily_poll_counts", return_value={CHAT: {"active_workers": 10}}), patch(
-            "trabawho_automation.request", side_effect=[[{"count": 9}], [{"count": 10, "format": "friendly-v1"}]]
+            "trabawho_automation.request", side_effect=[[{"count": 9}], [{"count": 10, "format": "friendly-v2"}]]
         ), patch("trabawho_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 1)
         payload = enqueue.call_args.kwargs["payload"]
@@ -84,7 +84,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
             "trabawho_automation.request", return_value=[{"count": 10}]
         ), patch("trabawho_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             self.assertEqual(queue_trabawho_automation(NOW, {CHAT}), 2)
-        self.assertEqual(enqueue.call_args.kwargs["payload"]["trabawho_plan_format"], "friendly-v1")
+        self.assertEqual(enqueue.call_args.kwargs["payload"]["trabawho_plan_format"], "friendly-v2")
 
     def test_checkin_is_gentle_and_mentions_active_and_not_active_voters(self):
         text = availability_checkin_text(TODAY, [
@@ -100,8 +100,8 @@ class TrabawhoAutomationTests(unittest.TestCase):
 
     def test_progress_shows_remaining_clients_without_internal_formula(self):
         text = progress_text(TODAY, {"active_workers": 1}, 1)
-        self.assertIn("1 of 2 planned", text)
-        self.assertIn("1 left to assign", text)
+        self.assertIn("1 of 4 planned", text)
+        self.assertIn("3 left to assign", text)
         self.assertNotIn("× 2", text)
         self.assertNotIn("₱", text)
 
@@ -234,7 +234,7 @@ class TrabawhoAutomationTests(unittest.TestCase):
             self.assertEqual(_assignment_counts(TODAY), (1, {11: 1}))
 
     def test_filled_assignment_plan_does_not_claim_sales_or_delivery_completion(self):
-        text = progress_text(TODAY, {"active_workers": 1}, 2)
+        text = progress_text(TODAY, {"active_workers": 1}, 4)
         self.assertIn("assignment plan is filled", text)
         self.assertNotIn("target is complete", text)
         self.assertIn("tracked separately", text)

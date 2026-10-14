@@ -39,8 +39,8 @@ class DailyReportTests(unittest.TestCase):
             "trabawho_reports.daily_poll_counts", return_value={CHAT: {"active_workers": 10}}
         ), patch("trabawho_reports.song_report_lines", return_value=["Songs confirmed: 1"]):
             text = build_trabawho_report(DAY, NOW)
-        self.assertIn("Team quota: 20", text)
-        self.assertIn("₱3,000", text)
+        self.assertIn("Team quota: 40", text)
+        self.assertIn("₱6,000", text)
         self.assertIn("gross ₱500 | salary ₱130", text)
         self.assertIn("Songs confirmed: 1", text)
         self.assertNotIn("Commission: 35", text)

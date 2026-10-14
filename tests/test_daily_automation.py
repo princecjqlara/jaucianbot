@@ -49,9 +49,9 @@ class DailyAutomationTests(unittest.TestCase):
         ), patch("new_client_automation.new_client_report_lines", return_value=[]):
             report = build_group_report(-1003962888977, dt.date(2026, 10, 5), {"active_workers": 1})
             progress = deal_progress_for_day(-1003962888977, dt.date(2026, 10, 5))
-        self.assertIn("Actual: 1 DD ✅ • 1 CD ✅", report)
+        self.assertIn("Actual: 1 DD ❌ • 1 CD ❌", report)
         self.assertIn("Gross: ₱1,200", report)
-        self.assertIn("Commissions: −₱480", report)
+        self.assertIn("Commissions: −₱420", report)
         self.assertEqual((progress["dd_total"], progress["cd_total"]), (1, 1))
         self.assertEqual(progress["workers"][0]["gross"], Decimal("1200"))
         self.assertIn("Excluded 1 repeated", report)
@@ -90,7 +90,7 @@ class DailyAutomationTests(unittest.TestCase):
         self.assertIsNone(parse_close_count("Page: Azshinari\nPrice Deal: 0"))
 
     def test_quota_rounds_up(self):
-        self.assertEqual(quota_for({"active_workers": 11}), (11, 9, True))
+        self.assertEqual(quota_for({"active_workers": 11}), (11, 18, True))
         self.assertEqual(quota_for(None), (0, 0, False))
 
     def test_report_calculates_commission_and_profit(self):
@@ -120,7 +120,7 @@ class DailyAutomationTests(unittest.TestCase):
             report = build_group_report(
                 -1003647732254,
                 dt.date(2026, 9, 19),
-                {"active_workers": 2},
+                {"active_workers": 1},
             )
         self.assertIn("Target: 2 DD • 2 CD", report)
         self.assertIn("Commission: 40%", report)
@@ -166,7 +166,7 @@ class DailyAutomationTests(unittest.TestCase):
                 historical=True,
             )
         self.assertIn("HISTORICAL SAMPLE", report)
-        self.assertIn("Actual: 1 DD ✅ • 1 CD ✅", report)
+        self.assertIn("Actual: 1 DD ❌ • 1 CD ❌", report)
         self.assertIn("Gross: ₱1,000", report)
         self.assertIn("Reconstructed from the Telegram Desktop export", report)
 
@@ -269,7 +269,7 @@ class DailyAutomationTests(unittest.TestCase):
         ]
         with patch("daily_automation.messages_for_day", return_value=(rows, False)):
             report = build_group_report(
-                -1003647732254, dt.date(2026, 9, 19), {"active_workers": 2},
+                -1003647732254, dt.date(2026, 9, 19), {"active_workers": 1},
                 active_users=[],
             )
         self.assertIn("Commission: needs a quick data review", report)
@@ -291,7 +291,7 @@ class DailyAutomationTests(unittest.TestCase):
                 -1003647732254, dt.date(2026, 9, 21), {"active_workers": 5},
                 active_users=[],
             )
-        self.assertIn("Target: 4 DD", report)
+        self.assertIn("Target: 8 DD", report)
         self.assertIn("Commission: 35%", report)
         self.assertIn("Pay:", report)
         self.assertIn("Profit before ads/other expenses:", report)
@@ -326,9 +326,9 @@ class DailyAutomationTests(unittest.TestCase):
             GROUPS[-1003647732254], dt.date(2026, 9, 19), 7,
             {"active_workers": 5}, *totals,
         )
-        self.assertIn("Target: 4 DD and 4 CD", reminder)
+        self.assertIn("Target: 8 DD and 8 CD", reminder)
         self.assertIn("So far: 2 DD • 3 CD", reminder)
-        self.assertIn("Still needed: 2 DD • 1 CD", reminder)
+        self.assertIn("Still needed: 6 DD • 5 CD", reminder)
 
     def test_smart_reminder_shows_leader_and_active_members_needing_help(self):
         rows = [
@@ -376,7 +376,7 @@ class DailyAutomationTests(unittest.TestCase):
             self.assertEqual(args["payload"]["message_thread_id"], GROUPS[args["chat_id"]]["announcements"])
             self.assertEqual(args["scheduled_for"], now)
             self.assertEqual(args["dedupe_key"], f"daily-reminder:2026-09-19:7:{args['chat_id']}")
-            self.assertIn("Still needed: 2 DD • 1 CD", args["payload"]["text"])
+            self.assertIn("Still needed: 6 DD • 5 CD", args["payload"]["text"])
 
     def test_existing_reminders_skip_progress_reads_and_duplicate_sends(self):
         date = dt.date(2026, 9, 19)
@@ -399,7 +399,7 @@ class DailyAutomationTests(unittest.TestCase):
         capped = quota_reminder(config, date, 19, {"active_workers": 5}, 2, 1, True, False)
         self.assertIn("manual check", capped)
         self.assertNotIn("Still needed:", capped)
-        met = quota_reminder(config, date, 19, {"active_workers": 5}, 6, 4, False, False)
+        met = quota_reminder(config, date, 19, {"active_workers": 5}, 8, 9, False, False)
         self.assertIn("Still needed: 0 DD • 0 CD", met)
 
     def test_reminder_flags_unreadable_deal_posts_before_claiming_a_gap(self):

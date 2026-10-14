@@ -110,7 +110,7 @@ class PausedTrackingTests(unittest.TestCase):
                 self.assertNotIn(" DD", text)
                 self.assertNotIn("40%", text)
                 self.assertNotIn("35%", text)
-                self.assertIn("4", text)
+                self.assertIn("8", text)
 
     def test_worker_report_marks_sales_unavailable_and_preserves_client_responses(self):
         with patch.object(worker_activity, "activity_messages", return_value=[]) as read, patch.object(worker_activity, "poll_answers_for_range", return_value=[]), patch.object(worker_activity, "freebie_actions", return_value=[]), patch.object(worker_activity, "new_client_actions", return_value=[assignment()]):

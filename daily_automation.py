@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
-import math
 import re
 import done_deal_tracking
+import team_planning
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
@@ -142,7 +142,8 @@ def quota_for(count_row: dict | None) -> tuple[int, int, bool]:
     if not count_row:
         return 0, 0, False
     workers = int(count_row.get("active_workers", 0))
-    return workers, math.ceil(workers * 0.8), True
+    quota, _ = team_planning.plan_totals(workers)
+    return workers, quota, True
 
 
 def messages_for_day(chat_id: int, work_date: dt.date) -> tuple[list[dict], bool]:
@@ -185,6 +186,8 @@ def build_group_report(
         lines = report.splitlines()
         lines[1] = f"{work_date:%A, %B %d, %Y} (PHT)"
         report = "\n".join(lines)
+        from daily_report_plans import plan_lines
+        report += "\n\n" + "\n".join(plan_lines(chat_id, work_date, count_row, heading="WORKDAY QUOTA & ADS PLAN"))
         if done_deal_tracking.summary_enabled():
             import done_deal_summary
             report += "\n\n" + done_deal_summary.render(done_deal_summary.summarize(rows, config, historical=historical, capped=capped))
@@ -269,7 +272,7 @@ def build_group_report(
     if has_poll and workers > 0:
         lines.extend([
             f"Active workers: {workers}",
-            f"Team target (80%, rounded up): {quota}",
+            f"Team target (Active × 1.6, rounded up): {quota}",
             f"Target: {quota} DD • {quota} CD",
         ])
     elif has_poll:
@@ -488,7 +491,7 @@ def quota_announcement(config: dict, work_date: dt.date, count_row: dict | None,
         f"🏢 {config['name'].upper()}",
         "",
         f"We have {workers} active team member{'s' if workers != 1 else ''}.",
-        f"Today's target: {quota} DD and {quota} CD (80%, rounded up).",
+        f"Today's target: {quota} DD and {quota} CD (Active × 1.6, rounded up).",
         "",
         "Let's work toward both targets together. Reaching both earns the 40% commission rate; otherwise, the rate is 35%.",
     ])
@@ -675,6 +678,7 @@ def queue_daily_reminders(work_date: dt.date, hour: int, now: dt.datetime, allow
             action_type="message",
             payload={
                 "text": reminder,
+                "plan_version": team_planning.PLAN_VERSION,
                 "done_deal_tracking": done_deal_tracking.enabled(),
                 "disable_notification": False,
                 "message_thread_id": config["announcements"],
@@ -708,6 +712,7 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
             action_type="message",
             payload={
                 "text": announcement,
+                "plan_version": team_planning.PLAN_VERSION,
                 "done_deal_tracking": done_deal_tracking.enabled(),
                 "disable_notification": False,
                 "message_thread_id": config["announcements"],
@@ -725,7 +730,7 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
             if enqueue_scheduled_action(
                 chat_id=DAILY_REPORTS_CHAT_ID,
                 action_type="message",
-                payload={"text": part, "disable_notification": False, "done_deal_tracking": done_deal_tracking.enabled()},
+                payload={"text": part, "disable_notification": False, "done_deal_tracking": done_deal_tracking.enabled(), "plan_version": team_planning.PLAN_VERSION},
                 scheduled_for=now,
                 dedupe_key=f"daily-report:{report_date.isoformat()}:{chat_id}:{part_number}",
             ):
@@ -771,7 +776,7 @@ def queue_historical_reports(
     return queued
 
 
-def run_due_daily_automation(now: dt.datetime, allowed: set[int]) -> int:
+def run_due_daily_automation(now: dt.datetime, allowed: set[int], *, planning_allowed: set[int] | None = None) -> int:
     local_now = now.astimezone(MANILA)
     queued = 0
     today = local_now.date()
@@ -788,4 +793,6 @@ def run_due_daily_automation(now: dt.datetime, allowed: set[int]) -> int:
         queued += queue_daily_closeout(local_now.date() - dt.timedelta(days=1), now, allowed)
     elif local_now.hour == 23 and local_now.minute == 59:
         queued += queue_daily_closeout(local_now.date(), now, allowed)
+    from daily_report_plans import queue_formula_update
+    queued += queue_formula_update(now, planning_allowed if planning_allowed is not None else allowed)
     return queued

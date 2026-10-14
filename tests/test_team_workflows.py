@@ -37,6 +37,7 @@ class TeamWorkflowTests(unittest.TestCase):
             status, body = call_app("/api/cron/dispatch")
         self.assertEqual(status, 200)
         self.assertEqual(daily.call_args.args[1], allowed - {TRABAWHO_CHAT_ID})
+        self.assertEqual(daily.call_args.kwargs["planning_allowed"], allowed)
         self.assertEqual(clients.call_args_list[0].args[1], allowed - {TRABAWHO_CHAT_ID})
         self.assertEqual(clients.call_args_list[1].args[1], {TRABAWHO_CHAT_ID})
         self.assertEqual(freebies.call_args.args[1], allowed)

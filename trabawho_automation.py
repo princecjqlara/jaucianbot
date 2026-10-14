@@ -1,4 +1,4 @@
-"""Trabawho availability, two-per-member quota, and proposed advertising budget."""
+"""Trabawho availability, four-per-member quota, and planned advertising budget."""
 
 from __future__ import annotations
 
@@ -6,21 +6,20 @@ import datetime as dt
 import html
 import urllib.parse
 from collections import defaultdict
+from decimal import Decimal
+import team_planning
 
 from cloud_store import daily_poll_answers, daily_poll_counts, enqueue_scheduled_action, new_client_actions, request
 from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_polls
 from suno_store import suno_assignment_matches_project
 
 
-FRIENDLY_PLAN_VERSION = "friendly-v1"
+FRIENDLY_PLAN_VERSION = "friendly-v2"
 TRABAWHO_CHECKIN_HOURS = (10, 16, 20)
 
 
-def plan_totals(active_members: int) -> tuple[int, int]:
-    if active_members < 0:
-        raise ValueError("Active member count cannot be negative")
-    quota = active_members * 2
-    return quota, quota * 150
+def plan_totals(active_members: int) -> tuple[int, Decimal]:
+    return team_planning.plan_totals(active_members, suno=True)
 
 
 def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
@@ -41,6 +40,7 @@ def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
         f"📅 {date_label} (PHT)", "",
         "Hi team! 👋",
         status,
+        f"Team client target: {plan_totals(active_members)[0]} clients.",
         next_step,
         "Please keep an eye on the New Client topic and reply when your client comes in.",
         "Let's have a smooth and successful day together! 💛",
@@ -137,7 +137,7 @@ def progress_text(work_date: dt.date, count_row: dict | None, assigned: int) -> 
             "No Active responses have been recorded yet, so there is no client target to track.",
             "Please vote in the poll when you can. 💛",
         ])
-    quota = active * 2
+    quota, _ = plan_totals(active)
     remaining = max(quota - assigned, 0)
     if remaining:
         status = f"Clients assigned: {assigned} of {quota} planned • {remaining} left to assign."
@@ -174,12 +174,13 @@ def queue_trabawho_followups(now: dt.datetime) -> int:
         scheduled_for=now, dedupe_key=checkin_key,
     ):
         queued += 1
-    progress_key = f"trabawho-progress:{work_date.isoformat()}:{local.hour}:{int(count_row.get('active_workers', 0))}:{assigned}"
+    progress_key = f"trabawho-progress:{work_date.isoformat()}:{local.hour}:{int(count_row.get('active_workers', 0))}:{assigned}:{team_planning.PLAN_VERSION}"
     if enqueue_scheduled_action(
         chat_id=TRABAWHO_CHAT_ID, action_type="message",
         payload={"text": progress_text(work_date, count_row, assigned),
                  "message_thread_id": TRABAWHO["announcements"], "disable_notification": False,
                  "trabawho_progress_date": work_date.isoformat(),
+                 "plan_version": team_planning.PLAN_VERSION,
                  "trabawho_active_count": int(count_row.get("active_workers", 0)),
                  "trabawho_assigned_count": assigned},
         scheduled_for=now, dedupe_key=progress_key,
@@ -209,9 +210,10 @@ def _queue_plan(work_date: dt.date, count_row: dict, now: dt.datetime) -> int:
             "disable_notification": False,
             "trabawho_work_date": work_date.isoformat(), "trabawho_active_count": workers,
             "trabawho_plan_format": FRIENDLY_PLAN_VERSION,
+            "plan_version": team_planning.PLAN_VERSION,
         },
         scheduled_for=now,
-        dedupe_key=f"trabawho-plan:{work_date.isoformat()}:{minute}:{workers}",
+        dedupe_key=f"trabawho-plan:{work_date.isoformat()}:{minute}:{workers}:{FRIENDLY_PLAN_VERSION}",
     ))
 
 

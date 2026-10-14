@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 import urllib.parse
-from decimal import Decimal
 
 from cloud_store import daily_poll_counts, enqueue_scheduled_action, receipt_messages, record_automation_marker, request
 from daily_automation import DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, money, split_message
@@ -12,6 +11,7 @@ from trabawho_automation import plan_totals
 from trabawho_receipts import receipt_report
 from trabawho_songs import song_report_lines
 from daily_report_plans import plan_lines
+import team_planning
 
 
 def build_trabawho_summary(work_date: dt.date, now: dt.datetime) -> str:
@@ -51,8 +51,8 @@ def build_trabawho_report(work_date: dt.date, now: dt.datetime) -> str:
     if count:
         active = int(count["active_workers"])
         quota, budget = plan_totals(active)
-        lines += [f"Active members: {active}", f"Team quota: {quota} (Active × 2)",
-                  f"Planned ads budget: {money(Decimal(budget))} (Active × 2 × ₱150)"]
+        lines += [f"Active members: {active}", f"Team quota: {quota} (Active × 4)",
+                  f"Planned ads budget: {money(budget)} (Active × 4 × ₱150)"]
     else:
         lines.append("No tracked Active poll for this date; quota and ads budget are unavailable.")
     total = report["totals"]
@@ -110,7 +110,7 @@ def queue_trabawho_daily_report(now: dt.datetime, allowed: set[int]) -> int:
         parts = split_message(builder(work_date, now))
         action_prefix = "trabawho-daily-summary" if chat_id == TRABAWHO_CHAT_ID else "trabawho-daily-report"
         for number, text in enumerate(parts, 1):
-            payload = {"text": text, "disable_notification": False}
+            payload = {"text": text, "disable_notification": False, "plan_version": team_planning.PLAN_VERSION}
             if topic is not None:
                 payload["message_thread_id"] = topic
             queued += int(enqueue_scheduled_action(
