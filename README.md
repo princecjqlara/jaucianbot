@@ -1,5 +1,11 @@
 # Telegram group insights
 
+Member-facing instructions: [Veo and Suno handbook (PDF)](docs/Veo-and-Suno-Member-Handbook.pdf)
+and [editable handbook source](docs/member-handbook.md). The handbook includes
+client ownership, handovers, availability, Veo freebies and deals, Suno delivery
+and receipts, and links to each team's topics. Rebuild the PDF with
+`docs/build_member_handbook.py` in a separate Python environment with `reportlab`.
+
 This bot archives new messages from Telegram groups you approve. Telegram Desktop HTML exports can also be imported for earlier messages. Ask the assistant in this workspace for summaries, decisions, issues, trends, or a search. The local archive is `telegram_insights.sqlite3`; the cloud archive uses Supabase. Attachments are recorded by type but are not downloaded or transcribed.
 
 ## Deploy on Vercel
