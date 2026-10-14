@@ -232,6 +232,19 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertEqual(action["payload"]["edit_message_id"], 321)
         self.assertEqual(action["payload"]["_directory_assignment_fingerprint"], "fresh")
 
+    def test_full_pending_handover_page_fits_message_limit_with_long_emoji_names(self):
+        label = chr(0x1F600) * 100
+        snapshot = {"clients": [{"client": label, "page": label, "editor": label,
+                     "next_editor": label, "token": "AAAABBBB", "status": "Handover pending"} for _ in range(12)],
+                    "counts": {"Handover pending": 12}, "team": "Veo", "chat_id": CHAT,
+                    "as_of_utc": NOW.isoformat(), "coverage": "Bot-tracked assignments and eligible briefs."}
+        text, _ = workflow.render_directory(snapshot)
+        import html
+        import re
+        visible = html.unescape(re.sub(r"<[^>]*>", "", text))
+        self.assertLessEqual(len(visible.encode("utf-16-le")) // 2, 4096)
+        self.assertEqual(visible.count("(awaiting acceptance)"), 12)
+
     def test_obsolete_handover_notices_are_suppressed(self):
         row = assignment(new_client_handover={"state": "accepted", "revision": 1})
         action = {"chat_id": CHAT, "payload": {"client_transfer_assignment_id": 100,

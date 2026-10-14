@@ -123,14 +123,14 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
     internal = str(abs(snapshot["chat_id"]))[3:]
     controls = []
     for entry in entries[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
-        name = html.escape(entry["client"][:65])
+        name = html.escape(directory_label(entry["client"]))
         if entry.get("message_id"):
             name = f'<a href="https://t.me/c/{internal}/{entry["message_id"]}">{name}</a>'
-        owner = html.escape((entry.get("editor") or str(entry.get("editor_id") or "No editor"))[:65])
+        owner = html.escape(directory_label(entry.get("editor") or str(entry.get("editor_id") or "No editor")))
         if entry.get("next_editor"):
-            owner += " → " + html.escape(entry["next_editor"][:65]) + " (awaiting acceptance)"
+            owner += " → " + html.escape(directory_label(entry["next_editor"])) + " (awaiting acceptance)"
         token = f" · <code>{entry['token']}</code>" if entry.get("token") else ""
-        lines.extend([f"<b>{name}</b> · {html.escape(entry['page'][:65])}", f"{entry['status']} · {owner}{token}", ""])
+        lines.extend([f"<b>{name}</b> · {html.escape(directory_label(entry['page']))}", f"{entry['status']} · {owner}{token}", ""])
         if entry["status"] == "Assigned":
             controls.append([button("Hand over: " + entry["client"][:35], f"choose:{entry['assignment_id']}:{entry['handover_revision']}:0")])
         elif entry["status"] == "Available to TAKE":
@@ -146,6 +146,14 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
     if page + 1 < pages:
         nav.append(button("Next", f"{route}:{page + 1}"))
     return "\n".join(lines), {"inline_keyboard": controls + [nav, [button("Ready", "ready"), button("Busy", "busy"), button("Help", "help")]]}
+
+
+def directory_label(value: str) -> str:
+    """Bound all four labels in a handover row, including emoji UTF-16 units."""
+    encoded = value.encode("utf-16-le")
+    if len(encoded) <= 90:
+        return value
+    return encoded[:88].decode("utf-16-le", errors="ignore") + "…"
 
 
 def fingerprint(history: list[dict]) -> str:
