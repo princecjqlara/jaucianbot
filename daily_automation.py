@@ -92,6 +92,21 @@ GROUPS = {
         "close": 8,
         "pages": {"onset": "Onset Media Agency", "onsetmediaagency": "Onset Media Agency"},
     },
+    -1004364797420: {
+        "name": "Veo Lyn",
+        "general": 1,
+        "freebie": 22,
+        "contact_thread": 20,
+        "close": 19,
+        "announcements": 18,
+        "active": 16,
+        "done": 15,
+        "crm_pages": {},  # Waiting for the user's Facebook page mapping.
+        "pages": {},
+        "new_client_timeout_minutes": 30,
+        "new_client_ready_rotation": True,
+        "new_client_retry_cooldown_minutes": 30,
+    },
 }
 
 TRABAWHO_CHAT_ID = -1002894511895
@@ -110,6 +125,10 @@ TRABAWHO = {
     "new_client_retry_cooldown_minutes": 30,
 }
 AVAILABILITY_GROUPS = {**GROUPS, TRABAWHO_CHAT_ID: TRABAWHO}
+
+
+def page_mapping_pending(config: dict) -> bool:
+    return config.get("client_source") != "suno" and not config.get("crm_pages")
 
 def money(value: Decimal) -> str:
     formatted = f"{value:,.2f}"

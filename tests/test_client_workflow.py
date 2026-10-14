@@ -147,7 +147,7 @@ class ClientWorkflowTests(unittest.TestCase):
             self.assertIsNone(workflow.handle(callback("yes:100:1", thread=999), {CHAT}, NOW))
         read.assert_not_called()
 
-    def test_all_five_teams_support_buttons_and_readonly_list_commands(self):
+    def test_all_configured_teams_support_buttons_and_readonly_list_commands(self):
         with patch.object(workflow, "queue_message") as queue, patch("suno_store.suno_configured", return_value=True):
             for chat in AVAILABILITY_GROUPS:
                 self.assertIn("latest client list", workflow.handle(callback("list:0", chat=chat), {chat}, NOW))
@@ -305,7 +305,7 @@ class ClientWorkflowTests(unittest.TestCase):
         with patch.object(workflow, "history_for", side_effect=read), patch.object(workflow, "queue_board") as board, patch("suno_store.suno_configured", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "maintenance failed"):
                 workflow.maintain(NOW, set(AVAILABILITY_GROUPS))
-        self.assertEqual(board.call_count, 4)
+        self.assertEqual(board.call_count, len(AVAILABILITY_GROUPS) - 1)
 
     def test_old_song_owner_cannot_complete_before_job_sync(self):
         job = {"id": 700, "payload": {"song_assignment_id": 100, "song_assignee_id": 11,

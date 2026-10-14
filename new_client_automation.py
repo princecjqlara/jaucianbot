@@ -23,7 +23,7 @@ from cloud_store import (
     mark_new_client_ack_queued,
 )
 from crm_store import completed_detail_contacts, contact_identity_map
-from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA
+from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, page_mapping_pending
 from hourly_availability import current_members, enabled as hourly_enabled
 import client_volunteers as volunteers
 import ready_availability as ready
@@ -128,6 +128,8 @@ def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
             pages.setdefault(page, []).append(contact)
         return list(pages.items())
     pages = list(config["crm_pages"].items())
+    if not pages:
+        return []
     with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
         if any(GROUPS[chat_id] == config and ready.enabled(chat_id) for chat_id in GROUPS):
             contacts = list(pool.map(lambda page_id: completed_detail_contacts(page_id, exclude_handled=True), (page_id for _, page_id in pages)))
@@ -712,7 +714,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = sum(ready.queue_instructions(chat_id, now, GROUPS[chat_id]["contact_thread"])
                  for chat_id in eligible if ready.enabled(chat_id))
-    group_members = {chat_id: ready.available(chat_id, now, history) if ready.enabled(chat_id)
+    group_members = {chat_id: [] if page_mapping_pending(GROUPS[chat_id]) else ready.available(chat_id, now, history) if ready.enabled(chat_id)
                      else current_members(_active_members(chat_id, work_date), now) for chat_id in sorted(eligible)}
     groups_with_members = [chat_id for chat_id in sorted(eligible) if group_members[chat_id]]
     if not groups_with_members:
@@ -1198,6 +1200,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 and (row.get("status") != "cancelled" or (not ready.enabled(chat_id) and row["payload"].get("new_client_phase") == "volunteer"))
             ]
             reason = (
+                "waiting_for_page_mapping" if page_mapping_pending(GROUPS[chat_id]) else
                 "awaiting_volunteer_claim" if any(row["payload"].get("new_client_phase") == "volunteer" for row in open_rows) else
                 "delivery_failed" if any(row.get("status") == "failed" and not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
                 "awaiting_delivery" if any(not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
@@ -1222,7 +1225,8 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         result.append({
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
-            "configured": True,
+            "configured": not page_mapping_pending(GROUPS[chat_id]),
+            "page_mapping_pending": page_mapping_pending(GROUPS[chat_id]),
             "source_available": source_available,
             "source_error": source_error,
             "new_client_thread_id": GROUPS[chat_id]["contact_thread"],

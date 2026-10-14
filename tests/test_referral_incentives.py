@@ -490,7 +490,7 @@ class WorkflowTests(unittest.TestCase):
     def test_report_combines_all_five_teams_by_stable_member_id(self):
         def deal_rows(chat, *args):
             config = referrals.GROUPS[chat]
-            page = next(iter(config["pages"].values()))
+            page = next(iter(config["pages"].values()), "Pending page")
             return [dict(row(f"Client: Client {chat}\nOrder ID: {chat}\nPage: {page}\nPD: 1000\nPaid",
                              thread=config["done"]), author_name="Changed Display Name")]
         with patch.object(referrals, "read_records", side_effect=[[{"payload": PERSON}], []]), \
@@ -500,10 +500,11 @@ class WorkflowTests(unittest.TestCase):
              patch.object(referrals, "lock_credit"):
             report = referrals.build_report(START.date(), START + dt.timedelta(hours=2), ALLOWED)
         self.assertEqual({c.args[0] for c in veo_read.call_args_list}, set(referrals.GROUPS))
-        self.assertEqual(veo_read.call_count, 4)
+        self.assertEqual(veo_read.call_count, len(referrals.GROUPS))
         suno_read.assert_called_once()
-        self.assertIn("5/8 commissioned sales", report)
-        self.assertIn("250", report)
+        mapped_teams = sum(bool(config["pages"]) for config in referrals.GROUPS.values())
+        self.assertIn(f"{mapped_teams + 1}/8 commissioned sales", report)
+        self.assertIn(str((mapped_teams + 1) * 50), report)
 
     def test_report_with_no_votes_has_all_names_and_no_expiry_rule(self):
         with patch.object(referrals, "read_records", return_value=[]):

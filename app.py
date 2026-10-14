@@ -55,7 +55,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-14.01"
+AUTOMATION_VERSION = "2026-10-14.02"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -136,7 +136,8 @@ def groups_route(environ, start_response):
     except Exception as error:
         print(f"Group discovery query failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
-    return response(start_response, 200, {"ok": True, "groups": groups})
+    return response(start_response, 200, {"ok": True, "groups": groups,
+                                          "approved_chat_ids": sorted(allowed_chat_ids())})
 
 
 def freebies_status_route(environ, start_response):

@@ -48,7 +48,7 @@ class HourlyTests(unittest.TestCase):
 
     def test_three_multi_select_polls_cover_each_hour_in_every_team(self):
         with patch.object(hourly, "enqueue_scheduled_action", return_value=True) as enqueue:
-            self.assertEqual(hourly.queue_polls(NOW.date(), NOW, AVAILABILITY_GROUPS, set(AVAILABILITY_GROUPS)), 15)
+            self.assertEqual(hourly.queue_polls(NOW.date(), NOW, AVAILABILITY_GROUPS, set(AVAILABILITY_GROUPS)), 3 * len(AVAILABILITY_GROUPS))
         for chat_id in AVAILABILITY_GROUPS:
             actions = [call.kwargs for call in enqueue.call_args_list if call.kwargs["chat_id"] == chat_id]
             self.assertEqual([hour for a in actions for hour in a["payload"]["hourly_poll_hours"]], list(range(24)))

@@ -72,6 +72,7 @@ class WsgiApplicationTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(payload["groups"], discovered)
+        self.assertEqual(payload["approved_chat_ids"], [-100123])
         query.assert_called_once_with({-100123})
 
     def test_worker_activity_is_authenticated_and_scoped_to_approved_group(self):

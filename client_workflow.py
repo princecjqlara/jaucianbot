@@ -15,7 +15,7 @@ import urllib.parse
 from collections import Counter
 
 from cloud_store import enqueue_scheduled_action, new_client_actions, request
-from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, TRABAWHO_CHAT_ID
+from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, TRABAWHO_CHAT_ID, page_mapping_pending
 
 PAGE_SIZE = 12
 COMMAND = re.compile(r"^/(clients|clienthelp|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
@@ -45,7 +45,9 @@ def guide(chat_id: int) -> str:
     ending = (f"Complete any missing details, then send the song today and within 24 hours. After sending it to the client, post SONG SENT + the client token in SONGS: https://t.me/c/{str(abs(chat_id))[3:]}/{config['songs']}. The original 24-hour deadline stays the same after handover."
               if config.get("songs") else
               "When the client pays, include Client token: + the actual token in your Done Deal post. FREEBIE tasks still use FREEBIE SENT + token.")
-    return (f"{config['name'].upper()} — CLIENT GUIDE\n\n"
+    setup = ("PAGE SETUP PENDING: client and freebie assignments are paused until the team page is connected. Availability polls and reminders are active.\n\n"
+             if page_mapping_pending(config) else "")
+    return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
             "Use the buttons or commands in NEW CLIENTS:\n"
             "1. Send /ready ONCE to receive clients. WORKING keeps you in the queue for the next client.\n"
             "2. Send /busy IMMEDIATELY when full, on break, or ending your shift. Your accepted clients stay with you.\n"
@@ -107,6 +109,7 @@ def directory(chat_id: int, now: dt.datetime) -> dict:
                             "token": None, "message_id": None})
     entries.sort(key=lambda e: (e["status"], e["page"].casefold(), e["client"].casefold(), str(e["contact_id"])))
     return {"team": GROUPS[chat_id]["name"], "chat_id": chat_id, "as_of_utc": now.isoformat(),
+            "page_mapping_pending": page_mapping_pending(GROUPS[chat_id]),
             "assignment_fingerprint": fingerprint(history),
             "counts": dict(Counter(e["status"] for e in entries)), "clients": entries,
             "coverage": "Bot-tracked assignments and currently eligible CRM/Suno briefs. External or untracked assignments are not included."}
@@ -120,6 +123,8 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
     lines = [f"<b>{html.escape(snapshot['team'])} — CLIENT LIST</b>",
              " | ".join(f"{html.escape(state)}: {counts.get(state, 0)}" for state in ("Available", "Available to TAKE", "Reserved", "Assigned", "Handover pending", "Awaiting reassignment")),
              f"Page {page + 1}/{pages} · Updated {html.escape(snapshot['as_of_utc'])} (UTC)", ""]
+    if snapshot.get("page_mapping_pending"):
+        lines.append("<b>Page setup pending.</b> Client and freebie assignments are paused until your team page is connected.\n")
     internal = str(abs(snapshot["chat_id"]))[3:]
     controls = []
     for entry in entries[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:

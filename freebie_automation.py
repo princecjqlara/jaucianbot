@@ -14,7 +14,7 @@ from cloud_store import (
     freebie_action_state, freebie_actions, update_freebie_action,
 )
 from crm_store import paid_contacts
-from daily_automation import GROUPS, MANILA
+from daily_automation import GROUPS, MANILA, page_mapping_pending
 
 
 DONE_RE = re.compile(r"^\s*(?:FREEBIE\s+SENT|/freebie_done)\s+([A-F0-9]{8})\s*$", re.IGNORECASE)
@@ -105,6 +105,8 @@ def _active_members(chat_id: int, work_date: dt.date) -> list[dict]:
 
 def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:
     pages = list(config["crm_pages"].items())
+    if not pages:
+        return []
     with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
         contacts = list(pool.map(paid_contacts, (page_id for _, page_id in pages)))
     return [(page, rows) for (page, _), rows in zip(pages, contacts)]
@@ -145,6 +147,8 @@ def queue_freebie_assignments(now: dt.datetime, allowed: set[int]) -> int:
     )
     queued = 0
     for chat_id in sorted(eligible):
+        if page_mapping_pending(GROUPS[chat_id]):
+            continue
         from hourly_availability import current_members
         members = current_members(_active_members(chat_id, local_now.date()), now)
         waiting = [user for user in members if (chat_id, int(user["user_id"])) not in open_members]
@@ -343,6 +347,8 @@ def freebie_status(allowed: set[int], now: dt.datetime) -> list[dict]:
         team_contact_ids = {contact["id"] for _, rows in page_contacts for contact in rows}
         result.append({
             "team": config["name"],
+            "configured": not page_mapping_pending(config),
+            "page_mapping_pending": page_mapping_pending(config),
             "chat_id": chat_id,
             "freebie_thread_id": config["freebie"],
             "active_today": len(active),

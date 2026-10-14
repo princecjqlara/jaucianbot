@@ -122,7 +122,7 @@ class DailyAutomationTests(unittest.TestCase):
         now = dt.datetime(2026, 9, 19, tzinfo=dt.timezone.utc)
         with patch("daily_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             count = queue_daily_polls(dt.date(2026, 9, 20), now, set(GROUPS))
-        self.assertEqual(count, 4)
+        self.assertEqual(count, len(GROUPS))
         first = enqueue.call_args_list[0].kwargs
         self.assertFalse(first["payload"]["is_anonymous"])
         self.assertEqual(first["payload"]["daily_poll_date"], "2026-09-20")
@@ -359,7 +359,7 @@ class DailyAutomationTests(unittest.TestCase):
              }), \
              patch("daily_automation.enqueue_scheduled_action", return_value=True) as enqueue:
             queued = queue_daily_reminders(dt.date(2026, 9, 19), 7, now, set(GROUPS))
-        self.assertEqual(queued, 4)
+        self.assertEqual(queued, len(GROUPS))
         for call in enqueue.call_args_list:
             args = call.kwargs
             self.assertEqual(args["payload"]["message_thread_id"], GROUPS[args["chat_id"]]["announcements"])

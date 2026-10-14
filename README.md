@@ -215,6 +215,14 @@ to test them.
 
 ### Client list and editor handovers
 
+Veo Lyn (`-1004364797420`) uses General `1`, FREEBIES `22`, NEW CLIENTS `20`,
+CLOSE DEALS `19`, announcements `18`, ACTIVE FOR TOMORROW `16`, and DONE DEALS `15`.
+Its page mapping is pending: polls, reminders, client controls, and archiving can
+run, while new-client and freebie assignments stay paused. Its client list and
+guide show that setup is pending instead of claiming there are no eligible leads.
+When the user supplies the page, add its verified CRM page ID and display-name
+aliases to the team's `crm_pages` and `pages` mappings.
+
 All four Veo teams and Trabawho share a client list in their NEW CLIENTS topic.
 It shows eligible unassigned clients, reserved offers, open TAKE offers, confirmed
 editors, and pending handovers. Each tracked client links to its brief and includes
