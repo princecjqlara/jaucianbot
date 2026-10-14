@@ -21,7 +21,7 @@ RECRUITS_THREAD = 510
 SHARES_CHAT = -1004389276294
 SHARES_THREAD = 2
 RECRUITERS = ("Farah", "Athena", "Grace Canites", "Elle", "Shan", "Sen",
-              "Pogi Michael", "Nami", "Melo", "Mark Joshua", "Eri")
+              "Pogi Michael", "Nami", "Melo", "Mark Joshua", "Eri", "Emman (@keiichimon)")
 WORK_TEAMS = set(GROUPS) | {TRABAWHO_CHAT_ID}
 RATE = Decimal("0.05")
 PUBLIC_INSTRUCTIONS = (
@@ -99,8 +99,13 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
         return False
     name = " ".join(filter(None, (user.get("first_name"), user.get("last_name")))) or str(user["id"])
     recruiter = context["options"][selected[0]] if selected else None
-    if recruiter and name.casefold().strip() == recruiter.casefold():
-        return False
+    if recruiter:
+        display_name = re.sub(r"\s*\(@[A-Za-z0-9_]+\)$", "", recruiter).strip().casefold()
+        handle = re.search(r"\(@([A-Za-z0-9_]+)\)$", recruiter)
+        if name.casefold().strip() == display_name or (
+            handle and (user.get("username") or "").casefold() == handle.group(1).casefold()
+        ):
+            return False
     now = dt.datetime.now(dt.timezone.utc)
     key = f"referral-person:{user['id']}"
     payload = {"recruit_id": int(user["id"]), "recruit_name": name, "recruiter": recruiter,
@@ -447,7 +452,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
     today = now.astimezone(MANILA).date()
     # Scheduling is daily; pending deliveries and replies still run independently.
     # Include the reporting approval so adding it during a day queues its reports.
-    setup_key = (f"referral-setup:v4:{RECRUITS_THREAD}:"
+    setup_key = (f"referral-setup:v5:{RECRUITS_THREAD}:"
                  f"{SHARES_CHAT if SHARES_CHAT in allowed else 0}:{today.isoformat()}")
     if setup_complete(setup_key):
         return 0
@@ -486,7 +491,7 @@ def queue_automation(now: dt.datetime, allowed: set[int]) -> int:
                  "options": list(RECRUITERS), "is_anonymous": False, "allows_multiple_answers": False,
                  "disable_notification": False, "referral_poll": True, "referral_privacy_version": 3,
                  "message_thread_id": RECRUITS_THREAD},
-        scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v4:{RECRUITS_THREAD}"))
+        scheduled_for=now, dedupe_key=f"referral-recruiter-poll:v5:{RECRUITS_THREAD}"))
     if SHARES_CHAT in allowed:
         # Durable scheduled reports are refreshed from actual sales at delivery time.
         for date in (today - dt.timedelta(days=1), today, today + dt.timedelta(days=1)):
