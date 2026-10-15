@@ -207,11 +207,13 @@ class ReadyHandoffTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
 
     def test_commands_require_the_approved_team_and_client_topic(self):
-        with patch.object(ready, "request") as request:
+        with patch.object(ready, "request") as request, patch.object(ready, "enqueue_scheduled_action") as enqueue:
             self.assertIsNone(ready.handle(command(thread=4794), {ready.OLLIE}, NOW))
             self.assertIsNone(ready.handle(command(), set(), NOW))
             self.assertIsNone(ready.handle({"edited_message": command()["message"]}, {ready.OLLIE}, NOW))
         request.assert_not_called()
+        enqueue.assert_called_once()
+        self.assertIn("Open NEW CLIENTS", str(enqueue.call_args.kwargs["payload"]))
 
     def test_only_one_dispatcher_can_reserve_a_ready_editor(self):
         row = person()

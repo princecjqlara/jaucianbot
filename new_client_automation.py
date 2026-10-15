@@ -716,7 +716,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 prior_assignees.setdefault(key, set()).add(int(assignee_id))
     queued = sum(ready.queue_instructions(chat_id, now, GROUPS[chat_id]["contact_thread"])
                  for chat_id in eligible if ready.enabled(chat_id))
-    group_members = {chat_id: [] if page_mapping_pending(GROUPS[chat_id]) else ready.available(chat_id, now, history) if ready.enabled(chat_id)
+    group_members = {chat_id: [] if page_mapping_pending(GROUPS[chat_id]) else ready.available(chat_id, now, history, recover=True) if ready.enabled(chat_id)
                      else current_members(_active_members(chat_id, work_date), now) for chat_id in sorted(eligible)}
     groups_with_members = [chat_id for chat_id in sorted(eligible) if group_members[chat_id]]
     if not groups_with_members:
@@ -916,14 +916,20 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 payload["new_client_reservation_key"] = dedupe_key
             if ready.enabled(chat_id) and not ready.reserve(user, dedupe_key, now):
                 continue
-            if enqueue_scheduled_action(
-                chat_id=chat_id,
-                action_type="message",
-                payload=payload,
-                scheduled_for=now,
-                dedupe_key=dedupe_key,
-                repeat_interval_minutes=min(REMINDER_MINUTES, _timeout_minutes(chat_id)),
-            ):
+            try:
+                created = enqueue_scheduled_action(
+                    chat_id=chat_id,
+                    action_type="message",
+                    payload=payload,
+                    scheduled_for=now,
+                    dedupe_key=dedupe_key,
+                    repeat_interval_minutes=min(REMINDER_MINUTES, _timeout_minutes(chat_id)),
+                )
+            except Exception:
+                if ready.enabled(chat_id):
+                    ready.release_reservation(user, dedupe_key, now)
+                raise
+            if created:
                 queued += 1
                 assignment_counts[user_id] += 1
                 open_members.add(user_id)
@@ -1209,7 +1215,7 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 "delivery_failed" if any(row.get("status") == "failed" and not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
                 "awaiting_delivery" if any(not (row.get("sent_at") or row["payload"].get("_first_delivery_at")) for row in open_rows) else
                 "awaiting_working_reply" if user_id in open_members else
-                "outside_selected_hours" if "available_hours" in user and now.astimezone(MANILA).hour not in user["available_hours"] else
+                "outside_selected_hours" if not ready.enabled(chat_id) and "available_hours" in user and now.astimezone(MANILA).hour not in user["available_hours"] else
                 "reply_cooldown" if user_id in paused else
                 "awaiting_ready_after_missed_offer" if user_id in awaiting_ready else
                 "not_ready_now" if ready_members is not None and user_id not in {int(u["user_id"]) for u in ready_members} else

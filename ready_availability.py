@@ -10,10 +10,11 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 9
+GUIDE_VERSION = 10
 ACCEPTANCE_MINUTES = 15
 WARNING_BEFORE_MINUTES = 5
-COMMAND = re.compile(r"^\s*/?(ready|busy)(?:@[\w]+)?\s*$", re.I)
+COMMAND = re.compile(r"^\s*/?(ready|busy)(?:\s*@[\w]+)?\s*$", re.I)
+RESERVATION_LEASE = dt.timedelta(minutes=5)
 
 
 def enabled(chat_id: int) -> bool:
@@ -38,12 +39,15 @@ def records(chat_id: int) -> list[dict]:
             return rows
 
 
-def available(chat_id: int, now: dt.datetime, history: list[dict]) -> list[dict]:
+def available(chat_id: int, now: dt.datetime, history: list[dict], *, recover: bool = False) -> list[dict]:
     from new_client_automation import _utc_time
     team_history = [a for a in history if int(a.get("chat_id", 0)) == chat_id]
     missed = missed_deadlines(team_history, now)
     result = []
-    for row in records(chat_id):
+    people = records(chat_id)
+    if recover:
+        recover_orphaned_reservations(chat_id, now, history, people=people)
+    for row in people:
         p = row["payload"]
         since, until = _utc_time(p.get("ready_at")), _utc_time(p.get("ready_until"))
         if not since or since > now:
@@ -102,6 +106,37 @@ def missed_deadlines(history: list[dict], now: dt.datetime) -> dict[int, dt.date
     return missed
 
 
+def recover_orphaned_reservations(chat_id: int, now: dt.datetime, history: list[dict], *, people: list[dict] | None = None) -> int:
+    """Release stale pre-enqueue locks without reviving BUSY or timed-out members."""
+    from new_client_automation import _utc_time
+    recovered = 0
+    for row in records(chat_id) if people is None else people:
+        p = row["payload"]
+        revision = _utc_time(row.get("updated_at"))
+        key = p.get("reservation_key")
+        if (p.get("state") != "reserved" or not p.get("continuous") or not key
+                or not revision or now - revision < RESERVATION_LEASE):
+            continue
+        if any(a["payload"].get("new_client_reservation_key") == key for a in history if int(a["chat_id"]) == chat_id):
+            continue
+        # Recheck the exact assignment after the history scan: an in-flight
+        # dispatcher may have committed it since that scan began.
+        if request("scheduled_actions?" + urllib.parse.urlencode({
+            "select": "id", "chat_id": f"eq.{chat_id}", "dedupe_key": f"eq.{key}", "limit": 1,
+        })):
+            continue
+        changed = dict(p, state="ready", reservation_recovered_at=now.isoformat())
+        changed.pop("reservation_key", None)
+        if request("scheduled_actions?" + urllib.parse.urlencode({
+            "select": "id", "id": f"eq.{row['id']}", "status": "eq.cancelled",
+            "updated_at": f"eq.{row['updated_at']}", "payload->>state": "eq.reserved",
+            "payload->>reservation_key": f"eq.{key}",
+        }), {"payload": changed, "updated_at": now.isoformat()}, method="PATCH", prefer="return=representation"):
+            row.update(payload=changed, updated_at=now.isoformat())
+            recovered += 1
+    return recovered
+
+
 def reserve(user: dict, key: str, now: dt.datetime) -> bool:
     row = user["ready_record"]
     p = row["payload"]
@@ -147,6 +182,13 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
     if chat_id not in allowed or not enabled(chat_id) or not match or not user.get("id") or user.get("is_bot"):
         return None
     if message.get("message_thread_id") != AVAILABILITY_GROUPS[chat_id]["contact_thread"]:
+        thread = AVAILABILITY_GROUPS[chat_id]["contact_thread"]
+        enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
+            dedupe_key=f"ready-topic-help:{chat_id}:{update.get('update_id') or message['message_id']}",
+            payload={"text": "Use Ready or Busy in NEW CLIENTS so your availability is recorded. Open the topic below.",
+                     "reply_markup": {"inline_keyboard": [[{"text": "Open NEW CLIENTS", "url": f"https://t.me/c/{str(abs(chat_id))[3:]}/{thread}"}]]},
+                     "reply_parameters": {"message_id": message["message_id"], "allow_sending_without_reply": True},
+                     **({"message_thread_id": message["message_thread_id"]} if message.get("message_thread_id") not in (None, 1) else {})})
         return None
     stamp = dt.datetime.fromtimestamp(message.get("date") or now.timestamp(), dt.timezone.utc)
     # Retried or delayed Telegram updates cannot reopen a stale window.

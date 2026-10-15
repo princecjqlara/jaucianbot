@@ -19,7 +19,7 @@ from cloud_store import enqueue_scheduled_action, new_client_actions, request
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, TRABAWHO_CHAT_ID, page_mapping_pending
 
 PAGE_SIZE = 12
-COMMAND = re.compile(r"^/(clients|clienthelp|ddtemplate|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
+COMMAND = re.compile(r"^/(clients|queue|clienthelp|ddtemplate|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
 
 
 def button(text: str, data: str) -> dict:
@@ -28,7 +28,8 @@ def button(text: str, data: str) -> dict:
 
 def menu() -> dict:
     return {"inline_keyboard": [[button("Ready", "ready"), button("Busy", "busy")],
-                                [button("Client list", "list:0"), button("How to use", "help")]]}
+                                [button("Client list", "list:0"), button("Why no client?", "queue")],
+                                [button("How to use", "help")]]}
 
 
 def offer_buttons(token: str, *, take: bool = False) -> dict:
@@ -65,6 +66,7 @@ def guide(chat_id: int) -> str:
             f"4. Reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until /ready.\n"
             "5. TAKE is STILL AVAILABLE: tap Take client or send TAKE + token during the 10-minute OPEN TAKE window. First eligible claim wins.\n"
             "6. Tap Client list or send /clients: see available clients, reserved offers, current editors, and pending handovers.\n"
+            "Waiting without a client? Tap Why no client? or send /queue to see your queue status and what to do next.\n"
             "7. Need to transfer? Tap Hand over on your owner confirmation and choose a teammate. Or reply to their message with /handover TOKEN and a short note. They must accept; you remain responsible until the bot confirms the new owner. They can decline, and you can cancel.\n\n"
             "Keep answering the hourly availability polls. Unclaimed clients keep rotating. Older offers keep the deadline printed on their message.\n\n"
             + ending + "\n\nButtons not responding? Send the matching text command in your team's NEW CLIENTS topic. Use your personal Telegram account, not anonymous-admin mode.\nConflicting ownership or an existing CRM editor? Ask your team lead before contacting the client.")
@@ -380,6 +382,10 @@ def maintain(now: dt.datetime, allowed: set[int]) -> None:
 
 def prepare_delivery(action: dict, now: dt.datetime) -> bool:
     p = action["payload"]
+    if p.get("client_queue_user_id"):
+        p["text"] = queue_status_text(int(action["chat_id"]), int(p["client_queue_user_id"]), now)
+        p["parse_mode"] = "HTML"
+        p["reply_markup"] = menu()
     if p.get("client_directory"):
         snapshot = directory(int(action["chat_id"]), now)
         p["text"], p["reply_markup"] = render_directory(snapshot, int(p.get("client_directory_page") or 0), own_view=bool(p.get("client_directory_once")))
@@ -397,6 +403,40 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
         row = full_assignment(int(action["chat_id"]), int(p["client_template_assignment_id"]))
         return bool(row and int(row["payload"]["new_client_assignee_id"]) == int(p["client_template_owner_id"]))
     return True
+
+
+def queue_status_text(chat_id: int, user_id: int, now: dt.datetime) -> str:
+    from new_client_automation import new_client_status
+    status = new_client_status({chat_id}, now)[0]
+    member = next((m for m in status["members"] if int(m["user_id"]) == user_id), None)
+    state = member["state"] if member else "not_ready_now"
+    reasons = {
+        "not_ready_now": "You are not in the Ready queue. Tap Ready below to join.",
+        "awaiting_ready_after_missed_offer": "Your previous offer timed out. Tap Ready to rejoin when available.",
+        "outside_selected_hours": "Your selected working hours have not started. Update your availability poll.",
+        "awaiting_working_reply": "You already have an offer waiting. Open it and tap Accept client before its deadline.",
+        "awaiting_delivery": "Your offer is queued for delivery. Please wait for it in NEW CLIENTS.",
+        "delivery_failed": "Your offer could not be delivered. The bot will retry or release it; ask your team lead if this continues.",
+        "awaiting_volunteer_claim": "An open TAKE offer is waiting. Use the latest Take client button if eligible.",
+        "no_available_complete_clients": "You are Ready. No eligible unassigned client is available for this team right now. Stay queued; no need to keep pressing Ready.",
+        "ready_for_assignment": "You are Ready and waiting for your turn. Members with fewer clients receive priority.",
+        "waiting_for_team_round": "You are queued for the next round. Other eligible members receive their turn first.",
+        "waiting_for_page_mapping": "The team's client source is not connected yet. Your team lead needs to check it.",
+        "reply_cooldown": "A previous offer timed out. Wait for the retry time shown by the bot or send /ready when available.",
+        "source_read_error": "The client source is temporarily unavailable. The bot will retry; your place is kept.",
+    }
+    available = sum(status.get("available_clients", {}).values())
+    lines = [f"<b>{html.escape(status['team'])} — YOUR CLIENT QUEUE</b>",
+             html.escape(member["name"] if member else str(user_id)), "",
+             html.escape(reasons.get(state, "Tap Ready when available, then wait for your next offer."))]
+    if status.get("source_available", True):
+        lines += [f"Eligible unassigned clients: {available}"]
+    else:
+        lines += ["Client availability could not be checked yet."]
+    if member:
+        lines += [f"Offers today: {member['offers_today']} | Accepted today: {member['acknowledged_today']}"]
+    lines += ["", "Busy stops new offers. Accepted clients keep their editor.", f"Checked {now.astimezone(MANILA):%b %d, %I:%M %p} Manila time."]
+    return "\n".join(lines)
 
 
 def callback_topic(chat_id: int, message: dict) -> int | None:
@@ -519,6 +559,9 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
                       client_directory_once=True, client_directory_page=min(page, 100000),
                       **({"edit_message_id": message["message_id"]} if command == "view" and callback else {}))
         return "The latest client list will appear in NEW CLIENTS."
+    if command == "queue":
+        queue_message(chat, now, f"client-queue-query:{event}", "Checking your queue…", client_queue_user_id=actor)
+        return "Your queue status will appear in NEW CLIENTS."
     if command == "help":
         queue_message(chat, now, f"client-help:{event}", html.escape(guide(chat)), menu())
         return "Guide queued in NEW CLIENTS."

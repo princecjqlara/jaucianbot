@@ -1,5 +1,19 @@
 # Telegram group insights
 
+Ready commands accept `/ready`, `/ready@Jaucianbot`, and `/ready @Jaucianbot`;
+Busy accepts the same formats. A command in another topic receives a link to
+NEW CLIENTS without silently changing availability. The member menu includes
+**Why no client?**, also available as `/queue`, showing the member's current
+waiting reason, offers/acceptances today, and eligible unassigned supply.
+Explicit continuous readiness determines eligibility; old availability-poll
+hours do not incorrectly label a Ready member as outside working hours.
+If an assignment write fails, its member reservation is released. The scheduler
+also recovers orphaned reservations after five minutes, checking for a committed
+assignment and using a revision guard so BUSY and newer changes win. Recovery
+never bypasses missed-offer pauses or releases an existing client assignment.
+Round-robin priority still favors eligible members with fewer clients; zero
+available briefs means the team must wait for new eligible clients.
+
 Concerns posted in the six Veo teams and Trabawho are collected in a separate
 manager report in DAILY REPORTS after 00:05 PHT for the previous Philippine day.
 The first scheduled run publishes a current-day setup preview. Each report
