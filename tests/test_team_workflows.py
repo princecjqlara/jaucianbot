@@ -33,7 +33,7 @@ class TeamWorkflowTests(unittest.TestCase):
             "app.suno_configured", return_value=True
         ), patch("app.queue_new_client_assignments", return_value=1) as clients, patch(
             "app.queue_freebie_assignments", return_value=1
-        ) as freebies, patch("app.deliver_due_actions", return_value=(7, 7, 0)) as deliver:
+        ) as freebies, patch("app.concern_reports.queue_automation", return_value=1) as concerns, patch("app.deliver_due_actions", return_value=(7, 7, 0)) as deliver:
             status, body = call_app("/api/cron/dispatch")
         self.assertEqual(status, 200)
         self.assertEqual(daily.call_args.args[1], allowed - {TRABAWHO_CHAT_ID})
@@ -42,6 +42,7 @@ class TeamWorkflowTests(unittest.TestCase):
         self.assertEqual(clients.call_args_list[1].args[1], {TRABAWHO_CHAT_ID})
         self.assertEqual(freebies.call_args.args[1], allowed)
         self.assertEqual(trab.call_args.args[1], allowed)
+        self.assertEqual(concerns.call_args.args[1], allowed)
         deliver.assert_called_once_with(allowed, limit=25)
         self.assertEqual(body["sent"], 7)
 

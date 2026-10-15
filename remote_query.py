@@ -29,6 +29,8 @@ def main() -> None:
     summary = commands.add_parser("daily-summary", help="Read-only Done Deal counts, total and average preview")
     summary.add_argument("--group", type=int)
     summary.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
+    concerns = commands.add_parser("concerns", help="Read-only daily concerns preview")
+    concerns.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
     referrals = commands.add_parser("referrals")
     referrals.add_argument("--audit", action="store_true", help="Read-only report preview using live sales sources")
     commands.add_parser("dispatch", help="Run the shared dispatcher for all approved teams")
@@ -88,6 +90,8 @@ def main() -> None:
     elif args.command == "daily-summary":
         params = {k: v for k, v in {"group": args.group, "date": args.date}.items() if v is not None}
         path = "/api/reports/daily-summary?" + urllib.parse.urlencode(params)
+    elif args.command == "concerns":
+        path = "/api/reports/concerns" + ("?" + urllib.parse.urlencode({"date": args.date}) if args.date else "")
     elif args.command == "referrals":
         path = "/api/referrals/audit" if args.audit else "/api/referrals/status"
     elif args.command == "dispatch":

@@ -91,6 +91,9 @@ def request(
 
 def save_update(update: dict, allowed: set[int]) -> bool:
     result = request("rpc/insights_ingest_update", {"p_update": update, "p_allowed_ids": sorted(allowed)})
+    if result:
+        from concern_reports import observe_topic
+        observe_topic(update, allowed)
     return bool(result)
 
 

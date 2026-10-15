@@ -38,6 +38,7 @@ import referral_incentives
 import database_scheduler
 import done_deal_tracking
 import team_planning
+import concern_reports
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -57,7 +58,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-15.02"
+AUTOMATION_VERSION = "2026-10-15.03"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -279,6 +280,24 @@ def daily_plan_route(environ, start_response):
         return response(start_response, 403, {"ok": False})
     except Exception as error:
         print(f"Daily plan query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+    return response(start_response, 200, {"ok": True, **data})
+
+
+def concerns_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    now = dt.datetime.now(dt.timezone.utc)
+    args = parse_qs(environ.get("QUERY_STRING", ""))
+    try:
+        date = dt.date.fromisoformat(args["date"][0]) if args.get("date") else now.astimezone(MANILA).date()
+        data = concern_reports.snapshot(date, allowed_chat_ids(), now)
+    except PermissionError:
+        return response(start_response, 403, {"ok": False})
+    except ValueError:
+        return response(start_response, 400, {"ok": False, "error": "invalid concerns date"})
+    except Exception as error:
+        print(f"Concerns preview failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, **data})
 
@@ -603,6 +622,11 @@ def dispatch_route(environ, start_response):
     queue_errors = []
     try:
         allowed = allowed_chat_ids()
+        try:
+            queued += concern_reports.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as concerns_error:
+            queue_errors.append("concerns")
+            print(f"Concerns queue failed: {type(concerns_error).__name__}")
         if os.environ.get("SUPABASE_DB_URL"):
             try:
                 if claim_automation_slot(allowed, dt.datetime.now(dt.timezone.utc),
@@ -832,6 +856,8 @@ def app(environ, start_response):
         return daily_plan_route(environ, start_response)
     if path == "/api/reports/daily-summary" and method == "GET":
         return daily_summary_route(environ, start_response)
+    if path == "/api/reports/concerns" and method == "GET":
+        return concerns_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/scheduler" and method in {"GET", "POST"}:
@@ -840,6 +866,6 @@ def app(environ, start_response):
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/reports/daily-summary", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/reports/daily-summary", "/api/reports/concerns", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

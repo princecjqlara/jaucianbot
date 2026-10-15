@@ -1,5 +1,22 @@
 # Telegram group insights
 
+Concerns posted in the six Veo teams and Trabawho are collected in a separate
+manager report in DAILY REPORTS after 00:05 PHT for the previous Philippine day.
+The first scheduled run publishes a current-day setup preview. Each report
+groups posts by team, shows the member and an excerpt, and links to the original
+message with its UTC timestamp and archive source. Attachments need manual
+review; replies remain visible and the bot does not infer whether an issue is
+resolved. Empty placeholders and the standard topic-opening instruction are
+omitted. Long reports split into safe Telegram messages, with durable keys to
+prevent duplicate delivery. Archive failures retry rather than report no issues.
+Coverage begins October 15, 2026; after downtime the latest completed day is
+recovered. Earlier dates can be reviewed with
+`./remote_windows.ps1 concerns --date YYYY-MM-DD` (read-only, no delivery).
+Lyn topic 91 and Ollie 2 topic 43 are monitored as candidates awaiting title
+verification. Future named topic creation/rename events identify Concerns topics
+in approved groups automatically, including groups outside the seven teams.
+Other topics and historical messages absent from the archive are not included.
+
 Member-facing instructions: [Veo and Suno handbook (PDF)](docs/Veo-and-Suno-Member-Handbook.pdf)
 and [editable handbook source](docs/member-handbook.md). The handbook includes
 client ownership, handovers, availability, Veo freebies and deals, Suno delivery
