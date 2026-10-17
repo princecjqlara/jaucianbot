@@ -14,6 +14,21 @@ never bypasses missed-offer pauses or releases an existing client assignment.
 Round-robin priority still favors eligible members with fewer clients; zero
 available briefs means the team must wait for new eligible clients.
 
+Veo and Trabawho also accept today's current-hour poll selections as client
+availability. These selections last only for the selected hours; `/ready` still
+starts continuous mode. An explicit `/busy` excludes the member until `/ready`.
+A missed offer requires `/ready` or a newer selection in the poll part covering
+the current hour. Editing another part, a prior-day vote, or the next hour alone
+cannot resume a missed offer. A withdrawn selection or an hour ending cancels
+an hourly offer before delivery; delivered offers retain their acceptance window.
+Reservations remain atomic, and status reads never create readiness records.
+Reservation releases also require the exact acquired revision: a delayed retry
+cannot release a newer reservation even if the same client key is reused.
+Authenticated new-client status reports a team `queue_state` and
+`member_waiting_reasons`, distinguishing waiting clients, member availability,
+queued offers and unanswered offers. Legitimate Busy/missed-offer pauses are
+not treated as scheduler outages.
+
 Concerns posted in the six Veo teams and Trabawho are collected in a separate
 manager report in DAILY REPORTS after 00:05 PHT for the previous Philippine day.
 The first scheduled run publishes a current-day setup preview. Each report
@@ -60,6 +75,9 @@ Checkpoints are cancelled scheduler records and cannot be sent to Telegram.
 Deployments run `validate_project.py` as a required build step. Missing or failing
 regression tests stop the build. The tests run with production credentials removed
 from their process environment.
+The gate explicitly requires the client/poll queue, recovery, scheduler, and
+validation regression suites; missing or empty critical files stop deployment
+even when unrelated tests are still present.
 
 The database has an independent two-minute watchdog that restores the named
 dispatcher if it is missing, disabled, rescheduled, or given an incorrect command.
@@ -220,6 +238,10 @@ With `NEW_CLIENT_READY_ENABLED=true`, **all six Veo teams and Suno/Trabawho**
 use `/ready` and `/busy` in their own New Clients topics: Veo Ollie `5758`,
 Veo Jessa `3725`, Veo `27622`, Veo Jel `4180`, and Trabawho `7673`.
 `/ready` starts continuous automatic assignments, independently of the hourly poll.
+Veo and Trabawho additionally join the queue during the hours selected in today's
+poll, unless explicitly Busy or paused after a later missed offer. A newer vote
+in the poll part covering the current hour can resume that pause; `/ready`
+remains the way to clear an explicit Busy state.
 After valid `WORKING`, the member stays in the queue for the next client until
 `/busy`. Only one unanswered offer is allowed at a time. Missing a delivered
 acceptance deadline pauses automatic offers until a newer `/ready`, even across

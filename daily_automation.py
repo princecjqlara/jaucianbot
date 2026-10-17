@@ -63,6 +63,7 @@ GROUPS = {
     },
     -1003647732254: {
         "name": "Veo",
+        "new_client_hourly_ready": True,
         "new_client_timeout_minutes": 30,
         "new_client_ready_rotation": True,
         "new_client_retry_cooldown_minutes": 30,
@@ -130,6 +131,7 @@ GROUPS = {
 TRABAWHO_CHAT_ID = -1002894511895
 TRABAWHO = {
     "name": "Trabawho?",
+    "new_client_hourly_ready": True,
     "general": 1,
     "announcements": 16,
     "active": 7581,

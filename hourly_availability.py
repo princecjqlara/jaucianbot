@@ -140,6 +140,28 @@ def current_members(users: list[dict], now: dt.datetime) -> list[dict]:
     return [user for user in users if "available_hours" not in user or hour in user["available_hours"]]
 
 
+def current_votes(chat_id: int, now: dt.datetime) -> list[dict]:
+    """Return today's current-hour selections with that poll part's own revision.
+
+    A newer vote in another part must not revive an earlier missed offer.
+    These reads do not create readiness or deliver messages.
+    """
+    local = now.astimezone(MANILA)
+    if not enabled(local.date()):
+        return []
+    result = []
+    for row in read_records(f"hourly-answer:{chat_id}:{local.date().isoformat()}:", {chat_id}):
+        p = row["payload"]
+        if (p.get("work_date") != local.date().isoformat()
+                or p.get("part") != local.hour // 8 or local.hour not in (p.get("hours") or [])):
+            continue
+        result.append({"user_id": int(p["user_id"]), "user_name": p["user_name"],
+                       "updated_at": row["updated_at"], "update_id": int(p.get("update_id") or 0),
+                       "available_until": (local.replace(minute=0, second=0, microsecond=0)
+                                           + dt.timedelta(hours=1)).astimezone(dt.timezone.utc).isoformat()})
+    return result
+
+
 def hour_label(hour: int) -> str:
     start = dt.datetime(2000, 1, 1, hour)
     end = start + dt.timedelta(hours=1)

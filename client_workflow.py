@@ -58,12 +58,17 @@ def guide(chat_id: int) -> str:
         ending += " FREEBIE tasks still use FREEBIE SENT + token."
     setup = ("PAGE SETUP PENDING: client and freebie assignments are paused until the team page is connected. Availability polls and reminders are active.\n\n"
              if page_mapping_pending(config) else "")
+    availability = ("Your current-hour selection in today's hourly poll also joins the queue during your selected hours. "
+                    "After a missed offer, send /ready or update the current-hour poll selection to resume. "
+                    "After /busy, send /ready to rejoin.\n\n" if ready.poll_enabled(chat_id) else "")
+    resume = "/ready or a new current-hour poll selection" if ready.poll_enabled(chat_id) else "/ready"
     return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
+            availability +
             "Use the buttons or commands in NEW CLIENTS:\n"
             "1. Send /ready ONCE to receive clients. WORKING keeps you in the queue for the next client.\n"
             "2. Send /busy IMMEDIATELY when full, on break, or ending your shift. Your accepted clients stay with you.\n"
             f"3. Tap Accept client after reviewing the brief, or send WORKING A1B2C3D4 using the actual token. Accept within {ready.ACCEPTANCE_MINUTES} minutes of delivery. Wait for owner confirmation before contacting the client.\n"
-            f"4. Reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until /ready.\n"
+            f"4. Reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until {resume}.\n"
             "5. TAKE is STILL AVAILABLE: tap Take client or send TAKE + token during the 10-minute OPEN TAKE window. First eligible claim wins.\n"
             "6. Tap Client list or send /clients: see available clients, reserved offers, current editors, and pending handovers.\n"
             "Waiting without a client? Tap Why no client? or send /queue to see your queue status and what to do next.\n"

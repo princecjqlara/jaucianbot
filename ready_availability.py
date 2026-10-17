@@ -22,6 +22,11 @@ def enabled(chat_id: int) -> bool:
     return chat_id in AVAILABILITY_GROUPS and os.environ.get("NEW_CLIENT_READY_ENABLED", "").strip().lower() == "true"
 
 
+def poll_enabled(chat_id: int) -> bool:
+    from daily_automation import AVAILABILITY_GROUPS
+    return enabled(chat_id) and bool(AVAILABILITY_GROUPS[chat_id].get("new_client_hourly_ready"))
+
+
 def review_contact(chat_id: int) -> str:
     return "Ollie" if chat_id == OLLIE else "your team lead"
 
@@ -49,6 +54,8 @@ def available(chat_id: int, now: dt.datetime, history: list[dict], *, recover: b
         recover_orphaned_reservations(chat_id, now, history, people=people)
     for row in people:
         p = row["payload"]
+        if p.get("ready_source") == "hourly":
+            continue  # Re-evaluate the selected hour, withdrawals and missed offers below.
         since, until = _utc_time(p.get("ready_at")), _utc_time(p.get("ready_until"))
         if not since or since > now:
             continue
@@ -82,6 +89,47 @@ def available(chat_id: int, now: dt.datetime, history: list[dict], *, recover: b
             continue
         result.append({"user_id": p["user_id"], "user_name": p["user_name"],
                        "updated_at": p["ready_at"], "ready_record": row})
+    if poll_enabled(chat_id):
+        result.extend(_poll_available(chat_id, now, team_history, people, missed,
+                                      {int(u["user_id"]) for u in result}))
+    return result
+
+
+def _poll_available(chat_id: int, now: dt.datetime, history: list[dict], people: list[dict],
+                    missed: dict[int, dt.datetime], already_ready: set[int]) -> list[dict]:
+    from hourly_availability import current_votes
+    from new_client_automation import _utc_time
+    records_by_user = {int(row["payload"]["user_id"]): row for row in people}
+    result = []
+    for vote in current_votes(chat_id, now):
+        user_id = int(vote["user_id"])
+        if user_id in already_ready:
+            continue
+        row = records_by_user.get(user_id)
+        p = (row or {}).get("payload") or {}
+        since = _utc_time(vote.get("updated_at"))
+        if (p.get("state") == "busy" or not since or since > now
+                or (user_id in missed and since <= missed[user_id])):
+            continue
+        if p.get("state") == "reserved" and not any(
+            a["payload"].get("new_client_reservation_key") == p.get("reservation_key")
+            and p.get("reservation_key")
+            and (a.get("status") == "cancelled" or a["payload"].get("new_client_acknowledged_at"))
+            for a in history
+        ):
+            continue  # A committed offer or in-flight enqueue still owns the lock.
+        if any(int(a["payload"].get("new_client_assignee_id") or 0) == user_id
+               and a.get("status") != "cancelled"
+               and not a["payload"].get("new_client_acknowledged_at") for a in history):
+            continue
+        payload = dict(p, user_id=user_id, user_name=vote["user_name"], ready_source="hourly",
+                       state=p.get("state", "ready"), ready_at=since.isoformat(),
+                       ready_until=vote["available_until"], continuous=False,
+                       update_id=max(int(p.get("update_id") or 0), vote["update_id"]))
+        # Status is read-only. Persist this snapshot only if an actual offer reserves it.
+        record = dict(row or {"id": None, "updated_at": None}, payload=payload)
+        result.append({"chat_id": chat_id, "user_id": user_id, "user_name": vote["user_name"],
+                       "updated_at": since.isoformat(), "ready_record": record})
     return result
 
 
@@ -114,7 +162,7 @@ def recover_orphaned_reservations(chat_id: int, now: dt.datetime, history: list[
         p = row["payload"]
         revision = _utc_time(row.get("updated_at"))
         key = p.get("reservation_key")
-        if (p.get("state") != "reserved" or not p.get("continuous") or not key
+        if (p.get("state") != "reserved" or not (p.get("continuous") or p.get("ready_source") == "hourly") or not key
                 or not revision or now - revision < RESERVATION_LEASE):
             continue
         if any(a["payload"].get("new_client_reservation_key") == key for a in history if int(a["chat_id"]) == chat_id):
@@ -140,37 +188,69 @@ def recover_orphaned_reservations(chat_id: int, now: dt.datetime, history: list[
 def reserve(user: dict, key: str, now: dt.datetime) -> bool:
     row = user["ready_record"]
     p = row["payload"]
+    if p.get("ready_source") == "hourly":
+        if now >= dt.datetime.fromisoformat(p["ready_until"]):
+            return False
+        if row.get("id") is None:
+            rows = request("scheduled_actions?on_conflict=dedupe_key&select=id,updated_at", {
+                "chat_id": user["chat_id"], "action_type": "message", "status": "cancelled",
+                "dedupe_key": f"ready-member:{user['chat_id']}:{p['user_id']}",
+                "scheduled_for": now.isoformat(),
+                "payload": dict(p, state="reserved", reservation_key=key),
+            }, prefer="resolution=ignore-duplicates,return=representation") or []
+            if not rows:
+                return False  # Another reservation or a newer explicit command won.
+            row.update(id=rows[0]["id"], updated_at=rows[0]["updated_at"])
+            user["reservation_revision"] = rows[0]["updated_at"]
+            return True
     filters = {
         "select": "id", "id": f"eq.{row['id']}", "status": "eq.cancelled",
         "updated_at": f"eq.{row['updated_at']}", "payload->>state": f"eq.{p['state']}",
     }
-    if not p.get("continuous"):
+    if not p.get("continuous") and p.get("ready_source") != "hourly":
         filters["payload->>ready_until"] = f"gt.{now.isoformat()}"
     # Always change the revision, even when reservation follows READY in the same tick.
     revision = max(now, dt.datetime.fromisoformat(row["updated_at"]) + dt.timedelta(microseconds=1))
-    return bool(request("scheduled_actions?" + urllib.parse.urlencode(filters),
+    reserved = bool(request("scheduled_actions?" + urllib.parse.urlencode(filters),
         {"payload": dict(p, state="reserved", reservation_key=key), "updated_at": revision.isoformat()},
         method="PATCH", prefer="return=representation"))
+    if reserved:
+        user["reservation_revision"] = revision.isoformat()
+    return reserved
 
 
 def release_reservation(user: dict, key: str, now: dt.datetime) -> None:
     row = user["ready_record"]
+    revision = user.get("reservation_revision")
+    if not revision:
+        return  # Without an acquired revision, ownership of this lock is unproven.
+    released_at = max(now, dt.datetime.fromisoformat(revision) + dt.timedelta(microseconds=1))
     request("scheduled_actions?" + urllib.parse.urlencode({
         "id": f"eq.{row['id']}", "payload->>reservation_key": f"eq.{key}",
-        "payload->>state": "eq.reserved", "select": "id",
-    }), {"payload": row["payload"], "updated_at": now.isoformat()},
+        "payload->>state": "eq.reserved", "updated_at": f"eq.{revision}", "select": "id",
+    }), {"payload": row["payload"], "updated_at": released_at.isoformat()},
         method="PATCH", prefer="return=representation")
 
 
-def reservation_active(action: dict) -> bool:
+def reservation_active(action: dict, now: dt.datetime | None = None) -> bool:
     """A BUSY or newer READY command withdraws an offer that has not been delivered."""
     p = action["payload"]
     rows = request("scheduled_actions?" + urllib.parse.urlencode({
-        "select": "id", "dedupe_key": f"eq.ready-member:{action['chat_id']}:{p['new_client_assignee_id']}",
+        "select": "id,payload", "dedupe_key": f"eq.ready-member:{action['chat_id']}:{p['new_client_assignee_id']}",
         "payload->>state": "eq.reserved", "payload->>reservation_key": f"eq.{p['new_client_reservation_key']}",
         "limit": 1,
     })) or []
-    return bool(rows)
+    if not rows:
+        return False
+    record = rows[0].get("payload") or {}
+    if record.get("ready_source") != "hourly":
+        return True
+    from hourly_availability import current_votes
+    now = now or dt.datetime.now(dt.timezone.utc)
+    return (poll_enabled(int(action["chat_id"]))
+            and now < dt.datetime.fromisoformat(record["ready_until"])
+            and any(int(v["user_id"]) == int(p["new_client_assignee_id"])
+                    for v in current_votes(int(action["chat_id"]), now)))
 
 
 def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
@@ -252,17 +332,23 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     from client_workflow import guide, menu
     config = AVAILABILITY_GROUPS[chat_id]
     internal = str(abs(chat_id))[3:]
+    version = f"{GUIDE_VERSION}-hourly" if poll_enabled(chat_id) else GUIDE_VERSION
+    availability = ("Your selected hours in today's hourly poll also enter the client queue during those hours. "
+                    "A missed offer needs /ready or a newer current-hour poll selection. "
+                    "After /busy, send /ready to rejoin.\n\n" if poll_enabled(chat_id) else "")
+    resume = "/ready or a new current-hour poll selection" if poll_enabled(chat_id) else "/ready"
     queued = int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
-        dedupe_key=f"ready-instructions:v{GUIDE_VERSION}:{chat_id}:{now.astimezone(MANILA).date()}",
+        dedupe_key=f"ready-instructions:v{version}:{chat_id}:{now.astimezone(MANILA).date()}",
         payload={"message_thread_id": thread_id, "text": guide(chat_id), "reply_markup": menu()}))
     queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
-        dedupe_key=f"ready-rollout:v{GUIDE_VERSION}:{chat_id}", payload={
+        dedupe_key=f"ready-rollout:v{version}:{chat_id}", payload={
             "message_thread_id": config["announcements"],
             "text": f"{config['name'].upper()} - CLIENT LIST + HANDOVERS\n\n"
                     f"New offers: {ACCEPTANCE_MINUTES} minutes to accept; warning after {ACCEPTANCE_MINUTES - WARNING_BEFORE_MINUTES} minutes. Older offers keep their printed deadline.\n"
                     "See who is available and who handles each client: /clients in NEW CLIENTS.\n"
                     "Send /ready ONCE to receive clients; WORKING keeps you queued for the next client. "
-                    "Send /busy IMMEDIATELY when full or leaving. A missed acceptance deadline means PAUSED until /ready.\n\n"
+                    f"Send /busy IMMEDIATELY when full or leaving. A missed acceptance deadline means PAUSED until {resume}.\n\n"
+                    + availability +
                     "New buttons: Accept client, Take client, Client list, and Hand over. "
                     "Only the current editor can request a handover. The chosen teammate must accept before ownership changes.\n\n"
                     "Buttons not working? Use /ready, /busy, WORKING + token, or TAKE + token in NEW CLIENTS. "

@@ -1006,7 +1006,7 @@ def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
         for user in current_members(_active_members(chat_id, local_now.date()), now)
     )
     if payload.get("new_client_reservation_key") and not (action.get("sent_at") or payload.get("_first_delivery_at")):
-        is_active = ready.reservation_active(action)
+        is_active = ready.reservation_active(action, now)
     if not is_active and not action.get("sent_at"):
         cancelled = dict(payload)
         cancelled["new_client_cancelled_at"] = now.isoformat()
@@ -1232,6 +1232,18 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
                 "state": reason,
                 "retry_at_utc": paused[user_id].isoformat() if user_id in paused else None,
             })
+        ready_count = sum(int(user["user_id"]) not in set(paused).union(open_members)
+                          for user in (ready_members if ready_members is not None else current_members(members, now)))
+        waiting_reasons = Counter(member["state"] for member in member_status)
+        queue_state = (
+            "waiting_for_page_mapping" if page_mapping_pending(GROUPS[chat_id]) else
+            "source_unavailable" if not source_available else
+            "ready_for_assignment" if ready_count and sum(available.values()) else
+            "awaiting_delivery" if waiting_reasons["awaiting_delivery"] else
+            "awaiting_member_acceptance" if waiting_reasons["awaiting_working_reply"] or waiting_reasons["awaiting_volunteer_claim"] else
+            "waiting_for_clients" if not sum(available.values()) else
+            "waiting_for_member_availability"
+        )
         result.append({
             "team": GROUPS[chat_id]["name"],
             "chat_id": chat_id,
@@ -1246,8 +1258,12 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "reply_deadline_minutes": _timeout_minutes(chat_id),
             "ready_window_minutes": None,
             "continuous_ready_enabled": ready.enabled(chat_id),
-            "missed_offer_resume": "ready_command" if ready.enabled(chat_id) else None,
-            "ready_today": sum(int(user["user_id"]) not in set(paused).union(open_members) for user in (ready_members if ready_members is not None else current_members(members, now))),
+            "hourly_poll_ready_enabled": ready.poll_enabled(chat_id),
+            "missed_offer_resume": ("ready_command_or_new_hourly_vote" if ready.poll_enabled(chat_id)
+                                     else "ready_command" if ready.enabled(chat_id) else None),
+            "ready_today": ready_count,
+            "queue_state": queue_state,
+            "member_waiting_reasons": dict(waiting_reasons),
             "retry_cooldown_minutes": GROUPS[chat_id].get("new_client_retry_cooldown_minutes", 30) if ready_rotation and not ready.enabled(chat_id) else None,
             "paused_members": [
                 {"user_id": user["user_id"], "name": user.get("user_name")}
