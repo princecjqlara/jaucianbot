@@ -9,11 +9,13 @@ from urllib.parse import parse_qs, urlsplit
 import hourly_availability as hourly
 import new_client_automation as clients
 import ready_availability as ready
-from daily_automation import TRABAWHO_CHAT_ID
+from daily_automation import TRABAWHO_CHAT_ID, GROUPS
 from test_ready_handoffs import NOW, person, ready_offer
 
 
-VEO = -1003647732254
+# Retain historical hourly-lock recovery regressions with the old policy
+# explicitly selected. Current Suno/VEO readiness is tested separately.
+VEO = TRABAWHO_CHAT_ID
 
 
 def vote(minutes=-1, user_id=11):
@@ -24,10 +26,21 @@ def vote(minutes=-1, user_id=11):
 
 class PollReadyTests(unittest.TestCase):
     def setUp(self):
+        from page_access_fixture import granted_access
+        granted_access(self)
+        legacy = patch.object(ready, "renewal_required", side_effect=lambda chat: chat in GROUPS)
+        legacy.start()
+        self.addCleanup(legacy.stop)
         env = patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true",
                                        "HOURLY_AVAILABILITY_START_DATE": "2026-10-09"})
         env.start()
         self.addCleanup(env.stop)
+        suno = patch("suno_store.suno_configured", return_value=True)
+        suno.start()
+        self.addCleanup(suno.stop)
+        source = patch.object(clients, "new_client_action_matches_source", return_value=True)
+        source.start()
+        self.addCleanup(source.stop)
 
     def available(self, chat=VEO, *, people=None, history=None, votes=None, now=NOW):
         with patch.object(ready, "records", return_value=people or []), \
@@ -236,7 +249,7 @@ class PollReadyTests(unittest.TestCase):
         row = person("busy")
         row["payload"].update(ready_source="hourly")
         update = {"update_id": 200, "message": {"message_id": 200, "chat": {"id": VEO},
-            "from": {"id": 11, "first_name": "Alex"}, "message_thread_id": 27622,
+            "from": {"id": 11, "first_name": "Alex"}, "message_thread_id": 7673,
             "date": int(NOW.timestamp()), "text": "/ready"}}
         saved = []
 

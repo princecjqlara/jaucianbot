@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 import done_deal_tracking
 import team_planning
@@ -70,7 +71,9 @@ GROUPS = {
         "announcements": 248,
         "freebie": 26249,
         "contact_thread": 27622,
-        "crm_pages": {"Azshinari": "d3f40d05-aa54-498e-bff7-e9c4410b7471", "SAMA KANA MEDIA": "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"},
+        "crm_pages": {"Sama Ka Na Media": "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"},
+        "client_page_scope": "Sama Ka Na Media",
+        "page_scope_start": "2026-10-22",
         "active": 25893,
         "done": 1135,
         "close": 1132,
@@ -144,7 +147,14 @@ TRABAWHO = {
     "new_client_ready_rotation": True,
     "new_client_retry_cooldown_minutes": 30,
 }
-AVAILABILITY_GROUPS = {**GROUPS, TRABAWHO_CHAT_ID: TRABAWHO}
+MAKATA_CHAT_ID = -1004498344479
+MAKATA = {**TRABAWHO, "name": "Suno Makata", "general": 1, "announcements": 4,
+          "receipts": 8, "contact_thread": 13, "active": 0, "songs": 0,
+          "suno_page_family": "makata"}
+SUNO_GROUPS = {TRABAWHO_CHAT_ID: TRABAWHO}
+if os.environ.get("SUNO_MAKATA_ENABLED", "").strip().lower() == "true":
+    SUNO_GROUPS[MAKATA_CHAT_ID] = MAKATA
+AVAILABILITY_GROUPS = {**GROUPS, **SUNO_GROUPS}
 
 
 def page_mapping_pending(config: dict) -> bool:
@@ -448,21 +458,23 @@ def queue_daily_polls(
     *,
     existing_chats: set[int] | None = None,
 ) -> int:
-    from hourly_availability import enabled, queue_polls
-    if enabled(work_date):
-        return queue_polls(work_date, now, AVAILABILITY_GROUPS, allowed)
-    queued = 0
+    from hourly_availability import enabled_for_chat, queue_polls
+    from automation_controls import new_clients_enabled
+    hourly_chats = {chat for chat in allowed if enabled_for_chat(chat, work_date)}
+    queued = queue_polls(work_date, now, AVAILABILITY_GROUPS, hourly_chats) if hourly_chats else 0
     existing_chats = existing_chats or set()
     for chat_id, config in AVAILABILITY_GROUPS.items():
-        if chat_id not in allowed or chat_id in existing_chats:
+        if chat_id not in allowed or chat_id in existing_chats or chat_id in hourly_chats:
             continue
+        if not config.get("active"):
+            continue  # A newly configured Suno team's availability topic is being created.
         day_label = "TODAY" if work_date == now.astimezone(MANILA).date() else "TOMORROW"
         payload = {
             "question": (
-                f"Hi team! Will you be active {day_label.lower()}?\n"
-                f"{work_date.strftime('%A, %B %d, %Y')} (PHT)"
+                (f"{config['client_page_scope']}\n" if config.get("client_page_scope") and new_clients_enabled(chat_id) else "")
+                + f"Active {day_label.lower()}?\n{work_date:%A, %B %d, %Y} (PHT)"
             ),
-            "options": ["✅ Yes, I'll be active", "❌ No, I won't be active"],
+            "options": ["Yes", "No"],
             "is_anonymous": False,
             "allows_multiple_answers": False,
             "disable_notification": False,
@@ -743,6 +755,9 @@ def queue_daily_closeout(report_date: dt.date, now: dt.datetime, allowed: set[in
         report = build_group_report(chat_id, report_date, report_counts.get(chat_id),
                                     plan_date=plan_date, plan_count=plan_counts.get(chat_id))
         report_parts = split_message(report)
+        import report_topics
+        if report_topics.enabled():
+            report_parts = []  # The organized public report owns these sections.
         for part_number, part in enumerate(report_parts, 1):
             if len(report_parts) > 1:
                 part = f"{part}\n\nPart {part_number}"

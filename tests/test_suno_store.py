@@ -26,7 +26,7 @@ def client(client_id="1", **values):
 
 class SunoStoreTests(unittest.TestCase):
     def test_ready_recheck_targets_the_mapped_contact_and_retains_page_identity(self):
-        action = {"payload": {"new_client_contact_id": "1", "new_client_contact_page_id": SOURCE_ID,
+        action = {"chat_id": -1002894511895, "payload": {"new_client_contact_id": "1", "new_client_contact_page_id": SOURCE_ID,
                               "new_client_contact_psid": "1"}}
         with patch.dict("os.environ", SETTINGS, clear=True), patch("suno_store.suno_request", return_value=[client()]) as request:
             self.assertTrue(suno_contact_assignable(action))

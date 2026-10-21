@@ -16,6 +16,7 @@ import new_client_automation as clients
 import ready_availability as ready
 from daily_automation import AVAILABILITY_GROUPS, GROUPS, TRABAWHO_CHAT_ID
 from test_hourly_assignments import NOW, offer
+from page_access_fixture import granted_access
 
 
 def ready_offer():
@@ -41,6 +42,7 @@ def command(text="/ready", *, update_id=101, minutes=0, thread=5758):
 
 class ReadyHandoffTests(unittest.TestCase):
     def setUp(self):
+        granted_access(self)
         p = patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true", "NEW_CLIENT_VOLUNTEER_ENABLED": "true"})
         p.start()
         self.addCleanup(p.stop)
@@ -50,17 +52,19 @@ class ReadyHandoffTests(unittest.TestCase):
             self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=14, seconds=59), [])), 1)
             self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=15), []), [])
 
-    def test_fresh_ready_starts_continuous_mode_and_stale_ready_does_not(self):
-        for age, continuous in ((0, True), (-16, False)):
+    def test_veo_ready_is_bounded_and_stale_ready_does_not_reopen_window(self):
+        for age in (0, -61):
             with patch.object(ready, "request", return_value=[{"id": 900}]) as request, patch.object(ready, "enqueue_scheduled_action"):
                 ready.handle(command(minutes=age), {ready.OLLIE}, NOW)
-            self.assertEqual(request.call_args.args[1]["payload"]["continuous"], continuous)
+            self.assertFalse(request.call_args.args[1]["payload"]["continuous"])
+            self.assertEqual(request.call_args.args[1]["payload"]["ready_until"],
+                             (NOW + dt.timedelta(minutes=age + 60)).isoformat())
 
-    def test_continuous_ready_survives_fifteen_minutes_and_day_boundary(self):
+    def test_legacy_veo_continuous_ready_expires_after_sixty_minutes(self):
         with patch.object(ready, "records", return_value=[person(continuous=True)]):
-            self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(days=1), [])), 1)
+            self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(days=1), []), [])
 
-    def test_working_reuses_reservation_for_next_client_without_another_ready(self):
+    def test_working_requires_another_ready_before_next_client(self):
         row = ready_offer()
         row.update(status="cancelled")
         row["payload"].update(new_client_acknowledged_at=(NOW + dt.timedelta(minutes=1)).isoformat(),
@@ -68,7 +72,7 @@ class ReadyHandoffTests(unittest.TestCase):
         member = person("reserved", continuous=True)
         member["payload"]["reservation_key"] = "client-1"
         with patch.object(ready, "records", return_value=[member]):
-            self.assertEqual(len(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=20), [row])), 1)
+            self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=20), [row]), [])
             member["payload"]["state"] = "busy"
             self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=20), [row]), [])
 
@@ -77,7 +81,7 @@ class ReadyHandoffTests(unittest.TestCase):
         with patch.object(ready, "records", return_value=[person(continuous=True)]):
             self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(minutes=1), [row]), [])
 
-    def test_assignment_loop_continues_after_working_then_stops_on_missed_deadline(self):
+    def test_assignment_loop_waits_for_new_ready_after_working(self):
         member = person(continuous=True)
         history = []
         contacts = [{"id": f"client-{n}", "page_id": "page", "psid": f"person-{n}",
@@ -99,7 +103,10 @@ class ReadyHandoffTests(unittest.TestCase):
             first["payload"]["_first_delivery_at"] = NOW.isoformat()
             msg = command(f"WORKING {first['payload']['new_client_token']}", minutes=1)["message"]
             self.assertTrue(clients._record_confirmation(first, msg, NOW + dt.timedelta(minutes=1), history=history))
-            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=1), {ready.OLLIE}), 1)
+            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=1), {ready.OLLIE}), 0)
+            member["payload"].update(state="ready", ready_at=(NOW + dt.timedelta(minutes=2)).isoformat(),
+                                     ready_until=(NOW + dt.timedelta(minutes=62)).isoformat(), continuous=False)
+            self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=2), {ready.OLLIE}), 1)
             self.assertNotEqual(history[0]["payload"]["new_client_contact_id"], history[1]["payload"]["new_client_contact_id"])
             history[1]["payload"]["_first_delivery_at"] = (NOW + dt.timedelta(minutes=1)).isoformat()
             self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=6), {ready.OLLIE}), 0)
@@ -194,9 +201,9 @@ class ReadyHandoffTests(unittest.TestCase):
         with patch.object(ready, "records", return_value=[person()]):
             self.assertEqual(len(ready.available(ready.OLLIE, NOW, [row])), 1)
 
-    def test_delayed_ready_update_does_not_extend_the_fifteen_minutes(self):
+    def test_delayed_ready_update_does_not_extend_the_sixty_minutes(self):
         with patch.object(ready, "request", return_value=[{"id": 900}]) as request, patch.object(ready, "enqueue_scheduled_action", return_value=True) as enqueue:
-            ready.handle(command(minutes=-16), {ready.OLLIE}, NOW)
+            ready.handle(command(minutes=-61), {ready.OLLIE}, NOW)
         self.assertLess(request.call_args.args[1]["payload"]["ready_until"], NOW.isoformat())
         self.assertIn("expired", enqueue.call_args.kwargs["payload"]["text"])
 
@@ -249,9 +256,10 @@ class ReadyHandoffTests(unittest.TestCase):
             self.assertIn("your acceptance turn has ended", ended.call_args.kwargs["payload"]["text"])
             take.assert_not_called()
             self.assertEqual(row["payload"]["new_client_phase"], "direct")
-        with patch.object(handoffs, "request", return_value=[{"status": "sent", "sent_at": (NOW + dt.timedelta(minutes=6)).isoformat()}]), patch.object(volunteers, "open_window") as take:
+        with patch.object(handoffs, "request", return_value=[{"status": "sent", "sent_at": (NOW + dt.timedelta(minutes=6)).isoformat()}]), patch.object(volunteers, "open_window") as take, patch.object(volunteers, "update_new_client_action", return_value=True), patch.object(handoffs, "close_offers"):
             volunteers.release(row, NOW + dt.timedelta(minutes=6))
-            take.assert_called_once()
+            take.assert_not_called()
+            self.assertEqual(row["payload"]["new_client_phase"], "expired")
 
     def test_failed_end_notice_cannot_open_take_or_release_reservation(self):
         row = ready_offer()
@@ -267,14 +275,14 @@ class ReadyHandoffTests(unittest.TestCase):
         row["payload"]["new_client_response_minutes"] = 20
         self.assertTrue(clients._confirms_assignment(msg, row))
 
-    def test_take_still_accepts_an_hourly_available_editor_without_ready(self):
+    def test_veo_take_cannot_bypass_fifo_ready_reassignment(self):
         row = ready_offer()
         row.update(status="cancelled")
         row["payload"].update(new_client_phase="volunteer", new_client_cancelled_reason=volunteers.OPEN)
         msg = command("TAKE AABBCCDD", minutes=7)["message"]
         msg["from"]["id"] = 22
         with patch.object(clients, "_active_members", return_value=[{"user_id": 22}]), patch.object(volunteers, "start", return_value=NOW + dt.timedelta(minutes=6)), patch.object(ready, "records", return_value=[]), patch("cloud_store.new_client_actions", return_value=[row]):
-            self.assertTrue(clients._confirms_assignment(msg, row))
+            self.assertFalse(clients._confirms_assignment(msg, row))
             msg["date"] = int((NOW + dt.timedelta(minutes=16)).timestamp())
             self.assertFalse(clients._confirms_assignment(msg, row))
 
@@ -342,7 +350,7 @@ class ReadyHandoffTests(unittest.TestCase):
         p = enqueue.call_args.kwargs["payload"]
         self.assertEqual(p["new_client_response_minutes"], ready.ACCEPTANCE_MINUTES)
         self.assertTrue(p["new_client_ready_protocol"])
-        self.assertIn("notify you that your turn ended", p["text"])
+        self.assertIn("within 15 minutes", p["text"])
 
     def test_ready_webhook_never_calls_delivery_directly(self):
         raw = json.dumps(command()).encode()
@@ -363,11 +371,11 @@ class ReadyHandoffTests(unittest.TestCase):
         self.assertIn(f"ready-instructions:v{ready.GUIDE_VERSION}:", guide["dedupe_key"])
         self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v{ready.GUIDE_VERSION}:{ready.OLLIE}")
         text = guide["payload"]["text"]
-        for instruction in ("/ready", "/busy", "WORKING A1B2C3D4", "TAKE is STILL AVAILABLE", "YOUR TURN ENDED", "hourly availability polls", "FREEBIE SENT", "Older offers keep the deadline"):
+        for instruction in ("/ready", "/busy", "WORKING + token", "60 minutes", "10 minutes", "round robin", "FREEBIE SENT"):
             self.assertIn(instruction, text)
         self.assertLess(len(text), 4096)
         self.assertIn("https://t.me/c/4423057797/5758", announcement["payload"]["text"])
-        for instruction in ("/ready ONCE", "/busy IMMEDIATELY", "PAUSED", "next client"):
+        for instruction in ("/ready", "/busy", "60 minutes", "15 minutes", "10 minutes"):
             self.assertIn(instruction, text)
             self.assertIn(instruction, announcement["payload"]["text"])
 

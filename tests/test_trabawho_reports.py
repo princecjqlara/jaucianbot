@@ -12,24 +12,22 @@ NOW = dt.datetime(2026, 10, 8, 16, 5, tzinfo=dt.timezone.utc)  # Oct 9, 00:05 PH
 
 
 class DailyReportTests(unittest.TestCase):
-    def test_group_summary_is_warm_and_hides_internal_calculations(self):
+    def test_group_summary_is_short_and_hides_internal_calculations(self):
         with patch("trabawho_reports.daily_poll_counts", return_value={CHAT: {"active_workers": 10}}):
             text = build_trabawho_summary(DAY, NOW)
-        self.assertIn("Hi team!", text)
-        self.assertIn("10 teammates marked Active", text)
-        self.assertIn("Full sales and performance details", text)
+        self.assertIn("Active: 10", text)
+        self.assertIn("Details are in DAILY REPORTS", text)
         self.assertNotIn("Team quota", text)
         self.assertNotIn("Ads budget", text)
         self.assertNotIn("× 2", text)
         self.assertNotIn("₱", text)
-        self.assertIn("DAILY RECAP", text)
+        self.assertIn("SUNO RECAP", text)
         self.assertNotIn("will be shared", text)
 
     def test_missing_past_poll_does_not_ask_for_a_vote_on_yesterday(self):
         with patch("trabawho_reports.daily_poll_counts", return_value={}):
             text = build_trabawho_summary(DAY, NOW)
-        self.assertIn("No tracked Active poll responses were recorded", text)
-        self.assertIn("next workday", text)
+        self.assertIn("Active: Unrecorded", text)
         self.assertNotIn("prepare the day's assignments", text)
 
     def test_written_salary_and_user_plan_formulas_in_daily_report(self):

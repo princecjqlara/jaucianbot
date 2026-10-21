@@ -7,14 +7,17 @@ import os
 import urllib.error
 import urllib.request
 
-from daily_automation import TRABAWHO_CHAT_ID
+from daily_automation import TRABAWHO_CHAT_ID, SUNO_GROUPS
+from automation_controls import chat_enabled
 
 
 class TelegramError(RuntimeError):
     pass
 
 
-def telegram_call(method: str, payload: dict) -> dict:
+def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
+    if method not in {"getChat", "getChatMember"} and payload.get("chat_id") is not None and not chat_enabled(int(payload["chat_id"])):
+        raise TelegramError("Telegram automation is paused for this group")
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise TelegramError("Telegram bot token is not configured")
@@ -25,7 +28,7 @@ def telegram_call(method: str, payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.load(response)
     except urllib.error.HTTPError as error:
         try:
@@ -45,6 +48,9 @@ def telegram_call(method: str, payload: dict) -> dict:
 
 
 def send_scheduled_action(action: dict) -> dict:
+    from automation_controls import new_client_delivery_allowed
+    if not new_client_delivery_allowed(action):
+        raise TelegramError("New-client features are disabled for this VEO team")
     action_type = action["action_type"]
     source = action["payload"]
     common = {
@@ -53,17 +59,26 @@ def send_scheduled_action(action: dict) -> dict:
     }
     # Trabawho's General topic opens at /1, but Telegram rejects thread_id=1
     # when posting there. Omitting it targets General; named topics keep IDs.
-    is_trabawho_general = int(action["chat_id"]) == TRABAWHO_CHAT_ID and source.get("message_thread_id") == 1
+    is_trabawho_general = int(action["chat_id"]) in SUNO_GROUPS and source.get("message_thread_id") == 1
     if source.get("message_thread_id") is not None and not is_trabawho_general:
         common["message_thread_id"] = source["message_thread_id"]
     if action_type == "message":
-        for operation, field in (("deleteMessage", "delete_message_id"), ("editMessageText", "edit_message_id")):
+        if source.get("suno_create_topic"):
+            from daily_automation import MAKATA_CHAT_ID
+            if int(action["chat_id"]) != MAKATA_CHAT_ID or source["suno_create_topic"] not in {"active", "songs"}:
+                raise TelegramError("Invalid Suno topic setup")
+            result = telegram_call("createForumTopic", {"chat_id": action["chat_id"], "name": source["topic_name"]})
+            return {**result, "message_id": int(result["message_thread_id"]), "_telegram_operation": "createForumTopic"}
+        for operation, field in (("deleteMessage", "delete_message_id"), ("editMessageText", "edit_message_id"),
+                                 ("editMessageReplyMarkup", "edit_reply_markup_message_id")):
             if source.get(field) is None:
                 continue
             target = source[field]
             if isinstance(target, bool) or not isinstance(target, int) or target <= 0:
                 raise TelegramError("Invalid message operation target")
             payload = {"chat_id": action["chat_id"], "message_id": target}
+            if operation == "editMessageReplyMarkup":
+                payload["reply_markup"] = source["reply_markup"]
             if operation == "editMessageText":
                 payload["text"] = source["text"]
                 if source.get("parse_mode"):
@@ -75,6 +90,10 @@ def send_scheduled_action(action: dict) -> dict:
                 result = telegram_call(operation, payload)
             except TelegramError as error:
                 detail = str(error).casefold()
+                if operation == "editMessageReplyMarkup" and any(reason in detail for reason in (
+                    "message is not modified", "message to edit not found", "message can't be edited", "message cannot be edited",
+                )):
+                    return {"message_id": target, "_telegram_operation": operation}
                 if (operation == "deleteMessage"
                         and str(action.get("dedupe_key") or "").startswith("referral-public-poll-remove:")
                         and any(reason in detail for reason in ("message can't be deleted", "message cannot be deleted"))):

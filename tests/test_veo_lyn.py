@@ -8,6 +8,7 @@ import freebie_automation as freebies
 import hourly_availability as hourly
 import new_client_automation as clients
 import ready_availability as ready
+from page_access_fixture import granted_access
 
 LYN = -1004364797420
 OLLIE = ready.OLLIE
@@ -17,6 +18,7 @@ PERSON = {"user_id": 11, "user_name": "Alex"}
 
 class PendingPageSetupTests(unittest.TestCase):
     def setUp(self):
+        granted_access(self)
         # Preserve the unconnected-page safeguard after Lyn's pages go live.
         config = patch.dict(daily.GROUPS[LYN], {"crm_pages": {}, "pages": {}})
         config.start()
@@ -72,7 +74,7 @@ class PendingPageSetupTests(unittest.TestCase):
         guide = client_workflow.guide(LYN)
         self.assertIn("PAGE SETUP PENDING", guide)
         self.assertIn("/clients", guide)
-        self.assertIn("Hand over", guide)
+        self.assertNotIn("Hand over", guide)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import sys
 import urllib.parse
 import urllib.error
 import urllib.request
+import uuid
 
 
 def main() -> None:
@@ -20,12 +21,21 @@ def main() -> None:
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
+    suno_supply = commands.add_parser("suno-supply", help="Read aggregate Suno contact eligibility and source freshness")
+    suno_supply.add_argument("--chatbot", action="store_true", help="Read chatbot settings and recent processing instead of inventory")
     clients = commands.add_parser("clients", help="Read current client availability, editors and handover history")
     clients.add_argument("--group", type=int)
     commands.add_parser("scheduler-status", help="Read database scheduler configuration and recent HTTP results")
     scheduler_setup = commands.add_parser("configure-scheduler", help="Install or repair the database's one-minute dispatcher")
     scheduler_setup.add_argument("--verify-recovery", action="store_true", help="Test watchdog repair inside a rolled-back savepoint")
     commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
+    commands.add_parser("report-topics", help="Read named topics in DAILY REPORTS")
+    commands.add_parser("report-members", help="Read cached Telegram membership verification for capacity reports")
+    commands.add_parser("tomorrow-capacity", help="Read-only VEO average output estimates for tomorrow's actual Active voters")
+    commands.add_parser("makata-status", help="Read Makata setup, topic IDs and report subscription status")
+    commands.add_parser("makata-connect", help="Connect the fixed Makata report recipient using verified Telegram identity")
+    makata_report = commands.add_parser("makata-report", help="Queue a dated Makata report to its fixed private recipient")
+    makata_report.add_argument("--date", required=True, help="Philippine report date, YYYY-MM-DD")
     summary = commands.add_parser("daily-summary", help="Read-only Done Deal counts, total and average preview")
     summary.add_argument("--group", type=int)
     summary.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
@@ -42,9 +52,15 @@ def main() -> None:
     workers = commands.add_parser("workers")
     workers.add_argument("--group", type=int, required=True)
     workers.add_argument("--days", type=int, default=14)
+    capacity = commands.add_parser("capacity", help="Read VEO output or Suno receipt/delivery plans over completed Philippine days; use --group for Suno")
+    capacity.add_argument("--group", type=int)
+    capacity.add_argument("--days", type=int, default=14)
+    capacity.add_argument("--all-history", action="store_true", help="Backread available exports and live archive")
     schedules = commands.add_parser("schedules")
     schedules.add_argument("--status", choices=["pending", "processing", "sent", "failed", "cancelled"])
     schedules.add_argument("--limit", type=int, default=100)
+    schedules.add_argument("--group", type=int)
+    schedules.add_argument("--newest", action="store_true", help="Read newest actions first for delivery verification")
     schedule_message = commands.add_parser("schedule-message")
     schedule_message.add_argument("--group", type=int, required=True)
     schedule_message.add_argument("--at", required=True, help="ISO timestamp with UTC offset")
@@ -78,6 +94,8 @@ def main() -> None:
         path = "/api/freebies/status"
     elif args.command == "new-clients":
         path = "/api/new-clients/status"
+    elif args.command == "suno-supply":
+        path = "/api/new-clients/suno-supply" + ("?chatbot=1" if args.chatbot else "")
     elif args.command == "clients":
         path = "/api/clients" + ("?" + urllib.parse.urlencode({"group": args.group}) if args.group is not None else "")
     elif args.command in {"scheduler-status", "configure-scheduler"}:
@@ -87,6 +105,22 @@ def main() -> None:
             body = json.dumps({"verify_recovery": args.verify_recovery}).encode("utf-8")
     elif args.command == "daily-plan":
         path = "/api/reports/plan"
+    elif args.command == "report-topics":
+        path = "/api/reports/topics"
+    elif args.command == "report-members":
+        path = "/api/reports/members"
+    elif args.command == "tomorrow-capacity":
+        path = "/api/workers/capacity?tomorrow=1"
+    elif args.command == "makata-status":
+        path = "/api/suno/makata"
+    elif args.command == "makata-connect":
+        path = "/api/suno/makata"
+        method = "POST"
+        body = b"{}"
+    elif args.command == "makata-report":
+        path = "/api/suno/makata"
+        method = "POST"
+        body = json.dumps({"action": "send_report", "date": args.date, "request_id": uuid.uuid4().hex}).encode("utf-8")
     elif args.command == "daily-summary":
         params = {k: v for k, v in {"group": args.group, "date": args.date}.items() if v is not None}
         path = "/api/reports/daily-summary?" + urllib.parse.urlencode(params)
@@ -108,10 +142,18 @@ def main() -> None:
             "group": args.group,
             "days": args.days,
         })
+    elif args.command == "capacity":
+        path = "/api/workers/capacity?" + urllib.parse.urlencode({
+            **({"group": args.group} if args.group is not None else {}), "days": args.days,
+            **({"all_history": 1} if args.all_history else {})})
     elif args.command == "schedules":
         params = {"limit": args.limit}
         if args.status:
             params["status"] = args.status
+        if args.group is not None:
+            params["group"] = args.group
+        if args.newest:
+            params["newest"] = "1"
         path = "/api/schedules?" + urllib.parse.urlencode(params)
     elif args.command in {"schedule-message", "schedule-poll"}:
         action = {"disable_notification": args.silent}

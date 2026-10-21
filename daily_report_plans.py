@@ -7,7 +7,7 @@ import datetime as dt
 import urllib.parse
 
 from cloud_store import daily_poll_counts, enqueue_scheduled_action, request, record_automation_marker
-from daily_automation import AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO_CHAT_ID, money, split_message
+from daily_automation import AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO_CHAT_ID, SUNO_GROUPS, money, split_message
 
 
 def plan_lines(chat_id: int, work_date: dt.date, count: dict | None, *, heading: str = "TOMORROW'S TEAM PLAN") -> list[str]:
@@ -18,8 +18,8 @@ def plan_lines(chat_id: int, work_date: dt.date, count: dict | None, *, heading:
     else:
         active = int(count["active_workers"])
         lines.append(f"Active members: {active}")
-        quota, budget = team_planning.plan_totals(active, suno=chat_id == TRABAWHO_CHAT_ID)
-        if chat_id == TRABAWHO_CHAT_ID:
+        quota, budget = team_planning.plan_totals(active, suno=chat_id in SUNO_GROUPS)
+        if chat_id in SUNO_GROUPS:
             lines += [f"Planned client quota: {quota}",
                       f"Planned ads budget: {money(budget)} (Active × 4 × ₱150)"]
         else:
@@ -50,8 +50,8 @@ def planning_snapshot(now: dt.datetime, allowed: set[int]) -> dict:
     return {"read_only": True, "checked_at": now.isoformat(), "work_date": work_date.isoformat(), "plan_version": team_planning.PLAN_VERSION,
             "teams": [{"chat_id": chat_id, "team": AVAILABILITY_GROUPS[chat_id]["name"],
                        "active_members": counts[chat_id]["active_workers"] if chat_id in counts else None,
-                       "client_quota": team_planning.plan_totals(int(counts[chat_id]["active_workers"]), suno=chat_id == TRABAWHO_CHAT_ID)[0] if chat_id in counts else None,
-                       "planned_ads_budget": str(team_planning.plan_totals(int(counts[chat_id]["active_workers"]), suno=chat_id == TRABAWHO_CHAT_ID)[1]) if chat_id in counts else None}
+                       "client_quota": team_planning.plan_totals(int(counts[chat_id]["active_workers"]), suno=chat_id in SUNO_GROUPS)[0] if chat_id in counts else None,
+                       "planned_ads_budget": str(team_planning.plan_totals(int(counts[chat_id]["active_workers"]), suno=chat_id in SUNO_GROUPS)[1]) if chat_id in counts else None}
                       for chat_id in sorted(teams)], "report_preview": "\n".join(lines)}
 
 
@@ -81,6 +81,9 @@ def queue_formula_update(now: dt.datetime, allowed: set[int]) -> int:
                              "message_thread_id": GROUPS[chat]["announcements"], "plan_version": team_planning.PLAN_VERSION},
                     scheduled_for=now, dedupe_key=f"team-planning-announcement:{team_planning.PLAN_VERSION}:{date}:{chat}"))
     for number, part in enumerate(split_message("\n".join(lines)), 1):
+        import report_topics
+        if report_topics.enabled():
+            break
         queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message",
                     payload={"text": part, "plan_version": team_planning.PLAN_VERSION}, scheduled_for=now,
                     dedupe_key=f"{key}:part:{number}"))

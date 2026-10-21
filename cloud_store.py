@@ -9,6 +9,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from automation_controls import enabled_chat_ids, chat_enabled
 
 
 READ_PAGE_SIZE = 100
@@ -94,10 +95,16 @@ def save_update(update: dict, allowed: set[int]) -> bool:
     if result:
         from concern_reports import observe_topic
         observe_topic(update, allowed)
+        from member_presence import observe
+        observe(update, allowed)
     return bool(result)
 
 
 def save_poll_answer(update: dict, allowed: set[int]) -> bool:
+    from page_access import save_answer
+    page = save_answer(update, allowed)
+    if page is not None:
+        return page
     from hourly_availability import save_answer
     hourly = save_answer(update, allowed)
     if hourly is not None:
@@ -198,6 +205,11 @@ def enqueue_scheduled_action(
     dedupe_key: str,
     repeat_interval_minutes: int | None = None,
 ) -> bool:
+    if not chat_enabled(chat_id):
+        return False
+    from automation_controls import new_client_delivery_allowed
+    if not new_client_delivery_allowed({"chat_id": chat_id, "payload": payload, "dedupe_key": dedupe_key}):
+        return False
     rows = request(
         "scheduled_actions?on_conflict=dedupe_key&select=id",
         {
@@ -272,14 +284,14 @@ def existing_daily_reminder_chats(work_date: dt.date, hour: int, allowed: set[in
 
 
 def list_scheduled_actions(
-    allowed: set[int], *, status: str | None = None, limit: int = 100
+    allowed: set[int], *, status: str | None = None, limit: int = 100, newest: bool = False
 ) -> list[dict]:
     if not allowed:
         return []
     filters = [
         "select=id,chat_id,action_type,payload,scheduled_for,repeat_interval_minutes,status,attempts,telegram_message_id,last_error,created_at,updated_at,sent_at",
         "chat_id=in.(" + ",".join(str(value) for value in sorted(allowed)) + ")",
-        "order=scheduled_for.asc,id.asc",
+        "order=id.desc" if newest else "order=scheduled_for.asc,id.asc",
         "limit=" + str(limit),
     ]
     if status:
@@ -305,6 +317,7 @@ def cancel_scheduled_action(allowed: set[int], schedule_id: int) -> dict | None:
 
 
 def claim_scheduled_actions(allowed: set[int], *, limit: int = 10) -> list[dict]:
+    allowed = enabled_chat_ids(allowed)
     if not allowed:
         return []
     return request(
@@ -391,7 +404,13 @@ def daily_poll_counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
         "p_allowed_ids": sorted(allowed),
     }) or []
     from hourly_availability import counts
-    return {**{int(row["chat_id"]): row for row in rows}, **counts(allowed, work_date)}
+    result = {**{int(row["chat_id"]): row for row in rows}, **counts(allowed, work_date)}
+    from daily_automation import AVAILABILITY_GROUPS
+    from page_access import scoped_voters
+    for chat, row in result.items():
+        if AVAILABILITY_GROUPS.get(chat, {}).get("client_page_scope") and row.get("poll_id"):
+            row["active_workers"] = len(scoped_voters(chat, daily_poll_active_users(row["poll_id"]), work_date))
+    return result
 
 
 def daily_poll_active_users(poll_id: str) -> list[dict]:
@@ -445,6 +464,33 @@ def activity_messages(
         if len(rows) < READ_PAGE_SIZE:
             return result
         offset += len(rows)
+
+
+def capacity_export_messages(chat_id: int, done_thread: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
+    """Backread unthreaded export candidates, with bounded, paginated queries.
+
+    A direct reply to DONE DEALS supplies topic evidence. Otherwise the shared
+    historical parser still requires an explicit paid marker, page and amount.
+    """
+    found = {}
+    filters = [("reply_to_message_id", f"eq.{done_thread}"),
+               ("text", "ilike.*paid*"), ("text", "ilike.*total*pay*"), ("text", "ilike.*tp:*")]
+    for field, value in filters:
+        offset = 0
+        while True:
+            page = request("messages?" + urllib.parse.urlencode([
+                ("select", "message_id,sent_utc,author_id,author_name,text,content_type,thread_id,reply_to_message_id,source"),
+                ("chat_id", f"eq.{chat_id}"), ("thread_id", "is.null"), ("source", "eq.export"),
+                ("sent_utc", f"gte.{start_utc.isoformat()}"), ("sent_utc", f"lt.{end_utc.isoformat()}"),
+                (field, value), ("order", "sent_utc.asc,message_id.asc"), ("limit", 1000), ("offset", offset),
+            ])) or []
+            for row in page:
+                found[row["message_id"]] = ({**row, "thread_id": done_thread}
+                    if row.get("reply_to_message_id") == done_thread else row)
+            if len(page) < 1000:
+                break
+            offset += len(page)
+    return sorted(found.values(), key=lambda row: (row["sent_utc"], row["message_id"]))
 
 
 def receipt_messages(chat_id: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
@@ -503,10 +549,10 @@ def poll_answers_for_range(chat_id: int, start_date: dt.date, end_date: dt.date)
         result.extend(rows)
         if len(rows) < READ_PAGE_SIZE:
             break
-    from hourly_availability import enabled, answers
+    from hourly_availability import enabled_for_chat, answers
     work_date = start_date
     while work_date <= end_date:
-        if enabled(work_date):
+        if enabled_for_chat(chat_id, work_date):
             result = [row for row in result if row["daily_polls"]["work_date"] != work_date.isoformat()]
             result.extend(dict(user, daily_polls={"chat_id": chat_id, "work_date": work_date.isoformat()})
                           for user in answers(chat_id, work_date))
@@ -526,7 +572,7 @@ NEW_CLIENT_HISTORY_KEYS = (
     "new_client_contact_psid", "new_client_contact_name", "new_client_page",
     "new_client_thread_id", "new_client_work_date", "new_client_round",
     "new_client_assigned_at", "new_client_assignment_attempt", "new_client_acknowledged_at",
-    "new_client_ack_message_id", "new_client_cancelled_at", "new_client_cancelled_reason",
+    "new_client_ack_message_id", "new_client_ack_update_id", "new_client_cancelled_at", "new_client_cancelled_reason",
     "_first_delivery_at",
     "new_client_response_minutes", "new_client_volunteer_minutes", "new_client_phase",
     "new_client_original_assignee_id",
@@ -601,7 +647,7 @@ def _update_assignment(action_id: int, payload: dict, status: str,
 
 def update_freebie_action(action_id: int, payload: dict, *, status: str) -> dict | None:
     """Atomically confirm one still-open assignment from a matching Telegram reply."""
-    return _update_assignment(action_id, payload, status, "pending,processing,failed", "freebie_completed_at")
+    return _update_assignment(action_id, payload, status, "pending,processing,failed,sent", "freebie_completed_at")
 
 
 def freebie_action_state(action_id: int) -> dict | None:

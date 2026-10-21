@@ -8,6 +8,7 @@ import os
 
 import psycopg
 from psycopg import sql
+from automation_controls import enabled_chat_ids
 
 
 JOB_NAME = "telegram-insights-dispatch"
@@ -90,7 +91,7 @@ def _snapshot(conn, allowed: set[int] | None = None) -> dict:
             "count(*) filter (where status = 'failed'), "
             "count(*) filter (where status = 'processing' and updated_at < now() - interval '15 minutes') "
             "from public.scheduled_actions where chat_id = any(%s) and status in ('pending','processing','failed')",
-            (sorted(allowed),),
+            (sorted(enabled_chat_ids(allowed)),),
         ).fetchone()
         result["queue"] = {"overdue_over_five_minutes": queue[0], "failed": queue[1], "stale_claims": queue[2]}
     return result

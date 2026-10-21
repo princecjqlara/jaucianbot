@@ -28,8 +28,9 @@ from cloud_store import (
     save_poll_answer,
     save_update,
 )
-from daily_automation import GROUPS, AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, run_due_daily_automation
+from daily_automation import GROUPS, AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, SUNO_GROUPS, MAKATA_CHAT_ID, run_due_daily_automation
 import hourly_availability
+import page_access
 import client_volunteers
 import client_handoffs
 import ready_availability
@@ -39,6 +40,14 @@ import database_scheduler
 import done_deal_tracking
 import team_planning
 import concern_reports
+import automation_controls
+import member_capacity_reports
+import suno_capacity
+import tomorrow_capacity
+import makata_automation
+import report_topics
+import organized_reports
+import member_presence
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -58,7 +67,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-17.02"
+AUTOMATION_VERSION = "2026-10-22.30"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -84,6 +93,7 @@ def status_route(environ, start_response):
         return response(start_response, 401, {"ok": False})
     try:
         groups = archive_status(allowed_chat_ids())
+        automation = automation_controls.status(allowed_chat_ids())
     except Exception as error:
         print(f"Status query failed: {type(error).__name__}")
         payload = {"ok": False, "automation_version": AUTOMATION_VERSION}
@@ -92,6 +102,7 @@ def status_route(environ, start_response):
             payload["restriction"] = getattr(error, "restriction", None) or "unknown"
         return response(start_response, 503, payload)
     return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
+                                        "automation": automation,
                                         "done_deal_tracking": done_deal_tracking.mode()})
 
 
@@ -100,7 +111,7 @@ def health_route(environ, start_response):
         allowed = allowed_chat_ids()
         archive_status(allowed)
         if os.environ.get("SUPABASE_DB_URL"):
-            scheduler = database_scheduler.scheduler_status(allowed)
+            scheduler = database_scheduler.scheduler_status(allowed | makata_automation.delivery_ids(automation_controls.enabled_chat_ids(allowed)))
             if not scheduler["healthy"]:
                 return response(start_response, 503, {"ok": False, "error": "automation_unhealthy"})
     except Exception as error:
@@ -121,7 +132,7 @@ def scheduler_route(environ, start_response, method: str):
                 return response(start_response, 400, {"ok": False, "error": "verify_recovery must be boolean"})
             state = database_scheduler.configure_scheduler(allowed, verify_recovery=verify)
         else:
-            state = database_scheduler.scheduler_status(allowed)
+            state = database_scheduler.scheduler_status(allowed | makata_automation.delivery_ids(automation_controls.enabled_chat_ids(allowed)))
         return response(start_response, 200, {"ok": True, "scheduler": state})
     except ValueError:
         return response(start_response, 400, {"ok": False, "error": "invalid scheduler request"})
@@ -144,6 +155,30 @@ def groups_route(environ, start_response):
                                           "approved_chat_ids": sorted(allowed_chat_ids())})
 
 
+def makata_status_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    if MAKATA_CHAT_ID not in allowed_chat_ids():
+        return response(start_response, 403, {"ok": False})
+    try:
+        if environ.get("REQUEST_METHOD", "GET").upper() == "POST":
+            body = read_json_body(environ) if int(environ.get("CONTENT_LENGTH") or 0) else {}
+            if body.get("action") == "send_report":
+                day = dt.date.fromisoformat(str(body.get("date") or ""))
+                return response(start_response, 200, makata_automation.queue_requested_report(
+                    day, dt.datetime.now(dt.timezone.utc), allowed_chat_ids(), str(body.get("request_id") or "")))
+            if body.get("action") not in (None, "connect"):
+                raise ValueError("invalid Makata action")
+            return response(start_response, 200, makata_automation.connect_recipient(
+                allowed_chat_ids(), dt.datetime.now(dt.timezone.utc)))
+        return response(start_response, 200, makata_automation.status(allowed_chat_ids()))
+    except ValueError:
+        return response(start_response, 400, {"ok": False, "error": "invalid Makata report request"})
+    except Exception as error:
+        print(f"Makata status failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "makata_status_unavailable"})
+
+
 def freebies_status_route(environ, start_response):
     if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
         return response(start_response, 401, {"ok": False})
@@ -160,12 +195,14 @@ def new_clients_status_route(environ, start_response):
         return response(start_response, 401, {"ok": False})
     try:
         allowed = allowed_chat_ids()
+        active = automation_controls.enabled_chat_ids(allowed)
         now = dt.datetime.now(dt.timezone.utc)
         groups = new_client_status(allowed.intersection(GROUPS), now)
-        if TRABAWHO_CHAT_ID in allowed:
+        if allowed.intersection(SUNO_GROUPS):
             if suno_configured():
                 try:
-                    groups.extend(new_client_status({TRABAWHO_CHAT_ID}, now))
+                    makata_automation.hydrate(allowed)
+                    groups.extend(new_client_status(allowed.intersection(SUNO_GROUPS), now))
                 except Exception as error:
                     print(f"Suno status failed: {type(error).__name__}")
                     groups.append({"team": TRABAWHO["name"], "chat_id": TRABAWHO_CHAT_ID,
@@ -176,7 +213,26 @@ def new_clients_status_route(environ, start_response):
     except Exception as error:
         print(f"New-client status failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
+    for group in groups:
+        group["automation_enabled"] = int(group.get("chat_id", 0)) in active
+        if group.get("chat_id") is not None and not group["automation_enabled"]:
+            group["queue_state"] = "paused_by_manager"
     return response(start_response, 200, {"ok": True, "groups": groups})
+
+
+def suno_supply_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    if TRABAWHO_CHAT_ID not in allowed_chat_ids():
+        return response(start_response, 404, {"ok": False})
+    try:
+        from suno_store import suno_supply_status, suno_chatbot_status
+        if parse_qs(environ.get("QUERY_STRING", "")).get("chatbot") == ["1"]:
+            return response(start_response, 200, {"ok": True, "chatbot": suno_chatbot_status()})
+        return response(start_response, 200, {"ok": True, "supply": suno_supply_status()})
+    except Exception as error:
+        print(f"Suno supply query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "suno_source_unavailable"})
 
 
 def client_directory_route(environ, start_response):
@@ -200,6 +256,51 @@ def client_directory_route(environ, start_response):
             print(f"Client directory read failed: {type(error).__name__}")
             snapshots.append({"chat_id": chat, "team": AVAILABILITY_GROUPS[chat]["name"], "ok": False, "error": "client_source_unavailable"})
     return response(start_response, 200, {"ok": all(s.get("ok", True) for s in snapshots), "groups": snapshots})
+
+
+def capacity_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    args = parse_qs(environ.get("QUERY_STRING", ""))
+    if args.get("tomorrow") == ["1"]:
+        try:
+            return response(start_response, 200, tomorrow_capacity.snapshot(dt.datetime.now(dt.timezone.utc), allowed_chat_ids()))
+        except PermissionError:
+            return response(start_response, 403, {"ok": False})
+        except Exception as error:
+            print(f"Tomorrow capacity source failed: {type(error).__name__}")
+            return response(start_response, 503, {"ok": False, "error": "tomorrow_capacity_source_unavailable"})
+    teams = allowed_chat_ids().intersection(GROUPS)
+    try:
+        days = int(args.get("days", ["14" if report_topics.enabled() else "30"])[0])
+        if not 1 <= days <= 366:
+            raise ValueError("invalid period")
+        if args.get("group"):
+            group = int(args["group"][0])
+            if group in SUNO_GROUPS and group in allowed_chat_ids():
+                return response(start_response, 200, suno_capacity.report(dt.datetime.now(dt.timezone.utc),
+                    days=days, all_history=args.get("all_history") == ["1"], **({"chat_id": group} if group != TRABAWHO_CHAT_ID else {})))
+            if group not in teams:
+                return response(start_response, 404, {"ok": False})
+            teams = {group}
+    except ValueError:
+        return response(start_response, 400, {"ok": False, "error": "invalid capacity query"})
+    except Exception as error:
+        print(f"Suno capacity source failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "suno_capacity_source_unavailable"})
+    try:
+        import member_capacity
+        from concurrent.futures import ThreadPoolExecutor
+        now = dt.datetime.now(dt.timezone.utc)
+        if args.get("all_history") == ["1"]:
+            return response(start_response, 200, member_capacity.compact(member_capacity.backread(teams, now)))
+        with ThreadPoolExecutor(max_workers=max(1, len(teams))) as pool:
+            reports = list(pool.map(lambda chat: member_capacity.report(chat, days, now), sorted(teams)))
+        return response(start_response, 200, {"ok": True, "read_only": True, "completed_days_only": True,
+            "groups": reports, "combined": member_capacity.combined(reports), "definitions": member_capacity.definitions()})
+    except Exception as error:
+        print(f"Capacity report failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "capacity_source_unavailable"})
 
 
 def referrals_status_route(environ, start_response):
@@ -300,6 +401,31 @@ def concerns_route(environ, start_response):
         print(f"Concerns preview failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
     return response(start_response, 200, {"ok": True, **data})
+
+
+def report_topics_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    if DAILY_REPORTS_CHAT_ID not in allowed_chat_ids():
+        return response(start_response, 403, {"ok": False})
+    try:
+        return response(start_response, 200, {"ok": True, "read_only": True, "topics": report_topics.topics()})
+    except Exception as error:
+        print(f"Report topics query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
+
+
+def report_members_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    approved = allowed_chat_ids()
+    if DAILY_REPORTS_CHAT_ID not in approved:
+        return response(start_response, 403, {"ok": False})
+    try:
+        return response(start_response, 200, member_presence.snapshot(approved))
+    except Exception as error:
+        print(f"Report membership query failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False})
 
 
 def messages_route(environ, start_response):
@@ -453,12 +579,22 @@ def schedules_route(environ, start_response, method: str):
                 raise ValueError("invalid status")
             if not 1 <= limit <= 500:
                 raise ValueError("invalid limit")
-            rows = list_scheduled_actions(allowed, status=status, limit=limit)
+            if "group" in args:
+                group = int(args["group"][0])
+                if group not in allowed:
+                    return response(start_response, 403, {"ok": False, "error": "group is not approved"})
+                allowed = {group}
+            newest = args.get("newest", ["0"])[0]
+            if newest not in {"0", "1"}:
+                raise ValueError("invalid newest flag")
+            rows = list_scheduled_actions(allowed, status=status, limit=limit, **({"newest": True} if newest == "1" else {}))
             return response(start_response, 200, {"ok": True, "schedules": rows})
         if method == "POST":
             chat_id, action_type, action_payload, scheduled_for, repeat = validate_action(read_json_body(environ))
             if chat_id not in allowed:
                 return response(start_response, 403, {"ok": False, "error": "group is not approved"})
+            if not automation_controls.chat_enabled(chat_id):
+                return response(start_response, 409, {"ok": False, "error": "automation is paused for this group"})
             row = create_scheduled_action(
                 chat_id=chat_id,
                 action_type=action_type,
@@ -485,6 +621,10 @@ def schedules_route(environ, start_response, method: str):
 def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int, int]:
     # Deferred reminders should not use every slot ahead of a new client.
     # Bound both sends and scanning so a backlog cannot extend this indefinitely.
+    allowed = automation_controls.enabled_chat_ids(allowed)
+    allowed = makata_automation.delivery_ids(allowed)
+    if not allowed:
+        return 0, 0, 0
     processed = sent = failed = 0
     scan_limit = max(limit, 1) * 4
     while sent + failed < limit and processed < scan_limit:
@@ -502,14 +642,56 @@ def deliver_due_actions(allowed: set[int], *, limit: int = 10) -> tuple[int, int
 
 
 def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[int, int, int]:
+    allowed = makata_automation.delivery_ids(allowed)
     sent = 0
     failed = 0
+    report_cache = {}
     for action in actions:
         try:
+            if int(action["chat_id"]) not in allowed or not automation_controls.chat_enabled(int(action["chat_id"])):
+                defer_scheduled_action(action)
+                continue
+            if not automation_controls.new_client_delivery_allowed(action):
+                if not defer_scheduled_action(action):
+                    raise RuntimeError("disabled new-client action was not deferred")
+                continue
             now = dt.datetime.now(dt.timezone.utc)
+            if not report_topics.delivery_allowed(action):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete public report was not finalized")
+                continue
+            if not organized_reports.prepare_delivery(action, now, report_cache):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("staffing check was not finalized")
+                continue
+            from freebie_automation import retire_stale_delivery
+            retired = retire_stale_delivery(action, now)
+            if retired is not None:
+                if not retired:
+                    raise RuntimeError("stale task notification was not retired")
+                continue
+            if not makata_automation.private_delivery_allowed(action):
+                action["repeat_interval_minutes"] = None
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("invalid private report action was not finalized")
+                continue
+            prior_topic = makata_automation.setup_delivery(action)
+            if prior_topic:
+                if not finish_scheduled_action(action["id"], success=True,
+                        telegram_message_id=int(prior_topic["message_id"]), claim=action):
+                    raise RuntimeError("created Makata topic was not finalized")
+                continue
+            if not member_capacity_reports.delivery_allowed(action, now) or not suno_capacity.delivery_allowed(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete capacity report was not finalized")
+                continue
             if not done_deal_tracking.delivery_allowed(action):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("paused sale output was not finalized")
+                continue
+            if not tomorrow_capacity.prepare_delivery(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("tomorrow capacity check was not finalized")
                 continue
             if not client_workflow.prepare_delivery(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
@@ -565,23 +747,40 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
                 defer_scheduled_action(action)
                 continue
             daily_poll_date = action["payload"].get("daily_poll_date")
+            access_version = action["payload"].get("page_access_version")
+            if action["action_type"] == "poll" and access_version:
+                if access_version != page_access.version(int(action["chat_id"])) or page_access.poll_record(int(action["chat_id"]), int(action["payload"].get("page_access_part") or 0)):
+                    if not finish_scheduled_action(action["id"], success=True, claim=action):
+                        raise RuntimeError("registered page-access poll was not finalized")
+                    continue
             is_daily_poll = action["action_type"] == "poll" and bool(daily_poll_date)
             hourly_date = action["payload"].get("hourly_poll_date")
+            if hourly_date and not hourly_availability.enabled_for_chat(int(action["chat_id"]), dt.date.fromisoformat(hourly_date)):
+                finish_scheduled_action(action["id"], success=True, claim=action)
+                continue
             if hourly_date and hourly_availability.registered(int(action["chat_id"]), hourly_date, action["payload"]["hourly_poll_part"]):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("registered hourly poll was not finalized")
                 continue
             if is_daily_poll:
                 work_date = dt.date.fromisoformat(daily_poll_date)
-                if hourly_availability.enabled(work_date):
+                if hourly_availability.enabled_for_chat(int(action["chat_id"]), work_date):
                     finish_scheduled_action(action["id"], success=True, claim=action)
                     continue
                 existing = daily_poll_counts({int(action["chat_id"])}, work_date).get(int(action["chat_id"]))
                 if existing:
                     finish_scheduled_action(action["id"], success=True, claim=action)
                     continue
+            paced = report_topics.defer_burst(action, dt.datetime.now(dt.timezone.utc))
+            if paced is not None:
+                if not paced:
+                    raise RuntimeError("paced report was not deferred")
+                continue
             message = send_scheduled_action(action)
             message_id = int(message["message_id"])
+            makata_automation.record_topic(action, message, now)
+            if access_version and not page_access.register_poll(action, message, now):
+                raise RuntimeError("page-access poll was not registered")
             if message.get("date") and not action["payload"].get("_first_delivery_at"):
                 action["payload"]["_first_delivery_at"] = dt.datetime.fromtimestamp(message["date"], dt.timezone.utc).isoformat()
             if hourly_date and not hourly_availability.register_poll(action, message, now):
@@ -621,17 +820,49 @@ def dispatch_route(environ, start_response):
     queued = 0
     queue_errors = []
     try:
-        allowed = allowed_chat_ids()
+        approved = allowed_chat_ids()
+        allowed = automation_controls.enabled_chat_ids(approved)
         try:
-            queued += concern_reports.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
+            makata_automation.hydrate(approved)
+            queued += makata_automation.queue_setup(dt.datetime.now(dt.timezone.utc), approved)
+            queued += makata_automation.queue_reports(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as setup_error:
+            queue_errors.append("makata_setup_or_reports")
+            print(f"Makata setup/report queue failed: {type(setup_error).__name__}")
+        try:
+            if not report_topics.enabled():
+                queued += member_capacity_reports.queue_automation(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as capacity_error:
+            queue_errors.append("member_capacity")
+            print(f"Daily capacity report failed: {type(capacity_error).__name__}")
+        try:
+            if not report_topics.enabled():
+                queued += suno_capacity.queue_automation(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as capacity_error:
+            queue_errors.append("suno_capacity")
+            print(f"Suno capacity report failed: {type(capacity_error).__name__}")
+        try:
+            if not report_topics.enabled():
+                queued += tomorrow_capacity.queue_automation(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as capacity_error:
+            queue_errors.append("tomorrow_capacity")
+            print(f"Tomorrow capacity report failed: {type(capacity_error).__name__}")
+        try:
+            if not report_topics.enabled():
+                queued += concern_reports.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
         except Exception as concerns_error:
             queue_errors.append("concerns")
             print(f"Concerns queue failed: {type(concerns_error).__name__}")
+        try:
+            queued += organized_reports.queue_automation(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as report_error:
+            queue_errors.append("organized_reports")
+            print(f"Organized reports queue failed: {type(report_error).__name__}")
         if os.environ.get("SUPABASE_DB_URL"):
             try:
-                if claim_automation_slot(allowed, dt.datetime.now(dt.timezone.utc),
+                if claim_automation_slot(approved, dt.datetime.now(dt.timezone.utc),
                                          workflow="scheduler-guard", interval_seconds=300):
-                    database_scheduler.ensure_scheduler(allowed)
+                    database_scheduler.ensure_scheduler(approved)
             except Exception as guard_error:
                 queue_errors.append("scheduler_guard")
                 print(f"Scheduler guard failed: {type(guard_error).__name__}")
@@ -652,7 +883,8 @@ def dispatch_route(environ, start_response):
                 queue_errors.append("hourly_polls")
                 print(f"Hourly poll queue failed: {type(hourly_error).__name__}")
         try:
-            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - {TRABAWHO_CHAT_ID}, planning_allowed=allowed)
+            queued += automation_controls.queue_mode_notices(dt.datetime.now(dt.timezone.utc), allowed)
+            queued += run_due_daily_automation(dt.datetime.now(dt.timezone.utc), allowed - set(SUNO_GROUPS), planning_allowed=allowed)
         except Exception as daily_error:
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")
@@ -681,7 +913,7 @@ def dispatch_route(environ, start_response):
                 assignment_groups, now, workflow="new-client", interval_seconds=60,
             ):
                 try:
-                    queued += queue_new_client_assignments(now, allowed - {TRABAWHO_CHAT_ID})
+                    queued += queue_new_client_assignments(now, allowed - set(SUNO_GROUPS))
                 except Exception as assignment_error:
                     queue_errors.append("new_client")
                     import traceback
@@ -696,11 +928,11 @@ def dispatch_route(environ, start_response):
                 except Exception as freebie_error:
                     queue_errors.append("freebie")
                     print(f"Freebie queue failed: {type(freebie_error).__name__}")
-        if TRABAWHO_CHAT_ID in allowed and suno_configured():
+        if allowed.intersection(SUNO_GROUPS) and suno_configured():
             try:
                 now = dt.datetime.now(dt.timezone.utc)
-                if claim_automation_slot({TRABAWHO_CHAT_ID}, now, workflow="new-client:suno", interval_seconds=60):
-                    queued += queue_new_client_assignments(now, {TRABAWHO_CHAT_ID})
+                if claim_automation_slot(allowed.intersection(SUNO_GROUPS), now, workflow="new-client:suno", interval_seconds=60):
+                    queued += queue_new_client_assignments(now, allowed.intersection(SUNO_GROUPS))
             except Exception as suno_error:
                 queue_errors.append("suno_new_client")
                 print(f"Suno assignment queue failed: {type(suno_error).__name__}")
@@ -737,13 +969,23 @@ def webhook_route(environ, start_response):
         if not allowed:
             return response(start_response, 503, {"ok": False, "error": "allowed groups not configured"})
         update = read_json_body(environ)
+        active = automation_controls.enabled_chat_ids(allowed)
+        makata_automation.hydrate(allowed)
+        if makata_automation.register_private(update, allowed, dt.datetime.now(dt.timezone.utc)):
+            return response(start_response, 200, {"ok": True})
     except ValueError:
         return response(start_response, 400, {"ok": False, "error": "invalid update"})
     except RuntimeError:
         return response(start_response, 503, {"ok": False, "error": "invalid configuration"})
     if "callback_query" in update:
+        callback_chat = ((update.get("callback_query") or {}).get("message") or {}).get("chat", {}).get("id")
+        if callback_chat not in active:
+            return response(start_response, 200, {"ok": True})
         try:
-            result = client_workflow.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
+            result = client_workflow.handle(update, active, dt.datetime.now(dt.timezone.utc))
+            if ((update.get("callback_query") or {}).get("data") == "cw:ready"
+                    and result == "Availability updated." and automation_controls.new_clients_enabled(callback_chat)):
+                queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {callback_chat})
             # Telegram executes this callback acknowledgment from the webhook
             # response. All group messages stay in the scheduled outbox.
             return response(start_response, 200, {"method": "answerCallbackQuery",
@@ -762,27 +1004,46 @@ def webhook_route(environ, start_response):
             return response(start_response, 500, {"ok": False})
     try:
         if "poll_answer" in update:
-            referral_stored = referral_incentives.save_answer(update, allowed)
+            referral_stored = referral_incentives.save_answer(update, active)
             stored = save_poll_answer(update, allowed) if referral_stored is None else referral_stored
         else:
             stored = save_update(update, allowed)
             if stored:
-                referral_incentives.observe_join(update, allowed, dt.datetime.now(dt.timezone.utc))
+                referral_incentives.observe_join(update, active, dt.datetime.now(dt.timezone.utc))
     except Exception as error:
         print(f"Webhook storage failed: {type(error).__name__}")
         return response(start_response, 500, {"ok": False})
+    allowed = active
+    message_chat = (update.get("message") or update.get("edited_message") or {}).get("chat", {}).get("id")
+    if message_chat is not None and message_chat not in allowed:
+        return response(start_response, 200, {"ok": True})
     if stored:
         try:
+            if "poll_answer" in update:
+                access_poll = page_access.context(update["poll_answer"].get("poll_id", ""), allowed)
+                if access_poll:
+                    chat_id = int(access_poll["chat_id"])
+                    queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {chat_id})
+                    return response(start_response, 200, {"ok": True})
             if client_workflow.handle(update, allowed, dt.datetime.now(dt.timezone.utc)) is not None:
                 return response(start_response, 200, {"ok": True})
             ready_chat = ready_availability.handle(update, allowed, dt.datetime.now(dt.timezone.utc))
             if ready_chat is not None:
-                if ready_chat != TRABAWHO_CHAT_ID or suno_configured():
+                if ready_chat not in SUNO_GROUPS or suno_configured():
                     queue_new_client_assignments(dt.datetime.now(dt.timezone.utc), {ready_chat})
                 return response(start_response, 200, {"ok": True})
         except Exception as error:
             print(f"Ready queue update failed: {type(error).__name__}")
             return response(start_response, 500, {"ok": False})
+    if stored and MAKATA_CHAT_ID in active:
+        message = update.get("message") or update.get("edited_message") or {}
+        if (message.get("chat") or {}).get("id") == MAKATA_CHAT_ID:
+            now = dt.datetime.now(dt.timezone.utc)
+            if confirm_song_reply(update, active, now):
+                return response(start_response, 200, {"ok": True})
+            if suno_configured():
+                confirm_new_client_reply(update, {MAKATA_CHAT_ID})
+            return response(start_response, 200, {"ok": True})
     if stored and TRABAWHO_CHAT_ID in allowed:
         handled_trabawho = False
         try:
@@ -846,8 +1107,14 @@ def app(environ, start_response):
         return freebies_status_route(environ, start_response)
     if path == "/api/new-clients/status" and method == "GET":
         return new_clients_status_route(environ, start_response)
+    if path == "/api/new-clients/suno-supply":
+        if method != "GET":
+            return response(start_response, 405, {"ok": False})
+        return suno_supply_route(environ, start_response)
     if path == "/api/clients" and method == "GET":
         return client_directory_route(environ, start_response)
+    if path == "/api/workers/capacity" and method == "GET":
+        return capacity_route(environ, start_response)
     if path == "/api/referrals/status" and method == "GET":
         return referrals_status_route(environ, start_response)
     if path == "/api/referrals/audit" and method == "GET":
@@ -858,6 +1125,12 @@ def app(environ, start_response):
         return daily_summary_route(environ, start_response)
     if path == "/api/reports/concerns" and method == "GET":
         return concerns_route(environ, start_response)
+    if path == "/api/reports/topics" and method == "GET":
+        return report_topics_route(environ, start_response)
+    if path == "/api/reports/members" and method == "GET":
+        return report_members_route(environ, start_response)
+    if path == "/api/suno/makata" and method in {"GET", "POST"}:
+        return makata_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:
         return schedules_route(environ, start_response, method)
     if path == "/api/scheduler" and method in {"GET", "POST"}:
@@ -866,6 +1139,6 @@ def app(environ, start_response):
         return dispatch_route(environ, start_response)
     if path == "/api/webhook" and method == "POST":
         return webhook_route(environ, start_response)
-    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/reports/daily-summary", "/api/reports/concerns", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
+    if path in {"/api/health", "/api/status", "/api/messages", "/api/workers/activity", "/api/workers/capacity", "/api/groups", "/api/clients", "/api/new-clients/status", "/api/referrals/status", "/api/referrals/audit", "/api/reports/plan", "/api/reports/daily-summary", "/api/reports/concerns", "/api/freebies/status", "/api/schedules", "/api/scheduler", "/api/cron/dispatch", "/api/webhook"}:
         return response(start_response, 405, {"ok": False})
     return response(start_response, 404, {"ok": False})

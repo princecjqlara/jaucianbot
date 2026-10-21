@@ -29,7 +29,7 @@ class PausedTrackingTests(unittest.TestCase):
             with self.subTest(chat=chat):
                 buttons = workflow.owner_buttons(assignment(chat))
                 self.assertNotIn("cw:dd:", str(buttons))
-                self.assertIn("Hand over", str(buttons))
+                self.assertNotIn("Hand over", str(buttons))
                 self.assertIn("Client list", str(buttons))
                 self.assertIn("Ready", str(workflow.menu()))
                 self.assertIn("Busy", str(workflow.menu()))
@@ -153,16 +153,16 @@ class PausedTrackingTests(unittest.TestCase):
                     self.assertEqual(workflow.handle(callback(command, chat=chat), {chat}, NOW), "Availability updated.")
                     self.assertEqual(handle.call_args.args[0]["message"]["text"], "/" + command)
 
-    def test_owner_handover_keeps_acceptance_and_changes_owner_only_after_consent(self):
+    def test_suno_handover_is_disabled_without_changing_owner_or_acceptance(self):
         def save(row, payload, now):
             row["payload"] = payload
             return True
-        for chat in daily.AVAILABILITY_GROUPS:
+        for chat in (daily.TRABAWHO_CHAT_ID,):
             row = assignment(chat)
             with self.subTest(chat=chat), patch.object(workflow, "is_member", return_value=True), patch.object(workflow, "save_assignment", side_effect=save), patch.object(workflow, "reconcile_row"):
-                workflow.start_handover(row, 11, 22, "Bea", "Draft is ready", NOW, "request", 0)
+                self.assertEqual(workflow.start_handover(row, 11, 22, "Bea", "Draft is ready", NOW, "request", 0), workflow.HANDOVER_DISABLED)
                 self.assertEqual(row["payload"]["new_client_assignee_id"], 11)
                 workflow.finish_handover(row, 22, 1, "yes", NOW, "accept")
-                self.assertEqual(row["payload"]["new_client_assignee_id"], 22)
+                self.assertEqual(row["payload"]["new_client_assignee_id"], 11)
                 self.assertEqual(row["payload"]["new_client_token"], "AAAABBBB")
                 self.assertEqual(row["payload"]["new_client_acknowledged_at"], NOW.isoformat())

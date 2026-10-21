@@ -19,7 +19,7 @@ def mode() -> str:
 def notice() -> str:
     if summary_enabled():
         return "Done Deal buttons and sale codes are off. The bot reads DONE DEALS posts and summarizes counts, totals and averages in DAILY REPORTS. No client-token code is needed for a sale post."
-    return "Done Deal tracking is paused. You do not need to post Done Deals or use sale codes. Keep your client updated and arrange a handover if needed."
+    return "Done Deal tracking is paused. You do not need to post Done Deals or use sale codes. Keep your client updated."
 
 
 def delivery_allowed(action: dict) -> bool:

@@ -1,7 +1,8 @@
-"""Team client directory, Telegram buttons and owner-approved handovers.
+"""Daily team client lists, Telegram buttons and historical transfer recovery.
 
 All outbound messages use the existing scheduled outbox. State and audit records
 stay on the accepted assignment; they never become independently claimable leads.
+New handovers are disabled for all managed teams.
 """
 from __future__ import annotations
 
@@ -13,13 +14,25 @@ import math
 import re
 import urllib.parse
 import done_deal_tracking
+import page_access
+import automation_controls
 from collections import Counter
 
 from cloud_store import enqueue_scheduled_action, new_client_actions, request
 from daily_automation import AVAILABILITY_GROUPS as GROUPS, MANILA, TRABAWHO_CHAT_ID, page_mapping_pending
 
 PAGE_SIZE = 12
-COMMAND = re.compile(r"^/(clients|queue|clienthelp|ddtemplate|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
+COMMAND = re.compile(r"^/(clients|pages|queue|clienthelp|ddtemplate|handover|accept_handover|decline_handover|cancel_handover)(?:@\w+)?(?:\s+(.*))?$", re.I | re.S)
+HANDOVER_DISABLED = "Handovers are disabled. The current editor keeps the client."
+
+
+def handover_enabled(chat_id: int) -> bool:
+    return False
+
+
+def owner_help(chat_id: int) -> str:
+    return ("Tap Hand over to transfer, or Client list to view owners."
+            if handover_enabled(chat_id) else "Tap Client list to view owners.")
 
 
 def button(text: str, data: str) -> dict:
@@ -39,7 +52,12 @@ def offer_buttons(token: str, *, take: bool = False) -> dict:
 
 def owner_buttons(row: dict) -> dict:
     revision = int(row["payload"].get("new_client_handover_revision") or 0)
-    keyboard = [[button("Hand over", f"choose:{row['id']}:{revision}:0"), button("Client list", "list:0")]]
+    keyboard = [[button("Client list", "list:0")]]
+    if not handover_enabled(int(row["chat_id"])) and row.get("telegram_message_id"):
+        keyboard.insert(0, [{"text": "Client details", "url":
+            f"https://t.me/c/{str(abs(int(row['chat_id'])))[3:]}/{row['telegram_message_id']}"}])
+    if handover_enabled(int(row["chat_id"])):
+        keyboard[0].insert(0, button("Hand over", f"choose:{row['id']}:{revision}:0"))
     if done_deal_tracking.enabled() and GROUPS[int(row["chat_id"])].get("done"):
         keyboard.append([button("Done Deal template", f"dd:{row['id']}")])
     return {"inline_keyboard": keyboard}
@@ -48,6 +66,26 @@ def owner_buttons(row: dict) -> dict:
 def guide(chat_id: int) -> str:
     import ready_availability as ready
     config = GROUPS[chat_id]
+    if ready.renewal_required(chat_id):
+        setup = "PAGE SETUP PENDING: offers paused.\n" if page_mapping_pending(config) else ""
+        ending = ("\nReceipts: post the receipt and written amounts in RECEIPTS.\n"
+                  f"Songs: deliver within 24 hours, then post SONG SENT + token in SONGS.\nhttps://t.me/c/{str(abs(chat_id))[3:]}/{config['songs']}"
+                  if config.get("songs") else "\nFREEBIE SENT + token — confirm a freebie.")
+        sales = ("\nSales: post in DONE DEALS. No client-token code needed." if done_deal_tracking.summary_enabled()
+                 else "\nDone Deal tracking is paused.") if not done_deal_tracking.enabled() else ""
+        return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
+                (f"{config['client_page_scope']} members only. Confirm access with /pages.\n" if config.get("client_page_scope") else "") +
+                "Active tomorrow? Choose Yes or No.\n"
+                "/pages — choose pages you can receive clients from.\n"
+                "/ready — available for 60 minutes from your message.\n"
+                "/busy — stop new offers.\n"
+                "Clients follow round robin. Accept within 15 minutes.\n"
+                "Missed offers go to the earliest Ready member: 10 minutes to accept.\n"
+                "A missed offer stops Ready. Send /ready to rejoin.\n"
+                "After accepting, send /ready to request another client.\n"
+                "Accept client: button or WORKING + token. Details stay visible.\n"
+                "/clients — client list and owners.\n"
+                + ending + ("" if config.get("songs") else sales))
     ending = (f"Complete any missing details, then send the song today and within 24 hours. After sending it to the client, post SONG SENT + the client token in SONGS: https://t.me/c/{str(abs(chat_id))[3:]}/{config['songs']}. The original 24-hour deadline stays the same after handover."
               if config.get("songs") else
               "Paid sale? Tap Done Deal template or send /ddtemplate + the token in NEW CLIENTS. Copy the filled client/page/token, enter Price Deal, then post it yourself in DONE DEALS. FREEBIE tasks still use FREEBIE SENT + token.")
@@ -62,6 +100,8 @@ def guide(chat_id: int) -> str:
                     "After a missed offer, send /ready or update the current-hour poll selection to resume. "
                     "After /busy, send /ready to rejoin.\n\n" if ready.poll_enabled(chat_id) else "")
     resume = "/ready or a new current-hour poll selection" if ready.poll_enabled(chat_id) else "/ready"
+    transfer_guide = ("7. Need to transfer? Tap Hand over on your owner confirmation and choose a teammate. Or reply to their message with /handover TOKEN and a short note. They must accept; you remain responsible until the bot confirms the new owner. They can decline, and you can cancel.\n\n"
+                      if handover_enabled(chat_id) else "Accepted clients stay with their confirmed editor.\n\n")
     return (f"{config['name'].upper()} — CLIENT GUIDE\n\n" + setup +
             availability +
             "Use the buttons or commands in NEW CLIENTS:\n"
@@ -70,9 +110,9 @@ def guide(chat_id: int) -> str:
             f"3. Tap Accept client after reviewing the brief, or send WORKING A1B2C3D4 using the actual token. Accept within {ready.ACCEPTANCE_MINUTES} minutes of delivery. Wait for owner confirmation before contacting the client.\n"
             f"4. Reminder after {ready.ACCEPTANCE_MINUTES - ready.WARNING_BEFORE_MINUTES} minutes. Missed deadline: YOUR TURN ENDED, then PAUSED until {resume}.\n"
             "5. TAKE is STILL AVAILABLE: tap Take client or send TAKE + token during the 10-minute OPEN TAKE window. First eligible claim wins.\n"
-            "6. Tap Client list or send /clients: see available clients, reserved offers, current editors, and pending handovers.\n"
+            "6. Tap Client list or send /clients: see available clients, reserved offers, and current editors.\n"
             "Waiting without a client? Tap Why no client? or send /queue to see your queue status and what to do next.\n"
-            "7. Need to transfer? Tap Hand over on your owner confirmation and choose a teammate. Or reply to their message with /handover TOKEN and a short note. They must accept; you remain responsible until the bot confirms the new owner. They can decline, and you can cancel.\n\n"
+            + transfer_guide +
             "Keep answering the hourly availability polls. Unclaimed clients keep rotating. Older offers keep the deadline printed on their message.\n\n"
             + ending + "\n\nButtons not responding? Send the matching text command in your team's NEW CLIENTS topic. Use your personal Telegram account, not anonymous-admin mode.\nConflicting ownership or an existing CRM editor? Ask your team lead before contacting the client.")
 
@@ -90,16 +130,30 @@ def current_rows(history: list[dict]) -> list[dict]:
 
 
 def directory(chat_id: int, now: dt.datetime) -> dict:
-    from new_client_automation import _page_contacts, _action_contact_keys, _candidate_contact_keys, _reserved_contact_keys
+    from new_client_automation import _page_contacts, _action_contact_keys, _candidate_contact_keys, _reserved_contact_keys, _utc_time
     history = history_for(chat_id)
     reserved = _reserved_contact_keys(history)
+    if GROUPS[chat_id].get("client_source") == "suno":
+        from daily_automation import SUNO_GROUPS
+        from cloud_store import allowed_chat_ids
+        others = allowed_chat_ids().intersection(SUNO_GROUPS) - {chat_id}
+        if others:
+            from new_client_automation import new_client_action_matches_source
+            reserved.update(_reserved_contact_keys([r for r in new_client_actions(others) if new_client_action_matches_source(r)]))
     entries = []
     for row in current_rows(history):
         p = row["payload"]
         if not _action_contact_keys(row).intersection(reserved):
             continue
-        handover = p.get("new_client_handover") or {}
+        handover = (p.get("new_client_handover") or {}) if handover_enabled(chat_id) else {}
         accepted = bool(p.get("new_client_acknowledged_at"))
+        if chat_id in GROUPS:
+            at = _utc_time(p.get("new_client_acknowledged_at"))
+            today = now.astimezone(MANILA).date()
+            if accepted and (not at or at.astimezone(MANILA).date() != today):
+                continue
+            if not accepted and p.get("new_client_work_date") != today.isoformat():
+                continue
         state = ("Handover pending" if accepted and handover.get("state") == "pending" else
                  "Assigned" if accepted else "Available to TAKE" if p.get("new_client_phase") == "volunteer" else
                  "Awaiting reassignment" if p.get("new_client_phase") in {"expired", "review"} else "Reserved")
@@ -125,26 +179,39 @@ def directory(chat_id: int, now: dt.datetime) -> dict:
                             "status": "Available", "available": True, "editor_id": None, "editor": None,
                             "token": None, "message_id": None})
     entries.sort(key=lambda e: (e["status"], e["page"].casefold(), e["client"].casefold(), str(e["contact_id"])))
+    hint = ""
+    if GROUPS[chat_id].get("client_source") == "suno" and any(e["available"] for e in entries):
+        import ready_availability
+        people = ready_availability.available(chat_id, now, history)
+        pages = {page_access.page_map(chat_id).get(e["page"]) for e in entries if e["available"]}
+        access = page_access.members(chat_id)
+        eligible = sum(bool(pages.intersection(access.get(int(u["user_id"]), set()))) for u in people)
+        hint = (f"Ready: {eligible}. Offers follow round robin." if eligible else
+                "Ready members need access to the available pages. Update Page access." if people else
+                "Waiting for Ready members. Choose Page access, then tap Ready (60 minutes).")
     return {"team": GROUPS[chat_id]["name"], "chat_id": chat_id, "as_of_utc": now.isoformat(),
+            "daily_only": True, "work_date": now.astimezone(MANILA).date().isoformat(),
+            "handovers_enabled": handover_enabled(chat_id),
             "page_mapping_pending": page_mapping_pending(GROUPS[chat_id]),
             "assignment_fingerprint": fingerprint(history),
-            "counts": dict(Counter(e["status"] for e in entries)), "clients": entries,
+            "counts": dict(Counter(e["status"] for e in entries)), "clients": entries, "queue_hint": hint,
             "coverage": "Bot-tracked assignments and currently eligible CRM/Suno briefs. External or untracked assignments are not included."}
 
 
 def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -> tuple[str, dict]:
+    if snapshot.get("daily_only"):
+        return render_daily_directory(snapshot, page, own_view=own_view)
     entries = snapshot["clients"]
-    pages = max(1, math.ceil(len(entries) / PAGE_SIZE))
-    page = max(0, min(page, pages - 1))
     counts = snapshot["counts"]
     lines = [f"<b>{html.escape(snapshot['team'])} — CLIENT LIST</b>",
-             " | ".join(f"{html.escape(state)}: {counts.get(state, 0)}" for state in ("Available", "Available to TAKE", "Reserved", "Assigned", "Handover pending", "Awaiting reassignment")),
-             f"Page {page + 1}/{pages} · Updated {html.escape(snapshot['as_of_utc'])} (UTC)", ""]
+             " | ".join(f"{html.escape(state)}: {counts.get(state, 0)}" for state in ("Available", "Available to TAKE", "Reserved", "Assigned", "Handover pending", "Awaiting reassignment")
+                        if state != "Handover pending" or handover_enabled(snapshot["chat_id"])),
+             f"Updated {html.escape(snapshot['as_of_utc'])} (UTC)", ""]
     if snapshot.get("page_mapping_pending"):
         lines.append("<b>Page setup pending.</b> Client and freebie assignments are paused until your team page is connected.\n")
     internal = str(abs(snapshot["chat_id"]))[3:]
     controls = []
-    for entry in entries[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
+    for entry in entries:
         name = html.escape(directory_label(entry["client"]))
         if entry.get("message_id"):
             name = f'<a href="https://t.me/c/{internal}/{entry["message_id"]}">{name}</a>'
@@ -154,30 +221,118 @@ def render_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -
         token = f" · <code>{entry['token']}</code>" if entry.get("token") else ""
         lines.extend([f"<b>{name}</b> · {html.escape(directory_label(entry['page']))}", f"{entry['status']} · {owner}{token}", ""])
         if entry["status"] == "Assigned":
-            controls.append([button("Hand over: " + entry["client"][:35], f"choose:{entry['assignment_id']}:{entry['handover_revision']}:0")])
+            owner_controls = []
+            if handover_enabled(snapshot["chat_id"]):
+                owner_controls.append(button("Hand over: " + entry["client"][:35], f"choose:{entry['assignment_id']}:{entry['handover_revision']}:0"))
             if done_deal_tracking.enabled() and GROUPS[snapshot["chat_id"]].get("done"):
-                controls[-1].append(button("DD template", f"dd:{entry['assignment_id']}"))
+                owner_controls.append(button("DD template", f"dd:{entry['assignment_id']}"))
+            if owner_controls:
+                controls.append(owner_controls)
         elif entry["status"] == "Available to TAKE":
             controls.append([button("Take: " + entry["client"][:35], f"take:{entry['token']}")])
     if not entries:
         lines.append("No tracked or available clients right now.\n")
     lines.append("Available = waiting for assignment. Reserved = only the named editor can accept. TAKE uses the open offer's window.\nTap a client for its brief. /clients shows the latest list.\n" + html.escape(snapshot["coverage"]))
-    nav = []
     route = "view" if own_view else "list"
-    if page:
-        nav.append(button("Previous", f"{route}:{page - 1}"))
-    nav.append(button("Refresh", f"{route}:{page}"))
-    if page + 1 < pages:
-        nav.append(button("Next", f"{route}:{page + 1}"))
+    nav = [button("Refresh", f"{route}:0")]
     return "\n".join(lines), {"inline_keyboard": controls + [nav, [button("Ready", "ready"), button("Busy", "busy"), button("Help", "help")]]}
+
+
+def render_daily_directory(snapshot: dict, page: int = 0, *, own_view: bool = False) -> tuple[str, dict]:
+    entries = sorted(snapshot["clients"], key=lambda e: (
+        0 if e["available"] else 2 if e.get("editor_confirmed") else 1,
+        (e.get("editor") or "").casefold(), e["client"].casefold(), str(e.get("contact_id"))))
+    counts = snapshot["counts"]
+    lines = [f"<b>{html.escape(snapshot['team'])} · {snapshot['work_date']}</b>",
+             f"Available: {counts.get('Available', 0)} · Pending: {counts.get('Reserved', 0)} · Accepted: {counts.get('Assigned', 0)}",
+             ""]
+    if snapshot.get("page_mapping_pending"):
+        lines.append("Page setup pending. Offers paused.")
+    if snapshot.get("queue_hint"):
+        lines += [html.escape(snapshot["queue_hint"]), ""]
+    previous = None
+    totals = Counter(int(e["editor_id"]) for e in entries if e.get("editor_confirmed") and e.get("editor_id"))
+    for entry in entries:
+        section = "Available clients" if entry["available"] else (
+            f"{directory_label(entry.get('editor') or 'Editor')} · {totals.get(int(entry.get('editor_id') or 0), 0)} accepted"
+            if entry.get("editor_confirmed") else "Pending acceptance")
+        if section != previous:
+            lines.append(f"<b>{html.escape(section)}</b>")
+            previous = section
+        client = html.escape(directory_label(entry["client"]))
+        if entry.get("message_id"):
+            client = f'<a href="https://t.me/c/{str(abs(snapshot["chat_id"]))[3:]}/{entry["message_id"]}">{client}</a>'
+        suffix = (f" → {html.escape(directory_label(entry.get('editor') or 'Editor'))}"
+                  if entry["status"] == "Reserved" else "")
+        lines.append(f"• {client} · {html.escape(directory_label(entry['page']))}{suffix}")
+    if not entries:
+        lines.append("No available or accepted clients today.")
+    route = "view" if own_view else "list"
+    nav = [button("Refresh", f"{route}:0")]
+    return "\n".join(lines), {"inline_keyboard": [nav,
+        [button("Ready", "ready"), button("Busy", "busy"), button("Page access", "pages")]]}
 
 
 def directory_label(value: str) -> str:
     """Bound all four labels in a handover row, including emoji UTF-16 units."""
+    value = " ".join(str(value).split())
     encoded = value.encode("utf-16-le")
     if len(encoded) <= 90:
         return value
     return encoded[:88].decode("utf-16-le", errors="ignore") + "…"
+
+
+def directory_parts(text: str) -> list[str]:
+    """Telegram-sized messages containing every row, with no paging controls."""
+    result, lines = [], []
+    for line in text.splitlines():
+        candidate = "\n".join([*lines, line])
+        visible = html.unescape(re.sub(r"<[^>]*>", "", candidate))
+        if lines and len(visible.encode("utf-16-le")) // 2 > 3400:
+            result.append("\n".join(lines))
+            lines = []
+        lines.append(line)
+    if lines:
+        result.append("\n".join(lines))
+    return result or [""]
+
+
+def sync_directory_continuations(action: dict, snapshot: dict, parts: list[str], markup: dict, now: dt.datetime) -> None:
+    """Keep one set of continuation messages per list; refresh them in place."""
+    p = action["payload"]
+    if len(parts) == 1 and int(p.get("_directory_parts") or 1) == 1:
+        return
+    prefix = f"client-directory-continuation:{action['id']}:"
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "id,payload,updated_at,status,telegram_message_id", "chat_id": f"eq.{action['chat_id']}",
+        "dedupe_key": f"like.{prefix}*", "limit": 1000,
+    })) or []
+    existing = {int(row["payload"]["client_directory_part"]): row for row in rows}
+    for number in range(1, max(len(parts), int(p.get("_directory_parts") or 1))):
+        obsolete = number >= len(parts)
+        payload = {"text": "List updated. See the main list." if obsolete else parts[number], "parse_mode": "HTML",
+            "disable_notification": True, "message_thread_id": GROUPS[int(action["chat_id"])]["contact_thread"],
+            "client_directory_continuation": True, "client_directory_part": number,
+            "client_directory_date": snapshot.get("work_date") or now.astimezone(MANILA).date().isoformat(),
+            "client_directory_obsolete": obsolete, "_directory_assignment_fingerprint": snapshot["assignment_fingerprint"],
+            "reply_markup": markup if number == len(parts) - 1 else {"inline_keyboard": []}}
+        row = existing.get(number)
+        if row:
+            if row["status"] == "processing":
+                continue
+            old = row["payload"]
+            if (row["status"] == "sent" and row.get("telegram_message_id")
+                    and old.get("text") == payload["text"] and old.get("reply_markup") == payload["reply_markup"]):
+                continue
+            if row.get("telegram_message_id"):
+                payload["edit_message_id"] = row["telegram_message_id"]
+            filters = {"id": f"eq.{row['id']}", "chat_id": f"eq.{action['chat_id']}",
+                "status": "in.(pending,sent,failed)", "updated_at": f"eq.{row['updated_at']}"}
+            request("scheduled_actions?" + urllib.parse.urlencode(filters), {"payload": payload, "status": "pending",
+                "attempts": 0, "scheduled_for": now.isoformat(), "updated_at": now.isoformat()}, method="PATCH")
+        elif not obsolete:
+            enqueue_scheduled_action(chat_id=int(action["chat_id"]), action_type="message", scheduled_for=now,
+                dedupe_key=prefix + str(number), payload=payload)
 
 
 def fingerprint(history: list[dict]) -> str:
@@ -187,10 +342,13 @@ def fingerprint(history: list[dict]) -> str:
 
 
 def queue_board(chat_id: int, now: dt.datetime, *, refresh: bool = False, state: str | None = None) -> None:
-    key = f"client-directory:v1:{chat_id}"
+    daily = chat_id in GROUPS
+    date = now.astimezone(MANILA).date().isoformat()
+    key = f"client-directory:v2:{chat_id}:{date}" if daily else f"client-directory:v1:{chat_id}"
     enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now, dedupe_key=key,
         repeat_interval_minutes=5, payload={"text": "Loading client list…", "client_directory": True,
-                                          "message_thread_id": GROUPS[chat_id]["contact_thread"], "disable_notification": True})
+                                          "message_thread_id": GROUPS[chat_id]["contact_thread"], "disable_notification": True,
+                                          **({"client_directory_date": date} if daily else {})})
     rows = request("scheduled_actions?" + urllib.parse.urlencode({"dedupe_key": f"eq.{key}", "select": "fingerprint:payload->>_directory_assignment_fingerprint", "limit": 1})) or [] if state else []
     if refresh or state and rows and rows[0].get("fingerprint") != state:
         request("scheduled_actions?" + urllib.parse.urlencode({"dedupe_key": f"eq.{key}", "status": "in.(pending,sent,failed)", "scheduled_for": f"gt.{now.isoformat()}"}),
@@ -247,6 +405,8 @@ def teammates(chat_id: int, now: dt.datetime) -> dict[int, str]:
 
 
 def choose(row: dict, actor: int, revision: int, page: int, now: dt.datetime, event: str) -> str:
+    if not handover_enabled(int(row["chat_id"])):
+        return HANDOVER_DISABLED
     p = row["payload"]
     if actor != int(p["new_client_assignee_id"]) or revision != int(p.get("new_client_handover_revision") or 0):
         return "Only the current editor can start a handover. Use the latest owner confirmation."
@@ -272,6 +432,8 @@ def choose(row: dict, actor: int, revision: int, page: int, now: dt.datetime, ev
 
 
 def start_handover(row: dict, actor: int, target: int, target_name: str, note: str, now: dt.datetime, event: str, revision: int) -> str:
+    if not handover_enabled(int(row["chat_id"])):
+        return HANDOVER_DISABLED
     p = row["payload"]
     if actor != int(p["new_client_assignee_id"]):
         return "Only the current editor can hand over this client."
@@ -296,6 +458,8 @@ def start_handover(row: dict, actor: int, target: int, target_name: str, note: s
 
 
 def finish_handover(row: dict, actor: int, revision: int, decision: str, now: dt.datetime, event: str) -> str:
+    if not handover_enabled(int(row["chat_id"])):
+        return HANDOVER_DISABLED
     p = row["payload"]
     h = p.get("new_client_handover") or {}
     permitted = h.get("from_id") if decision == "cancel" else h.get("to_id")
@@ -330,6 +494,8 @@ def is_member(chat_id: int, user_id: int) -> bool:
 
 
 def reconcile_row(row: dict, now: dt.datetime, *, refresh: bool = True) -> None:
+    if not handover_enabled(int(row["chat_id"])):
+        return
     from new_client_automation import _mention
     p = row["payload"]
     h = p.get("new_client_handover") or {}
@@ -371,9 +537,12 @@ def maintain(now: dt.datetime, allowed: set[int]) -> None:
     from suno_store import suno_configured
     failures = []
     for chat in sorted(allowed.intersection(GROUPS)):
-        if chat == TRABAWHO_CHAT_ID and not suno_configured():
+        if not automation_controls.new_clients_enabled(chat):
+            continue
+        if GROUPS[chat].get("client_source") == "suno" and (not suno_configured() or not GROUPS[chat].get("active") or not GROUPS[chat].get("songs")):
             continue
         try:
+            page_access.queue_poll(chat, now)
             history = history_for(chat)
             queue_board(chat, now, state=fingerprint(history))
             for row in current_rows(history):
@@ -387,13 +556,41 @@ def maintain(now: dt.datetime, allowed: set[int]) -> None:
 
 def prepare_delivery(action: dict, now: dt.datetime) -> bool:
     p = action["payload"]
+    if p.get("client_directory_continuation"):
+        return (p.get("client_directory_date") == now.astimezone(MANILA).date().isoformat()
+            and (p.get("client_directory_obsolete") or
+                 p.get("_directory_assignment_fingerprint") == fingerprint(history_for(int(action["chat_id"])))))
+    if p.get("client_directory") and not p.get("client_directory_once"):
+        date = p.get("client_directory_date")
+        if date and date != now.astimezone(MANILA).date().isoformat() or (action.get("dedupe_key") or "").startswith("client-directory:v1:"):
+            action["repeat_interval_minutes"] = None
+            return False
+    if not handover_enabled(int(action["chat_id"])) and (
+            p.get("client_transfer_assignment_id") or (action.get("dedupe_key") or "").startswith("client-picker:")):
+        return False
+    key = action.get("dedupe_key") or ""
+    if not handover_enabled(int(action["chat_id"])) and key.startswith(("ready-instructions:", "ready-rollout:", "client-help:")):
+        p["text"] = html.escape(guide(int(action["chat_id"])))
+        p["parse_mode"] = "HTML"
+        p["reply_markup"] = menu()
+    if not handover_enabled(int(action["chat_id"])):
+        markup = p.get("reply_markup") or {}
+        if "inline_keyboard" in markup:
+            markup["inline_keyboard"] = [[b for b in row if not str(b.get("callback_data", "")).startswith(
+                ("cw:choose:", "cw:pick:", "cw:yes:", "cw:no:", "cw:cancel:"))] for row in markup["inline_keyboard"]]
+            markup["inline_keyboard"] = [row for row in markup["inline_keyboard"] if row]
     if p.get("client_queue_user_id"):
         p["text"] = queue_status_text(int(action["chat_id"]), int(p["client_queue_user_id"]), now)
         p["parse_mode"] = "HTML"
         p["reply_markup"] = menu()
     if p.get("client_directory"):
         snapshot = directory(int(action["chat_id"]), now)
-        p["text"], p["reply_markup"] = render_directory(snapshot, int(p.get("client_directory_page") or 0), own_view=bool(p.get("client_directory_once")))
+        full_text, markup = render_directory(snapshot, own_view=bool(p.get("client_directory_once")))
+        parts = directory_parts(full_text)
+        sync_directory_continuations(action, snapshot, parts, markup, now)
+        p["text"] = parts[0]
+        p["reply_markup"] = markup if len(parts) == 1 else {"inline_keyboard": []}
+        p["_directory_parts"] = max(len(parts), int(p.get("_directory_parts") or 1))
         p["_directory_assignment_fingerprint"] = snapshot["assignment_fingerprint"]
         p["parse_mode"] = "HTML"
         if not p.get("client_directory_once") and action.get("telegram_message_id"):
@@ -429,7 +626,15 @@ def queue_status_text(chat_id: int, user_id: int, now: dt.datetime) -> str:
         "waiting_for_page_mapping": "The team's client source is not connected yet. Your team lead needs to check it.",
         "reply_cooldown": "A previous offer timed out. Wait for the retry time shown by the bot or send /ready when available.",
         "source_read_error": "The client source is temporarily unavailable. The bot will retry; your place is kept.",
+        "page_access_required": "Choose your accessible pages in /pages before receiving clients.",
     }
+    if chat_id in GROUPS:
+        reasons.update({
+            "not_ready_now": "Send /ready when available. Ready lasts 60 minutes.",
+            "no_available_complete_clients": "You are Ready. Waiting for a client. Renew /ready every 60 minutes.",
+            "ready_for_assignment": "Ready. Waiting for your turn.",
+            "awaiting_working_reply": "Offer waiting. Tap Accept client before its deadline.",
+        })
     available = sum(status.get("available_clients", {}).values())
     lines = [f"<b>{html.escape(status['team'])} — YOUR CLIENT QUEUE</b>",
              html.escape(member["name"] if member else str(user_id)), "",
@@ -514,7 +719,7 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
         return None
     if callback and message.get("message_thread_id") is None:
         message = {**message, "message_thread_id": thread}
-    if chat == TRABAWHO_CHAT_ID:
+    if GROUPS[chat].get("client_source") == "suno":
         from suno_store import suno_configured
         if not suno_configured():
             return "The Suno client source is unavailable. Ask your team lead to check the connection." if callback else None
@@ -532,6 +737,16 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
             return None
         command = {"clients": "list", "clienthelp": "help"}.get(match[1].lower(), match[1].lower())
         parts = [command, match[2] or ""]
+    if not automation_controls.new_clients_enabled(chat):
+        if not callback:
+            enqueue_scheduled_action(chat_id=chat, action_type="message", scheduled_for=now,
+                dedupe_key=f"feature-disabled:new-clients:{event}", payload={"text": automation_controls.NEW_CLIENTS_OFF,
+                    "message_thread_id": GROUPS[chat]["contact_thread"]})
+        return automation_controls.NEW_CLIENTS_OFF
+    if not handover_enabled(chat) and command in {"choose", "pick", "yes", "no", "cancel", "handover", "accept_handover", "decline_handover", "cancel_handover"}:
+        if not callback:
+            queue_message(chat, now, f"client-command-result:{event}", HANDOVER_DISABLED)
+        return HANDOVER_DISABLED
     if command in {"ready", "busy"}:
         synthetic = {"update_id": update.get("update_id"), "message": {**message, "from": user,
                     "text": "/" + command, "date": int(now.timestamp())}}
@@ -539,6 +754,15 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
             return "Use your team's availability poll; the ready queue is disabled."
         ready_availability.handle(synthetic, allowed, now)
         return "Availability updated."
+    if command == "pages" and page_access.enabled(chat):
+        page_access.queue_poll(chat, now)
+        records = [page_access.poll_record(chat, part) for part in range((len(page_access.page_map(chat)) + 8) // 9)]
+        links = [[{"text": "Page access" + (f" {i + 1}" if len(records) > 1 else ""), "url":
+            f"https://t.me/c/{str(abs(chat))[3:]}/{record['message_id']}"}] for i, record in enumerate(records) if record]
+        text = "Choose your accessible pages in the polls below. Update them when access changes."
+        queue_message(chat, now, f"page-access-help:{event}", text if links else "Page-access polls queued.",
+                      {"inline_keyboard": links} if links else None)
+        return "Page-access polls opened." if links else "Page-access polls queued."
     if command in {"accept", "take"} and callback and len(parts) == 2 and re.fullmatch(r"[A-F0-9]{8}", parts[1]):
         history = history_for(chat)
         matches = [row for row in current_rows(history) if row["payload"].get("new_client_token") == parts[1]]
@@ -549,11 +773,12 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
             if int(row["payload"]["new_client_assignee_id"]) == actor:
                 return "Already accepted. This client is yours; check your owner confirmation."
             return "This client is already assigned to another editor."
-        synthetic = {"message": {**message, "from": user, "date": int(now.timestamp()), "text": f"{'WORKING' if command == 'accept' else 'TAKE'} {parts[1]}"}}
+        synthetic = {"message": {**message, "from": user, "update_id": update.get("update_id"), "date": int(now.timestamp()), "text": f"{'WORKING' if command == 'accept' else 'TAKE'} {parts[1]}"}}
         handled = confirm_new_client_reply(synthetic, allowed, queue_next=False, history=history)
         if handled and row["payload"].get("new_client_acknowledged_at") and int(row["payload"]["new_client_assignee_id"]) == actor:
-            queue_board(chat, now, refresh=True)
-            return "Accepted. Wait for the owner confirmation in NEW CLIENTS."
+            if handover_enabled(chat):
+                queue_board(chat, now, refresh=True)
+            return "Accepted. Client details stay in this message."
         if handled:
             return "The offer changed while you were accepting it. Check the latest owner confirmation."
         return f"Offer expired or reserved for another editor. Check the latest offer; you can also send {'WORKING' if command == 'accept' else 'TAKE'} {parts[1]}."

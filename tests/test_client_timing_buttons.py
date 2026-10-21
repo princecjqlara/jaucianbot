@@ -34,7 +34,7 @@ class TimingAndButtonTests(unittest.TestCase):
                 self.assertEqual(clients._timeout_minutes(chat), 15)
                 guide = workflow.guide(chat)
                 self.assertIn("Accept within 15 minutes", guide)
-                self.assertIn("Reminder after 10 minutes", guide)
+                self.assertIn("60 minutes", guide)
 
     def test_new_warning_starts_at_ten_minutes_and_ends_at_fifteen(self):
         row = ready_offer()
@@ -157,7 +157,7 @@ class TimingAndButtonTests(unittest.TestCase):
     def test_suno_retains_receipts_without_veo_done_deal_button(self):
         row = assignment(TRABAWHO_CHAT_ID)
         buttons = workflow.owner_buttons(row)["inline_keyboard"]
-        self.assertFalse(any("dd:" in b["callback_data"] for line in buttons for b in line))
+        self.assertFalse(any("dd:" in b.get("callback_data", "") for line in buttons for b in line))
         with patch.object(workflow, "queue_message") as queue:
             self.assertIn("Suno receipts", workflow.done_deal_template(row, 11, NOW, "suno", "650"))
         queue.assert_not_called()

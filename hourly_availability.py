@@ -10,11 +10,19 @@ from zoneinfo import ZoneInfo
 from cloud_store import enqueue_scheduled_action, request
 
 MANILA = ZoneInfo("Asia/Manila")
+VEO_YES_NO_START_DATE = dt.date(2026, 10, 22)
 
 
 def enabled(work_date: dt.date) -> bool:
     start = os.environ.get("HOURLY_AVAILABILITY_START_DATE", "").strip()
     return bool(start and work_date >= dt.date.fromisoformat(start))
+
+
+def enabled_for_chat(chat_id: int, work_date: dt.date) -> bool:
+    from daily_automation import AVAILABILITY_GROUPS, MAKATA_CHAT_ID
+    if chat_id == MAKATA_CHAT_ID:
+        return False
+    return enabled(work_date) and not (chat_id in AVAILABILITY_GROUPS and work_date >= VEO_YES_NO_START_DATE)
 
 
 def read_records(prefix: str, allowed: set[int], work_date: dt.date | None = None) -> list[dict]:
@@ -126,6 +134,7 @@ def answers(chat_id: int, work_date: dt.date) -> list[dict]:
 def counts(allowed: set[int], work_date: dt.date) -> dict[int, dict]:
     if not enabled(work_date):
         return {}
+    allowed = {chat for chat in allowed if enabled_for_chat(chat, work_date)}
     polls = read_records("hourly-poll:", allowed, work_date)
     result = {}
     for chat_id in {int(row["chat_id"]) for row in polls}:
@@ -173,7 +182,7 @@ def queue_polls(work_date: dt.date, now: dt.datetime, configs: dict[int, dict], 
         return 0
     queued = 0
     for chat_id, config in configs.items():
-        if chat_id not in allowed:
+        if chat_id not in allowed or not enabled_for_chat(chat_id, work_date):
             continue
         for part in range(3):
             hours = list(range(part * 8, part * 8 + 8))

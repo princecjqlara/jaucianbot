@@ -14,7 +14,7 @@ from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, queue_daily_pol
 from suno_store import suno_assignment_matches_project
 
 
-FRIENDLY_PLAN_VERSION = "friendly-v2"
+FRIENDLY_PLAN_VERSION = "simple-v3"
 TRABAWHO_CHECKIN_HOURS = (10, 16, 20)
 
 
@@ -32,9 +32,13 @@ def plan_text(work_date: dt.date, active_members: int, today: dt.date) -> str:
     else:
         status = "No teammates are marked Active yet."
         next_step = "Please vote in the poll so we can prepare the day's assignments."
-    from hourly_availability import enabled
-    if enabled(work_date):
+    from hourly_availability import enabled_for_chat
+    if enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
         next_step = "Choose every hour you can work in all three availability polls. Clients rotate among members available that hour."
+    if not enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
+        return (f"SUNO — {label}\n{work_date:%b %d, %Y} (PHT)\n"
+                f"Active: {active_members} · Planned clients: {plan_totals(active_members)[0]}\n"
+                "Availability: Yes / No. Send /ready in NEW CLIENTS when available.")
     return "\n".join([
         f"🌟 TRABAWHO TEAM UPDATE — {label}",
         f"📅 {date_label} (PHT)", "",
@@ -90,7 +94,7 @@ def _assignment_counts(work_date: dt.date) -> tuple[int, dict[int, int]]:
 
 def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_by_user: dict[int, int], *, now: dt.datetime | None = None) -> str:
     active = [row for row in answers if row.get("active")]
-    from hourly_availability import current_members, enabled
+    from hourly_availability import current_members, enabled_for_chat
     if now:
         active = current_members(active, now)
     inactive = [row for row in answers if not row.get("active")]
@@ -115,14 +119,26 @@ def availability_checkin_text(work_date: dt.date, answers: list[dict], assigned_
         "If you haven't voted yet, please choose Active or Not Active so we can plan fairly.",
         "Thank you, team. We appreciate you and hope you have a good day! 🌟",
     ]
-    if enabled(work_date):
+    if enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
         lines = [line.replace("choose Active or Not Active", "select the hours you can work in all three polls")
                  .replace("you marked Active today", "you're scheduled this hour")
                  .replace("you marked Not Active today", "you haven't selected any available hours today") for line in lines]
+    if not enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
+        return (f"SUNO CHECK-IN · {work_date:%b %d}\n"
+                "Update Yes / No availability. Send /ready when available; /busy stops offers.")
     return "\n".join(lines)
 
 
 def progress_text(work_date: dt.date, count_row: dict | None, assigned: int) -> str:
+    from hourly_availability import enabled_for_chat
+    if not enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
+        active = int((count_row or {}).get("active_workers", 0))
+        target = plan_totals(active)[0]
+        remaining = max(target - assigned, 0)
+        progress = (f"{remaining} left to assign." if remaining else
+                    "Today's assignment plan is filled." if target else "Waiting for Active votes.")
+        return (f"SUNO PROGRESS · {work_date:%b %d}\nActive: {active} · Clients offered: {assigned} of {target} planned\n"
+                f"{progress}\nSales and deliveries are tracked separately in DAILY REPORTS.")
     date_label = work_date.strftime('%A, %B %d, %Y')
     if not count_row:
         return "\n".join([

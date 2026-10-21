@@ -42,6 +42,11 @@ def callback(data, actor=11, chat=CHAT, thread=None):
 
 class ClientWorkflowTests(unittest.TestCase):
     def setUp(self):
+        # Retain recovery regressions for historical transfers; live teams now
+        # disable handovers, covered by test_suno_team_policy and VEO tests.
+        legacy = patch.object(workflow, "handover_enabled", side_effect=lambda chat: chat == TRABAWHO_CHAT_ID)
+        legacy.start()
+        self.addCleanup(legacy.stop)
         for target, value in (("client_workflow.reconcile_row", None), ("client_workflow.is_member", True)):
             mock = patch(target, return_value=value)
             mock.start()
@@ -56,14 +61,14 @@ class ClientWorkflowTests(unittest.TestCase):
                                        extra.get("event", "request-1"), extra.get("revision", 0))
 
     def test_only_owner_can_request_and_self_transfer_is_rejected(self):
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "save_assignment") as save:
             self.assertIn("Only the current editor", self.start(row, actor=33))
             self.assertIn("different editor", self.start(row, target=11))
         save.assert_not_called()
 
     def test_request_keeps_owner_until_chosen_recipient_accepts(self):
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "save_assignment", side_effect=self.save):
             self.start(row)
             self.assertEqual(row["payload"]["new_client_assignee_id"], 11)
@@ -79,7 +84,7 @@ class ClientWorkflowTests(unittest.TestCase):
 
     def test_decline_or_cancel_keeps_original_owner_and_is_audited(self):
         for decision, actor in (("no", 22), ("cancel", 11)):
-            row = assignment()
+            row = assignment(TRABAWHO_CHAT_ID)
             with patch.object(workflow, "save_assignment", side_effect=self.save):
                 self.start(row)
                 workflow.finish_handover(row, actor, 1, decision, NOW, "resolved")
@@ -87,7 +92,7 @@ class ClientWorkflowTests(unittest.TestCase):
             self.assertEqual(len(row["payload"]["new_client_handover_events"]), 1)
 
     def test_only_requester_can_cancel_and_only_receiver_can_decline(self):
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "save_assignment", side_effect=self.save):
             self.start(row)
         with patch.object(workflow, "save_assignment") as save:
@@ -96,7 +101,7 @@ class ClientWorkflowTests(unittest.TestCase):
         save.assert_not_called()
 
     def test_replay_does_not_transfer_twice_or_restart_old_request(self):
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "save_assignment", side_effect=self.save) as save:
             self.start(row)
             self.start(row)
@@ -106,11 +111,11 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertEqual(len(row["payload"]["new_client_handover_events"]), 1)
 
     def test_old_picker_and_nonmember_do_not_create_request(self):
-        row = assignment(new_client_handover_revision=2)
+        row = assignment(TRABAWHO_CHAT_ID, new_client_handover_revision=2)
         with patch.object(workflow, "save_assignment") as save:
             self.start(row)
         save.assert_not_called()
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "is_member", return_value=False), patch.object(workflow, "save_assignment") as save:
             self.assertIn("current member", self.start(row))
         save.assert_not_called()
@@ -158,7 +163,7 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertIsNone(workflow.handle(incoming, {CHAT}, NOW))
 
     def test_picker_checks_owner_and_has_pagination_for_large_teams(self):
-        row = assignment()
+        row = assignment(TRABAWHO_CHAT_ID)
         with patch.object(workflow, "teammates", return_value={i: f"Editor {i}" for i in range(11, 50)}), patch.object(workflow, "queue_message") as queue:
             workflow.choose(row, 11, 0, 0, NOW, "pick")
         keyboard = queue.call_args.args[4]["inline_keyboard"]
@@ -209,24 +214,29 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertFalse(owner["available"])
 
     def test_pending_handover_list_still_names_original_editor(self):
-        row = assignment(new_client_handover={"state": "pending", "to_name": "Bea"})
+        row = assignment(TRABAWHO_CHAT_ID, new_client_handover={"state": "pending", "to_name": "Bea"})
         with patch.object(workflow, "history_for", return_value=[row]), patch.object(clients, "_page_contacts", return_value=[]):
-            snapshot = workflow.directory(CHAT, NOW)
+            snapshot = workflow.directory(TRABAWHO_CHAT_ID, NOW)
         entry = snapshot["clients"][0]
         self.assertEqual(entry["status"], "Handover pending")
         self.assertEqual(entry["editor_id"], 11)
         self.assertEqual(entry["next_editor"], "Bea")
         self.assertFalse(entry["available"])
 
-    def test_directory_pages_fit_telegram_and_escape_client_html(self):
+    def test_full_directory_escapes_html_and_splits_without_paging(self):
         entries = [{"client": "<&>" * 30, "page": "<&>" * 30, "status": "Available", "editor": None,
                     "contact_id": str(i)} for i in range(55)]
         snapshot = {"clients": entries, "counts": {"Available": 55}, "team": "Veo", "chat_id": CHAT,
                     "as_of_utc": NOW.isoformat(), "coverage": "Tracked clients"}
         text, markup = workflow.render_directory(snapshot, 1, own_view=True)
-        self.assertIn("Page 2/5", text)
+        self.assertNotIn("Page 2/5", text)
         self.assertIn("&lt;&amp;&gt;", text)
-        self.assertLess(len(__import__('html').unescape(text)), 4096)
+        self.assertEqual(text.count("No editor"), 55)
+        import html, re
+        for part in workflow.directory_parts(text):
+            self.assertLessEqual(len(html.unescape(re.sub(r"<[^>]*>", "", part)).encode("utf-16-le")) // 2, 4096)
+        self.assertNotIn("Previous", str(markup))
+        self.assertNotIn("Next", str(markup))
         self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "cw:view:0")
 
     def test_automatic_board_edits_saved_message_and_renders_at_delivery(self):
@@ -252,8 +262,8 @@ class ClientWorkflowTests(unittest.TestCase):
         self.assertEqual(visible.count("(awaiting acceptance)"), 12)
 
     def test_obsolete_handover_notices_are_suppressed(self):
-        row = assignment(new_client_handover={"state": "accepted", "revision": 1})
-        action = {"chat_id": CHAT, "payload": {"client_transfer_assignment_id": 100,
+        row = assignment(TRABAWHO_CHAT_ID, new_client_handover={"state": "accepted", "revision": 1})
+        action = {"chat_id": TRABAWHO_CHAT_ID, "payload": {"client_transfer_assignment_id": 100,
                   "client_transfer_revision": 1, "client_transfer_state": "pending"}}
         with patch.object(workflow, "full_assignment", return_value=row):
             self.assertFalse(workflow.prepare_delivery(action, NOW))

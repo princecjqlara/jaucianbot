@@ -9,10 +9,12 @@ import new_client_automation as clients
 import ready_availability as ready
 from test_ready_handoffs import NOW, command, person, ready_offer
 from test_client_workflow import callback
+from page_access_fixture import granted_access
 
 
 class QueueRecoveryTests(unittest.TestCase):
     def setUp(self):
+        granted_access(self)
         env = patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"})
         env.start()
         self.addCleanup(env.stop)
@@ -90,7 +92,7 @@ class QueueRecoveryTests(unittest.TestCase):
             text = workflow.queue_status_text(ready.OLLIE, 11, NOW)
         self.assertIn("You are Ready", text)
         self.assertIn("Eligible unassigned clients: 0", text)
-        self.assertIn("no need to keep pressing Ready", text)
+        self.assertIn("Renew /ready every 60 minutes", text)
 
     def test_lowest_client_count_gets_the_next_scarce_client(self):
         user_a, user_b = person(continuous=True), person(continuous=True)

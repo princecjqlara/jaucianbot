@@ -21,6 +21,11 @@ def build_trabawho_summary(work_date: dt.date, now: dt.datetime) -> str:
     the Daily Reports group.
     """
     count = daily_poll_counts({TRABAWHO_CHAT_ID}, work_date).get(TRABAWHO_CHAT_ID)
+    from hourly_availability import enabled_for_chat
+    if not enabled_for_chat(TRABAWHO_CHAT_ID, work_date):
+        return (f"SUNO RECAP · {work_date:%b %d, %Y}\n"
+                f"Active: {int(count['active_workers']) if count else 'Unrecorded'}\n"
+                "Confirm delivered songs with SONG SENT + token in SONGS. Details are in DAILY REPORTS.")
     date_label = work_date.strftime('%A, %B %d, %Y')
     if count:
         active = int(count["active_workers"])
@@ -94,7 +99,8 @@ def queue_trabawho_daily_report(now: dt.datetime, allowed: set[int]) -> int:
     work_date = local.date() - dt.timedelta(days=1)
     targets = [(TRABAWHO_CHAT_ID, TRABAWHO["announcements"], build_trabawho_summary,
                 f"trabawho-daily-summary-complete:{work_date.isoformat()}:{TRABAWHO_CHAT_ID}")]
-    if DAILY_REPORTS_CHAT_ID in allowed:
+    import report_topics
+    if DAILY_REPORTS_CHAT_ID in allowed and not report_topics.enabled():
         targets.append((DAILY_REPORTS_CHAT_ID, None, build_trabawho_report,
                         f"trabawho-daily-report-complete:{work_date.isoformat()}:{DAILY_REPORTS_CHAT_ID}"))
     missing = []

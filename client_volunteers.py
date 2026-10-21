@@ -131,6 +131,9 @@ def accepts(message: dict, row: dict, author_id: int) -> bool:
                          _reply_to_message_id(message) == int(row["telegram_message_id"])))
     if at < delivered + dt.timedelta(minutes=int(payload.get("new_client_response_minutes") or 20)):
         return author_id == original and direct_match
+    import ready_availability as ready
+    if ready.renewal_required(int(row["chat_id"])) and payload.get("new_client_ready_protocol"):
+        return False
     if payload.get("new_client_phase") not in {"volunteer", "expired"}:
         return False
     began = start(row)
@@ -167,6 +170,24 @@ def release(row: dict, now: dt.datetime) -> bool:
     if not payload.get("new_client_response_minutes"):
         return False
     if payload.get("new_client_acknowledged_at"):
+        return True
+    import ready_availability as ready
+    if ready.renewal_required(int(row["chat_id"])) and payload.get("new_client_ready_protocol"):
+        import client_handoffs
+        if row.get("status") == "cancelled" and payload.get("new_client_phase") != "volunteer":
+            return True
+        delivered = _utc_time(payload.get("_first_delivery_at") or row.get("sent_at"))
+        day_ended = payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat()
+        client_handoffs.warning(row, now)
+        if (payload.get("new_client_phase") == "volunteer" or day_ended or
+                (delivered and now >= delivered + dt.timedelta(minutes=int(payload["new_client_response_minutes"])))):
+            if client_handoffs.end_delivered(row, now):
+                reason = "assignment_day_ended" if day_ended else EXPIRED
+                changed = dict(payload, new_client_cancelled_reason=reason,
+                               new_client_cancelled_at=now.isoformat(), new_client_phase="expired")
+                if update_new_client_action(int(row["id"]), changed, status="cancelled", include_cancelled=row.get("status") == "cancelled"):
+                    row.update(payload=changed, status="cancelled")
+                    client_handoffs.close_offers(row, now, "Offer expired. Waiting for the next Ready member.")
         return True
     reason = None
     if payload.get("new_client_work_date") != now.astimezone(MANILA).date().isoformat():

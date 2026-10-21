@@ -6,13 +6,14 @@ import datetime as dt
 from decimal import Decimal
 
 from cloud_store import receipt_messages
-from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID
+from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, SUNO_GROUPS
 from receipt_parser import collect_receipts, receipt_topic_rows
 
 
-def receipt_report(rows: list[dict], start_date: dt.date, end_date: dt.date) -> dict:
-    rows = [r for r in rows if r.get("chat_id", TRABAWHO_CHAT_ID) == TRABAWHO_CHAT_ID]
-    parsed = collect_receipts(rows, TRABAWHO["receipts"])
+def receipt_report(rows: list[dict], start_date: dt.date, end_date: dt.date, *, chat_id: int = TRABAWHO_CHAT_ID) -> dict:
+    config = SUNO_GROUPS[chat_id]
+    rows = [r for r in rows if r.get("chat_id", chat_id) == chat_id]
+    parsed = collect_receipts(rows, config["receipts"])
     workers = {}
 
     def person(row):
@@ -32,7 +33,7 @@ def receipt_report(rows: list[dict], start_date: dt.date, end_date: dt.date) -> 
     def evidence(row):
         return {"message_id": row["message_id"], "sent_utc": row["sent_utc"],
                 "source": row.get("source"),
-                "url": f"https://t.me/c/2894511895/{row['message_id']}"}
+                "url": f"https://t.me/c/{str(abs(chat_id))[3:]}/{row['message_id']}"}
 
     for entry in parsed["entries"]:
         row = entry["row"]
@@ -64,10 +65,10 @@ def receipt_report(rows: list[dict], start_date: dt.date, end_date: dt.date) -> 
     totals = {metric: sum((w[metric] for w in ordered), Decimal(0)) for metric in (
         "gross", "salary", "labeled_tips", "tip_salary", "non_tip_gross", "company_share")}
     totals["receipt_posts"] = sum(w["receipt_posts"] for w in ordered)
-    topic_rows, _ = receipt_topic_rows(rows, TRABAWHO["receipts"])
+    topic_rows, _ = receipt_topic_rows(rows, config["receipts"])
     period_rows = [r for r in topic_rows if in_period(r)]
     return {
-        "team": TRABAWHO["name"], "chat_id": TRABAWHO_CHAT_ID, "receipt_thread_id": 4,
+        "team": config["name"], "chat_id": chat_id, "receipt_thread_id": config["receipts"],
         "start_date": start_date, "end_date": end_date, "totals": totals, "workers": ordered,
         "leaders": {"sales": [{"name": w["name"], "value": w["gross"]} for w in ordered if w["gross"] > 0][:5]},
         "review": review,

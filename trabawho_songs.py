@@ -13,7 +13,7 @@ from cloud_store import (
     sync_song_owner,
     song_assignment_owner,
 )
-from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID
+from daily_automation import MANILA, TRABAWHO, TRABAWHO_CHAT_ID, SUNO_GROUPS
 from suno_store import suno_assignment_matches_project
 
 
@@ -25,9 +25,9 @@ def timestamp(value) -> dt.datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
 
 
-def ensure_song_jobs(now: dt.datetime) -> None:
-    existing = {j["payload"]["song_assignment_id"]: j for j in song_jobs(TRABAWHO_CHAT_ID)}
-    for assignment in new_client_actions({TRABAWHO_CHAT_ID}):
+def ensure_song_jobs(now: dt.datetime, chat_id: int = TRABAWHO_CHAT_ID) -> None:
+    existing = {j["payload"]["song_assignment_id"]: j for j in song_jobs(chat_id)}
+    for assignment in new_client_actions({chat_id}):
         payload = assignment.get("payload") or {}
         started = payload.get("new_client_acknowledged_at")
         if not started or not payload.get("new_client_token") or not suno_assignment_matches_project(assignment):
@@ -42,7 +42,7 @@ def ensure_song_jobs(now: dt.datetime) -> None:
                     raise RuntimeError("Song owner changed concurrently; retry synchronization")
             continue
         start = timestamp(started)
-        create_song_job(TRABAWHO_CHAT_ID, int(assignment["id"]), {
+        create_song_job(chat_id, int(assignment["id"]), {
             "song_assignment_id": int(assignment["id"]), "song_token": payload["new_client_token"],
             "song_assignee_id": payload["new_client_assignee_id"],
             "song_assignee_name": payload.get("new_client_assignee_name") or str(payload["new_client_assignee_id"]),
@@ -79,11 +79,10 @@ def notice_text(job: dict, now: dt.datetime) -> str:
     timing = f"OVERDUE by {duration}" if now >= deadline else f"Time remaining: {duration}"
     user = f'<a href="tg://user?id={int(payload["song_assignee_id"])}">{html.escape(payload["song_assignee_name"])}</a>'
     return "\n".join([
-        "🎵 TRABAWHO SONG DELIVERY", f"{user} — {html.escape(payload['song_contact_name'])}",
-        timing, f"24-hour deadline: {deadline.astimezone(MANILA).strftime('%b %d, %Y %I:%M %p')} PHT", "",
-        "Please send the song to the client today. If you already sent it, confirm below.",
+        "SUNO SONG DELIVERY", f"{user} — {html.escape(payload['song_contact_name'])}",
+        timing, f"24-hour deadline: {deadline.astimezone(MANILA).strftime('%b %d, %Y %I:%M %p')} PHT",
         f"Reply <code>SONG SENT {payload['song_token']}</code> or reply <code>DONE</code> to this reminder.",
-        "Confirm after delivery to the client; uploading a file here does not confirm client delivery.",
+        "Confirm after sending to the client; a file upload alone does not confirm delivery.",
     ])
 
 
@@ -91,7 +90,8 @@ def _matches(message: dict, job: dict, notices: list[dict]) -> bool:
     payload = job["payload"]
     author = message.get("author_id", (message.get("from") or {}).get("id"))
     thread = message.get("thread_id", message.get("message_thread_id"))
-    if author != int(payload["song_assignee_id"]) or thread != TRABAWHO["songs"]:
+    chat_id = int(job.get("chat_id", TRABAWHO_CHAT_ID))
+    if author != int(payload["song_assignee_id"]) or thread != SUNO_GROUPS[chat_id]["songs"]:
         return False
     match = DONE.fullmatch(message.get("text") or message.get("caption") or "")
     if not match:
@@ -115,7 +115,7 @@ def _record_completion(message: dict, job: dict, now: dt.datetime) -> bool:
     if payload.get("song_owner_since") and sent < timestamp(payload["song_owner_since"]):
         return False
     if (payload.get("song_owner_since") and
-            song_assignment_owner(int(payload["song_assignment_id"]), TRABAWHO_CHAT_ID) != int(payload["song_assignee_id"])):
+            song_assignment_owner(int(payload["song_assignment_id"]), int(job.get("chat_id", TRABAWHO_CHAT_ID))) != int(payload["song_assignee_id"])):
         return False
     if not payload.get("song_completed_at"):
         if not complete_song_job(int(job["id"]), sent, int(message["message_id"])):
@@ -131,13 +131,13 @@ def _queue_completion_ack(job: dict, now: dt.datetime) -> int:
     if payload.get("song_ack_queued_at"):
         return 0
     on_time = timestamp(payload["song_completed_at"]) <= timestamp(payload["song_deadline_at"])
+    chat_id = int(job.get("chat_id", TRABAWHO_CHAT_ID))
     queued = int(enqueue_scheduled_action(
-        chat_id=TRABAWHO_CHAT_ID, action_type="message",
+        chat_id=chat_id, action_type="message",
         payload={"text": (
-            f"✅ {payload['song_assignee_name']}, song delivery recorded for {payload['song_contact_name']} "
-            f"({payload['song_token']}). {'Within 24 hours.' if on_time else 'Recorded after the 24-hour deadline.'} "
-            "Reminders for this client have stopped."
-        ), "message_thread_id": TRABAWHO["songs"], "disable_notification": False,
+            f"Delivered: {payload['song_contact_name']} ({payload['song_token']}). "
+            f"{'Within 24 hours.' if on_time else 'After the 24-hour deadline.'} Reminders stopped."
+        ), "message_thread_id": SUNO_GROUPS[chat_id]["songs"], "disable_notification": False,
             "reply_parameters": {"message_id": payload["song_completion_message_id"], "allow_sending_without_reply": True}},
         scheduled_for=now, dedupe_key=f"trabawho-song-ack:{job['id']}",
     ))
@@ -148,26 +148,31 @@ def _queue_completion_ack(job: dict, now: dt.datetime) -> int:
 
 def confirm_song_reply(update: dict, allowed: set[int], now: dt.datetime) -> bool:
     message = update.get("message") or update.get("edited_message") or {}
-    if TRABAWHO_CHAT_ID not in allowed or (message.get("chat") or {}).get("id") != TRABAWHO_CHAT_ID:
+    chat_id = (message.get("chat") or {}).get("id")
+    if chat_id not in allowed or chat_id not in SUNO_GROUPS:
         return False
-    if message.get("message_thread_id") != TRABAWHO["songs"] or not DONE.fullmatch(
+    if message.get("message_thread_id") != SUNO_GROUPS[chat_id]["songs"] or not DONE.fullmatch(
         message.get("text") or message.get("caption") or ""):
         return False
-    ensure_song_jobs(now)
-    jobs, notices = song_jobs(TRABAWHO_CHAT_ID), song_notices(TRABAWHO_CHAT_ID)
+    ensure_song_jobs(now) if chat_id == TRABAWHO_CHAT_ID else ensure_song_jobs(now, chat_id)
+    jobs, notices = song_jobs(chat_id), song_notices(chat_id)
     matches = [job for job in jobs if _matches(message, job, notices)]
     return len(matches) == 1 and _record_completion(message, matches[0], now)
 
 
 def queue_song_followups(now: dt.datetime, allowed: set[int]) -> int:
-    if TRABAWHO_CHAT_ID not in allowed:
+    return sum(_queue_team_song_followups(now, chat) for chat in sorted(allowed.intersection(SUNO_GROUPS)) if SUNO_GROUPS[chat].get("songs"))
+
+
+def _queue_team_song_followups(now: dt.datetime, chat_id: int) -> int:
+    if not SUNO_GROUPS[chat_id].get("songs"):
         return 0
-    ensure_song_jobs(now)
-    jobs = song_jobs(TRABAWHO_CHAT_ID)
+    ensure_song_jobs(now) if chat_id == TRABAWHO_CHAT_ID else ensure_song_jobs(now, chat_id)
+    jobs = song_jobs(chat_id)
     outstanding = [job for job in jobs if not job["payload"].get("song_completed_at")]
     if outstanding:
-        notices = song_notices(TRABAWHO_CHAT_ID)
-        replies = song_reply_messages(TRABAWHO_CHAT_ID, TRABAWHO["songs"],
+        notices = song_notices(chat_id)
+        replies = song_reply_messages(chat_id, SUNO_GROUPS[chat_id]["songs"],
             min(timestamp(j["payload"]["song_started_at"]) for j in outstanding), now,
             {int(j["payload"]["song_assignee_id"]) for j in outstanding})
         for message in sorted(replies, key=lambda m: m.get("edited_utc") or m["sent_utc"]):
@@ -183,9 +188,9 @@ def queue_song_followups(now: dt.datetime, allowed: set[int]) -> int:
         if stage is None:
             continue
         queued += int(enqueue_scheduled_action(
-            chat_id=TRABAWHO_CHAT_ID, action_type="message",
+            chat_id=chat_id, action_type="message",
             payload={"text": notice_text(job, now), "parse_mode": "HTML",
-                "message_thread_id": TRABAWHO["songs"], "disable_notification": False,
+                "message_thread_id": SUNO_GROUPS[chat_id]["songs"], "disable_notification": False,
                 "song_job_id": job["id"], "song_stage": stage, "song_owner_id": job["payload"]["song_assignee_id"]},
             scheduled_for=now, dedupe_key=f"trabawho-song-notice:{job['id']}:owner-{job['payload']['song_assignee_id']}:{stage}",
         ))
@@ -193,17 +198,18 @@ def queue_song_followups(now: dt.datetime, allowed: set[int]) -> int:
 
 
 def is_song_notice(action: dict) -> bool:
-    return int(action.get("chat_id", 0)) == TRABAWHO_CHAT_ID and bool(action.get("payload", {}).get("song_job_id"))
+    return int(action.get("chat_id", 0)) in SUNO_GROUPS and bool(action.get("payload", {}).get("song_job_id"))
 
 
 def song_notice_delivery_allowed(action: dict, now: dt.datetime) -> bool:
-    job = song_job_state(int(action["payload"]["song_job_id"]), TRABAWHO_CHAT_ID)
+    chat_id = int(action["chat_id"])
+    job = song_job_state(int(action["payload"]["song_job_id"]), chat_id)
     if not job or job["payload"].get("song_completed_at"):
         return False
     if action["payload"].get("song_owner_id") is not None and action["payload"]["song_owner_id"] != job["payload"]["song_assignee_id"]:
         return False
     if (job["payload"].get("song_owner_since") and
-            song_assignment_owner(int(job["payload"]["song_assignment_id"]), TRABAWHO_CHAT_ID) != int(job["payload"]["song_assignee_id"])):
+            song_assignment_owner(int(job["payload"]["song_assignment_id"]), chat_id) != int(job["payload"]["song_assignee_id"])):
         return False
     # Legacy queued reminders should also name the current owner.
     action["payload"]["text"] = notice_text(job, now)
@@ -214,8 +220,8 @@ def song_notice_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     return True
 
 
-def song_report_lines(work_date: dt.date, now: dt.datetime) -> list[str]:
-    jobs = song_jobs(TRABAWHO_CHAT_ID)
+def song_report_lines(work_date: dt.date, now: dt.datetime, chat_id: int = TRABAWHO_CHAT_ID) -> list[str]:
+    jobs = song_jobs(chat_id)
     completed = [j for j in jobs if j["payload"].get("song_completed_at") and
                  timestamp(j["payload"]["song_completed_at"]).astimezone(MANILA).date() == work_date]
     open_jobs = [j for j in jobs if not j["payload"].get("song_completed_at") and timestamp(j["payload"]["song_started_at"]) <= now]

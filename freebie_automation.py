@@ -26,6 +26,26 @@ def is_freebie_action(action: dict) -> bool:
     return bool((action.get("payload") or {}).get("freebie_token"))
 
 
+def retire_stale_delivery(action: dict, now: dt.datetime) -> bool | None:
+    """Stop previous-day notifications without releasing an already delivered task."""
+    if not is_freebie_action(action):
+        return None
+    p = action["payload"]
+    try:
+        assigned = dt.datetime.fromisoformat(str(p["freebie_assigned_at"]).replace("Z", "+00:00"))
+    except (ValueError, TypeError, KeyError):
+        return None
+    if not assigned.tzinfo or assigned.astimezone(MANILA).date() >= now.astimezone(MANILA).date():
+        return None
+    delivered = bool(action.get("sent_at") or p.get("_first_delivery_at"))
+    changed = {**p, "freebie_reminders_retired_at": now.isoformat()}
+    if not delivered:
+        changed.update(freebie_cancelled_at=now.isoformat(), freebie_cancelled_reason="assignment_day_ended_before_delivery")
+    from cloud_store import _update_claim
+    return _update_claim(action, {"status": "sent" if delivered else "cancelled",
+        "repeat_interval_minutes": None, "payload": changed, "updated_at": now.isoformat()})
+
+
 def _mention(user_id: int, name: str) -> str:
     return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
@@ -100,7 +120,8 @@ def _active_members(chat_id: int, work_date: dt.date) -> list[dict]:
     count = daily_poll_counts({chat_id}, work_date).get(chat_id)
     if not count or not count.get("poll_id"):
         return []
-    return [user for user in daily_poll_active_users(count["poll_id"]) if user.get("user_id")]
+    from page_access import scoped_voters
+    return scoped_voters(chat_id, [user for user in daily_poll_active_users(count["poll_id"]) if user.get("user_id")], work_date)
 
 
 def _page_contacts(config: dict) -> list[tuple[str, list[dict]]]:

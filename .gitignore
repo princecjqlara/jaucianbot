@@ -10,6 +10,7 @@ telegram_insights.sqlite3
 telegram_insights.sqlite3-*
 *.log
 __pycache__/
+.test-tmp/
 
 .vercel
 .env*.local

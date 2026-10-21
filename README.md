@@ -1,5 +1,187 @@
 # Telegram group insights
 
+VEO automation is enabled across all six VEO teams. With
+`VEO_NEW_CLIENTS_ENABLED=false`, availability and reports stay on while
+new-client offers, Ready controls, acceptance, client lists and page-access
+prompts stay off for VEO. Suno assignments use their own readiness and page
+access. Existing ownership is preserved; archived offer buttons cannot accept
+new work while the VEO feature is off. VEO availability counts all members.
+Makata's client list shows when it is waiting for Ready members; tapping Ready
+immediately queues an assignment check. All sends use the normal scheduler.
+Client lists contain every row without Next/Previous controls; long lists use
+consecutive messages, updated in place through the scheduled outbox.
+
+Suno capacity now uses readable receipt posts, including non-bot clients.
+With organized reports enabled, the last 14 completed dates supply the top
+three positive daily outputs. Their mean is the estimated planning capacity;
+the safe target is floor(estimate × 80%). Receipt-day average and daily peak
+are shown separately. Unknown attendance is explicit and does not become a
+zero or Inactive day. Fewer than three eligible output dates leaves the plan
+pending. These are payment-post estimates, not unique
+clients, completed songs or verified production limits. Song confirmations do
+not enter this formula. Makata reports go to DAILY REPORTS and @mmadss25.
+
+With `SUNO_MAKATA_ENABLED=true`, Suno Makata `-1004498344479` receives the
+Makata Studio/Studios source pages; Trabawho excludes those pages. Supplied
+topics remain General 1, Announcements 4, Receipts 8 and NEW CLIENTS 13. The
+scheduled outbox creates ACTIVE TOMORROW and SONGS and saves their IDs before
+finalization; retries reuse the saved IDs. Availability waits for a real topic,
+and Makata never gets hourly polls. Client lists/offers respect reservations in
+both Suno groups so an existing accepted client cannot be offered again after
+the page split. Old accepted ownership is retained.
+
+Makata has separate receipt earnings, song confirmations and capacity history.
+Daily reports go to DAILY REPORTS and the authorized recipient `@mmadss25`
+after that account messages the bot privately. A stable Telegram user ID is bound
+once from the authenticated webhook; a reused username cannot silently rebind
+the recipient. Only Makata-tagged report actions may use that private delivery
+permission. No arbitrary private chat gets archive approval or send permission.
+`./remote_windows.ps1 makata-status` shows topic IDs, the connection status and
+the bot's subscription link. Missing private registration leaves the public
+report working and catches up that same saved report once connected.
+`./remote_windows.ps1 makata-connect` recovers an earlier ignored private hello:
+it checks a real Makata sender's current Telegram username and private chat,
+then queues delivery through the normal scheduler. It cannot target another user.
+
+VEO salary reports show both 35% and 40% amounts per member and team, alongside
+the quota-based applied amount or a pending label. The combined member list
+and sales/salary summary show both scenarios too; Suno written earnings stay
+fixed. Team scenarios sum each member's rounded earnings.
+
+VEO organized reports use the same 14-day top-three planning policy, with
+Done Deals as the output unit. Output-day average, daily peak, top-three mean
+and whole-number 80% safe target remain distinct. Explicit Inactive/output
+conflicts are flagged and excluded from the plan. A positive output date can
+support an observed estimate without inventing confirmed attendance. Known
+Active dates with zero output remain in the separate Active-day average.
+Availability votes do not verify full shifts or production maximums. The
+earlier 30-day reviewed policy remains available only when organized reports
+are disabled; its results must not be mixed into the current staffing board.
+
+DAILY REPORTS also gets a dated tomorrow-capacity board. It uses actual Active
+voter IDs, shows rated-history coverage, average per rated member, summed
+unrounded output, and the conservative total. Missing histories and missing
+polls stay unknown/pending. Overall totals deduplicate people active in multiple
+VEO teams; team totals can overlap and must not be added. A scheduled five-minute
+check silently edits the same post when votes/history change; old boards stop
+repeating after their date expires. This does not enable paused team posting,
+alter assignment limits, or change configured advertising/client-quota formulas.
+Use `./remote_windows.ps1 tomorrow-capacity` for the read-only preview.
+
+Suno / Trabawho now uses the same client policy as VEO: Yes/No tomorrow
+availability from October 22, expiring 60-minute `/ready`, fresh `/ready` after
+acceptance, 15-minute initial offers, then earliest eligible Ready member with
+10 minutes on reassignment. Missing an offer pauses Ready; `/busy` stops new
+offers. Handovers are disabled, accepted briefs stay visible, and NEW CLIENTS
+lists only that Philippine day's activity while preserving older ownership.
+The original 24-hour song deadline and owner-only SONG SENT/DONE confirmation
+remain in place. Team notices are short.
+
+Suno page access comes from Suno's own `pages` table, qualified with its project
+identity. Multiple public page polls each show at most nine pages plus a none
+choice; answers are combined across poll parts and withdrawals clear only that
+part. No answer grants no pages. `/pages` links every part. Source metadata is
+cached for 30 seconds; changed page versions invalidate earlier permissions.
+
+Suno gets its own daily capacity report in DAILY REPORTS after 00:10 PHT.
+`./remote_windows.ps1 capacity --group -1002894511895 --all-history` is read-only.
+It uses readable receipt posts and declared availability, without querying
+bot assignment or delivery confirmations. Non-bot clients' receipts count too.
+The receipt-based planning formula and minimum evidence are described above;
+missing attendance is labeled unverified, while fewer than three eligible
+output dates leaves the plan unknown. Receipt-day averages and
+daily peaks remain observed output, not verified maximum capacity. Deposits,
+tips, extras and repeated payments do not establish unique paid orders or
+completed songs. Image-only/unreadable receipts and unresolved ancestry are
+excluded. Financial receipt and salary
+calculations stay in their existing separate reports. Durable snapshots and
+outbox part keys make retry delivery idempotent; source errors do not block due
+messages. Capacity reports do not impose automatic assignment limits.
+
+DAILY REPORTS now receives a member output/capacity update after **00:10 PHT**
+every day, covering the latest completed Philippine date. Set
+`MEMBER_CAPACITY_REPORTS_ENABLED=true` and allow the manager-report destination
+in `AUTOMATION_CHAT_IDS`. Sources use approved VEO archives even while team
+posting remains paused. The first scheduled run publishes the latest completed
+day immediately; recovery catches up the latest report without flooding older
+days. A cancelled snapshot fixes the report's parts before enqueue, and durable
+part keys prevent duplicate retries. Source failures retry and do not block due
+deliveries. The public health endpoint remains read-only.
+
+The current report lists members seen within the last 14 completed dates,
+using output-day average, observed peak, the mean of their top three eligible
+output dates and the requested floor(mean × 80%) safe target. A member may
+appear in multiple team topics; combined VEO identity uses Telegram IDs.
+Original all-history descriptive results remain available through the read-only
+API, while the planning window stays 14 dates. These are estimates, not
+statistical guarantees. Below one per day does not mean zero ability. Missing
+attendance is labeled unverified; output dates never become confirmed full days.
+These estimates count paid-sale posts, not verified completed projects, full
+working shifts or maximum production capacity. They do not alter assignment
+limits or round robin. Members without readable Done Deals appear in one
+separate list. Linked names open source messages; full source details stay in
+the saved snapshot.
+Format upgrades correct the previous format's posts for the same report date
+through the scheduled outbox, reusing message IDs and deduplicating retries.
+It backreads known DONE DEALS topics plus qualifying paid export posts and
+direct export replies to DONE DEALS. A live copy supersedes the same exported
+message. Inactive and Unknown dates stay separate; ordinary votes never prove
+full shifts or maximum production capacity. The full archive view is available
+read-only with `./remote_windows.ps1 capacity --all-history`.
+
+VEO page access is now declared in a saved, public multiple-choice poll in each
+team's NEW CLIENTS topic (`/pages` opens it). Members must select a connected
+page before receiving its clients. No response, a withdrawn response, or
+**No access** grants no pages. Newer answers replace older ones, and a changed
+page configuration requires a new poll. Assignment, first delivery, and
+acceptance all check access. Existing accepted ownership is preserved.
+
+VEO's NEW CLIENTS board is now dated by Philippine workday and grouped into
+available clients, pending offers, and members' accepted clients. Acceptance
+refreshes the same daily board; a new workday gets a new board. Previous days'
+clients remain owned and cannot re-enter the available pool. Missing any
+delivered offer, including a 10-minute reassignment, stops eligibility until a
+new `/ready` command.
+
+`./remote_windows.ps1 capacity --days 14 [--group CHAT_ID]` computes read-only
+member output for completed Philippine days. It shows declared Active days
+(including zero recorded output), unknown attendance days, recorded Done Deals
+per output day, and the observed daily peak. Known-Active averages use only
+Done Deals from the matching known-Active dates. It does not infer verified
+maximum capacity, finished creative work, or full working shifts from sales or
+availability polls. The top-three full-day measure stays unavailable without
+three verified full days. Reports include message IDs, UTC dates and archive
+sources and remain available while VEO automation is paused. The combined view
+merges staff by Telegram ID, sums their output on each date across teams, and
+counts each Active date once; name-only records stay separate across teams.
+
+VEO client rules, updated October 22, 2026 (all six teams): tomorrow's
+availability uses one public **Yes / No** poll, replacing hourly selections.
+`/ready` expires 60 minutes after the Telegram command, and accepting a client
+consumes that readiness. Send a new `/ready` after acceptance to request another
+client; `/busy` stops offers. Fresh clients follow round robin. Initial offers
+allow 15 minutes from delivery; missed offers go directly to the earliest
+eligible `/ready` member with a fresh 10-minute acceptance window. No open TAKE
+race or accepted-client handover is offered for VEO. Accepted offers retain the
+client brief, page and CRM ID, with a Client details link on the confirmation.
+Instructions and status notices are kept short. Previously delivered offers
+retain their printed deadlines. Suno now follows the same policy described
+above. These VEO rules also apply while the teams are paused; they
+do not change `AUTOMATION_CHAT_IDS`.
+
+The VEO rules above replace the earlier VEO readiness and hourly instructions
+below; those older sections describe the previous behavior.
+
+`AUTOMATION_CHAT_IDS` optionally limits outgoing Telegram automation to an
+approved subset. Production uses Trabawho `-1002894511895` and DAILY REPORTS
+`-1004362432984`. All six Veo teams and other groups are paused for bot posts, offers, polls,
+reminders and button/command actions. `ALLOWED_CHAT_IDS` remains the archive
+approval list, so messages and poll answers can still be collected and reviewed.
+Existing assignments and queued actions are preserved. Paused actions are not
+claimed or counted as overdue active deliveries; real failures in active groups
+still fail health. Authenticated `status` reports active and paused IDs. Removing
+the setting resumes the approved groups; an explicitly empty value pauses all.
+
 Ready commands accept `/ready`, `/ready@Jaucianbot`, and `/ready @Jaucianbot`;
 Busy accepts the same formats. A command in another topic receives a link to
 NEW CLIENTS without silently changing availability. The member menu includes
@@ -309,7 +491,8 @@ Warning text recomputes the remaining time at delivery so a deferred notice does
 not display an old countdown.
 
 Done Deal templates and `/ddtemplate` are disabled in read-only mode. Owner confirmations and
-client lists show handover controls without sale buttons. Old buttons and text
+client lists show Client list controls without sale buttons. Handover controls
+are available only in Trabawho. Old sale buttons and text
 commands explain that summaries read existing posts without sale codes. Pending sale drafts are suppressed before delivery.
 Suno retains its separate receipts process.
 
@@ -332,19 +515,24 @@ Tomorrow `22`, Close Deals `18`, Done Deals `17`, New Clients `15` and Freebies
 `14`. Its pages are AdsMoto Media Agency (`48b42f01-c9de-4afa-992b-2f743d21c81d`)
 and AiTayo (`ddf67561-5dad-42ba-88e2-ef5534b45d6e`). The team participates in
 availability polls, client rotation, 15-minute acceptance, owner directories,
-handovers, freebies, quotas, planned ads and recruiter shares. Reads remain
+freebies, quotas, planned ads and recruiter shares. Reads remain
 scoped to its exact pages and topics.
 
 All six Veo teams and Trabawho share a client list in their NEW CLIENTS topic.
 It shows eligible unassigned clients, reserved offers, open TAKE offers, confirmed
-editors, and pending handovers. Each tracked client links to its brief and includes
+editors, and (in Trabawho only) pending handovers. Each tracked client links to its brief and includes
 its token. Long lists have pages. The scheduler edits the same overview message
 every five minutes and refreshes it on assignment or ownership changes. `/clients`
 queues the latest list; `/clienthelp` queues the short guide. The authenticated
 `./remote_windows.ps1 clients --group CHAT_ID` command reads the full list and audit
 history through `/api/clients` without changing state.
 
-The current editor can tap **Hand over**, select a current team member, and wait
+Handovers are disabled in all six Veo teams: Veo, Veo Jel, Veo Jessa, Veo Ollie,
+Veo Ollie 2, and Veo Lyn. Their confirmed editors retain ownership. Old buttons,
+text commands, and queued transfer notices cannot transfer a Veo client. Historical
+handover records remain in the audit history.
+
+In Trabawho, the current editor can tap **Hand over**, select a current team member, and wait
 for that member to **Accept handover** or **Decline**. The current editor can
 **Cancel handover**. To add context, reply to the receiving member's message in
 NEW CLIENTS with `/handover TOKEN Your handover note`. `/handover TOKEN` without a
@@ -492,6 +680,16 @@ remain excluded. The default of 100 retains the completed-brief rule. Status
 reports distinguish eligible clients, complete briefs, and partial handoffs.
 This setting applies only to Suno/Trabawho; Veo eligibility rules are unchanged.
 
+`./remote_windows.ps1 suno-supply` provides an authenticated, read-only supply
+audit: contact inventory, latest source interaction, and per-page counts of
+eligible briefs and exclusions. Compare it with `new-clients` to distinguish
+already assigned clients from insufficient details or a source that stopped
+receiving inquiries. The audit does not include client names, identities or
+brief contents and never changes availability, assignments or delivery.
+Add `--chatbot` for chatbot enablement, trial settings, completion rules and
+the latest 24 hours of processing counts. Each processing source is capped at
+1000 rows and explicitly reports partial coverage when capped.
+
 Trabawho follows ready-member rotation with a 30-minute WORKING reply deadline
 and a 30-minute cooldown after a missed reply. Assignments use topic `7673` and
 stable Suno customer identities. Its client checks have a separate one-minute
@@ -635,3 +833,60 @@ Veo Ollie reads only Loki Media and Vista Media Agency for new-client topic `575
 Only members who selected Active for that Philippine day participate. The bot gives each Active member one client before anyone can move ahead to the next round. A member replies `WORKING ABCD1234` as soon as they start handling the assigned client; a direct `WORKING` reply to the assignment is also accepted. That acknowledgment stops reminders and makes the member eligible when the round robin reaches them again. Before timing out an assignment, the bot reconciles archived replies so a confirmation cannot be missed and reassigned. If no valid `WORKING` reply arrives within one hour, the assignment is cancelled and the same contact is reassigned to a different Active member. If the original member replies after that timeout, the earliest valid `WORKING` reply wins and any duplicate open assignment is cancelled. Contacts are tracked by their stable page-scoped PSID, with legacy fallbacks, so changing contact details or replacing a CRM row does not create a new assignment. A faster member cannot receive a third client while another Active member has received only one. Acknowledged contacts are never assigned again.
 
 When volunteer mode is disabled, Veo, Veo Ollie, and Veo Jessa use a 30-minute reply deadline measured from first delivery and rotation among ready Active members. Members with an unacknowledged assignment are skipped so they do not block the ready team. A member who times out enters a 30-minute cooldown, then automatically rejoins while still Active. Selecting Not Active and then Active in today's poll, or a newer valid WORKING reply, resumes availability sooner. Timed-out contacts are offered to a different eligible member before fresh contacts. Rotation favors fewer non-cancelled or acknowledged assignments today, then fewer assignments over the previous seven days, then the member who has waited longest since their last assignment; failed offers do not reduce future access after the member returns. One unacknowledged client per member is allowed. This does not track unfinished work after acknowledgment. The new-client status endpoint reports each team's reply deadline, ready count, paused members, and each Active member's offers, deliveries, confirmations, waiting reason, and cooldown retry time. All six teams carry assignment order across days using the previous seven days as a tie breaker, so scarce supply does not repeatedly favor the same names each morning. These fallback settings are in `daily_automation.py`; Veo Jel retains the one-hour deadline and full-team round rule when volunteer mode is disabled. With `NEW_CLIENT_VOLUNTEER_ENABLED=true`, all six Veo teams use the shared 20-minute direct offer followed by a 10-minute volunteer window described above.
+# Organized manager reports
+
+Capacity names now require a fresh Telegram `getChatMember` result for that
+team. Former members and unknown identities are omitted. Five-minute cached
+checks are bounded per scheduler run; join/leave service messages update the
+cache sooner. A membership change edits the current capacity posts, while
+unchanged report text stays quiet. Historical sales and payable earnings retain
+their original attribution. The staffing forecast likewise omits former
+members. `report-members` reads verification status without refreshing it.
+
+Capacity reports include the number of declared Active dates on which the safe
+target was actually recorded, plus any higher older recorded peak. Neither is
+proof of production limits. The current planning formula remains the requested
+14-day top-three mean and floor(mean × 80%) target.
+
+General also receives MEMBER SALARY TOTALS for the report date: one daily total
+per Telegram identity, summed across teams. Pending VEO tiers show conditional
+35%–40% ranges on accepted recorded sales plus any known earnings. They are not
+presented as final payroll. Name-only records remain separate by team.
+
+`ORGANIZED_REPORTS_ENABLED=true` sends public reports into the verified DAILY
+REPORTS team topics: Jessa 191, Jel 193, Veo 195, Ollie 197, Lyn 199, Ollie 2
+201, Makata 203, Trabawho 205. Each receives sales, recorded salary, capacity,
+problems, and a staffing summary. General receives combined sales and staffing
+summaries. A report about a paused team does not enable its assignment bot.
+
+Daily reports cover the previous Philippine date after 00:10 PHT. Staffing
+summaries show today's Active voters and tomorrow's Active voters, average
+output per rated voter and the conservative rated total. Five-minute checks
+edit the same message only when votes or its text change. Missing attendance
+or member history stays unknown; receipt and Done Deal units stay separate.
+
+Suno salaries use the written receipt earnings, including outside-bot clients.
+VEO manager salary reports use the existing 40% commission when both team CD
+and DD quotas are met, otherwise 35%. The quota remains the existing rounded-up
+Active × 1.6 formula. Missing polls or records that could change the tier keep
+the calculation pending unless dated, non-conflicting availability answers
+can recover the recorded Active count. These reports do not enable member sale buttons or
+assignment automation in paused groups. Sales less recorded salary is
+before advertising and other expenses, not net profit or proof of payout.
+Existing private Makata reports to Maddie continue separately.
+
+`./remote_windows.ps1 report-topics` reads the captured topic names/IDs without
+sending messages or consuming Telegram's update stream.
+
+Capacity reports now use the last 14 completed Philippine dates. Estimated
+planning capacity is the average of the top three positive daily outputs on
+distinct dates, excluding explicit Inactive/output conflicts. The safe target
+is floor(estimate × 80%). Output-day average and recorded daily peak remain
+visible. Fewer than three eligible output dates leaves the estimate pending;
+unknown attendance is never changed to Inactive. Best-day estimates do not
+establish verified full shifts or production maximums, and no utilization
+uplift is applied. Suno output remains receipt posts, including outside-bot
+clients; VEO output remains readable Done Deals. Active-day averages separately
+include declared Active dates with zero output. Staffing summaries use these
+same estimates for tomorrow's actual voters. Corrections reuse existing report
+and staffing messages where available.

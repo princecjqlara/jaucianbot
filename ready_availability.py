@@ -1,4 +1,4 @@
-"""Explicit readiness for continuous assignments; durable records never deliver."""
+"""Expiring explicit readiness; durable state records never deliver."""
 from __future__ import annotations
 
 import datetime as dt
@@ -10,8 +10,10 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 10
+GUIDE_VERSION = 13
 ACCEPTANCE_MINUTES = 15
+REASSIGNMENT_MINUTES = 10
+READY_MINUTES = 60
 WARNING_BEFORE_MINUTES = 5
 COMMAND = re.compile(r"^\s*/?(ready|busy)(?:\s*@[\w]+)?\s*$", re.I)
 RESERVATION_LEASE = dt.timedelta(minutes=5)
@@ -19,12 +21,28 @@ RESERVATION_LEASE = dt.timedelta(minutes=5)
 
 def enabled(chat_id: int) -> bool:
     from daily_automation import AVAILABILITY_GROUPS
-    return chat_id in AVAILABILITY_GROUPS and os.environ.get("NEW_CLIENT_READY_ENABLED", "").strip().lower() == "true"
+    from automation_controls import new_clients_enabled
+    return new_clients_enabled(chat_id) and chat_id in AVAILABILITY_GROUPS and os.environ.get("NEW_CLIENT_READY_ENABLED", "").strip().lower() == "true"
+
+
+def renewal_required(chat_id: int) -> bool:
+    from daily_automation import AVAILABILITY_GROUPS
+    return chat_id in AVAILABILITY_GROUPS
+
+
+def expires_at(chat_id: int, payload: dict) -> dt.datetime | None:
+    from new_client_automation import _utc_time
+    since = _utc_time(payload.get("ready_at"))
+    until = _utc_time(payload.get("ready_until"))
+    if renewal_required(chat_id) and since:
+        limit = since + dt.timedelta(minutes=READY_MINUTES)
+        return min(until, limit) if until and not payload.get("continuous") else limit
+    return until
 
 
 def poll_enabled(chat_id: int) -> bool:
     from daily_automation import AVAILABILITY_GROUPS
-    return enabled(chat_id) and bool(AVAILABILITY_GROUPS[chat_id].get("new_client_hourly_ready"))
+    return enabled(chat_id) and not renewal_required(chat_id) and bool(AVAILABILITY_GROUPS[chat_id].get("new_client_hourly_ready"))
 
 
 def review_contact(chat_id: int) -> str:
@@ -58,6 +76,26 @@ def available(chat_id: int, now: dt.datetime, history: list[dict], *, recover: b
             continue  # Re-evaluate the selected hour, withdrawals and missed offers below.
         since, until = _utc_time(p.get("ready_at")), _utc_time(p.get("ready_until"))
         if not since or since > now:
+            continue
+        if renewal_required(chat_id):
+            expiry = expires_at(chat_id, p)
+            if not expiry or now >= expiry or p.get("state") not in {"ready", "reserved"}:
+                continue
+            if int(p["user_id"]) in missed and since <= missed[int(p["user_id"])]:
+                continue
+            if p.get("state") == "reserved" and not any(
+                a["payload"].get("new_client_reservation_key") == p.get("reservation_key")
+                and p.get("reservation_key") and a.get("status") == "cancelled"
+                for a in team_history
+            ):
+                continue
+            if any(int(a["payload"].get("new_client_assignee_id") or 0) == int(p["user_id"])
+                   and ((a.get("status") != "cancelled" and not a["payload"].get("new_client_acknowledged_at"))
+                        or acceptance_consumed(p, a["payload"], since))
+                   for a in team_history):
+                continue
+            result.append({"chat_id": chat_id, "user_id": p["user_id"], "user_name": p["user_name"],
+                           "updated_at": p["ready_at"], "ready_record": row})
             continue
         if p.get("continuous"):
             if p.get("state") not in {"ready", "reserved"}:
@@ -93,6 +131,16 @@ def available(chat_id: int, now: dt.datetime, history: list[dict], *, recover: b
         result.extend(_poll_available(chat_id, now, team_history, people, missed,
                                       {int(u["user_id"]) for u in result}))
     return result
+
+
+def acceptance_consumed(member: dict, offer: dict, since: dt.datetime) -> bool:
+    from new_client_automation import _utc_time
+    accepted = _utc_time(offer.get("new_client_acknowledged_at"))
+    if not accepted:
+        return False
+    if accepted == since and offer.get("new_client_ack_update_id") is not None:
+        return int(member.get("update_id") or 0) <= int(offer["new_client_ack_update_id"])
+    return accepted >= since
 
 
 def _poll_available(chat_id: int, now: dt.datetime, history: list[dict], people: list[dict],
@@ -162,7 +210,7 @@ def recover_orphaned_reservations(chat_id: int, now: dt.datetime, history: list[
         p = row["payload"]
         revision = _utc_time(row.get("updated_at"))
         key = p.get("reservation_key")
-        if (p.get("state") != "reserved" or not (p.get("continuous") or p.get("ready_source") == "hourly") or not key
+        if (p.get("state") != "reserved" or not (renewal_required(chat_id) or p.get("continuous") or p.get("ready_source") == "hourly") or not key
                 or not revision or now - revision < RESERVATION_LEASE):
             continue
         if any(a["payload"].get("new_client_reservation_key") == key for a in history if int(a["chat_id"]) == chat_id):
@@ -188,6 +236,10 @@ def recover_orphaned_reservations(chat_id: int, now: dt.datetime, history: list[
 def reserve(user: dict, key: str, now: dt.datetime) -> bool:
     row = user["ready_record"]
     p = row["payload"]
+    if renewal_required(int(user.get("chat_id") or 0)):
+        expiry = expires_at(int(user["chat_id"]), p)
+        if not expiry or now >= expiry or p.get("ready_source") == "hourly":
+            return False
     if p.get("ready_source") == "hourly":
         if now >= dt.datetime.fromisoformat(p["ready_until"]):
             return False
@@ -243,6 +295,10 @@ def reservation_active(action: dict, now: dt.datetime | None = None) -> bool:
     if not rows:
         return False
     record = rows[0].get("payload") or {}
+    if renewal_required(int(action["chat_id"])):
+        expiry = expires_at(int(action["chat_id"]), record)
+        return bool(record.get("ready_source") != "hourly" and expiry
+                    and (now or dt.datetime.now(dt.timezone.utc)) < expiry)
     if record.get("ready_source") != "hourly":
         return True
     from hourly_availability import current_votes
@@ -271,15 +327,25 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
                      **({"message_thread_id": message["message_thread_id"]} if message.get("message_thread_id") not in (None, 1) else {})})
         return None
     stamp = dt.datetime.fromtimestamp(message.get("date") or now.timestamp(), dt.timezone.utc)
+    scope = AVAILABILITY_GROUPS[chat_id].get("client_page_scope")
+    if scope and match.group(1).lower() == "ready":
+        import page_access
+        if not page_access.can_receive(chat_id, int(user["id"]), page=scope):
+            enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
+                dedupe_key=f"ready-page-scope:{chat_id}:{update.get('update_id') or message.get('message_id')}",
+                payload={"text": f"This queue is for {scope}. Use /pages to confirm access first.",
+                    "message_thread_id": AVAILABILITY_GROUPS[chat_id]["contact_thread"]})
+            return chat_id
     # Retried or delayed Telegram updates cannot reopen a stale window.
     if stamp > now + dt.timedelta(seconds=30):
         return None
-    until = stamp + dt.timedelta(minutes=15)
+    renewal = renewal_required(chat_id)
+    until = stamp + dt.timedelta(minutes=READY_MINUTES if renewal else 15)
     ready = match.group(1).lower() == "ready"
     name = " ".join(filter(None, (user.get("first_name"), user.get("last_name")))) or user.get("username") or str(user["id"])
     p = {"user_id": int(user["id"]), "user_name": name, "ready_at": stamp.isoformat(),
          "ready_until": until.isoformat(), "state": "ready" if ready else "busy",
-         "update_id": int(update.get("update_id") or 0), "continuous": ready and until > now}
+         "update_id": int(update.get("update_id") or 0), "continuous": ready and until > now and not renewal}
     key = f"ready-member:{chat_id}:{user['id']}"
     created = request("scheduled_actions?on_conflict=dedupe_key&select=id", {
         "chat_id": chat_id, "action_type": "message", "status": "cancelled",
@@ -306,7 +372,17 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
     # Reply with the persisted state even if Telegram retries an older READY
     # after a newer BUSY update. Never tell an editor they are ready when not.
     effective_until = dt.datetime.fromisoformat(effective["ready_until"])
-    if effective.get("continuous") and effective["state"] in {"ready", "reserved"}:
+    if renewal:
+        expiry = expires_at(chat_id, effective)
+        if effective["state"] == "busy":
+            detail = "Busy. New offers stopped."
+        elif not expiry or now >= expiry:
+            detail = "Ready expired. Send /ready again."
+        elif effective["state"] == "reserved":
+            detail = "Offer pending. Tap Accept client."
+        else:
+            detail = f"Ready until {expiry.astimezone(MANILA):%I:%M %p}. Send /ready again after accepting a client."
+    elif effective.get("continuous") and effective["state"] in {"ready", "reserved"}:
         detail = ("Continuous mode: stay in the queue until you send /busy or miss an acceptance deadline. WORKING keeps you in the queue for the next client; "
                   f"only one unanswered offer at a time. Accept within {ACCEPTANCE_MINUTES} minutes of delivery. "
                   "A missed deadline pauses automatic assignments until you send /ready again. "
@@ -329,10 +405,31 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
 
 def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     from daily_automation import AVAILABILITY_GROUPS, MANILA
-    from client_workflow import guide, menu
+    from client_workflow import guide, menu, handover_enabled
     config = AVAILABILITY_GROUPS[chat_id]
     internal = str(abs(chat_id))[3:]
+    if renewal_required(chat_id):
+        scope = ":sama" if config.get("client_page_scope") else ""
+        queued = int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
+            dedupe_key=f"ready-instructions:v{GUIDE_VERSION}:{chat_id}:{now.astimezone(MANILA).date()}{scope}",
+            payload={"message_thread_id": thread_id, "text": guide(chat_id), "reply_markup": menu()}))
+        queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
+            dedupe_key=f"ready-rollout:v{GUIDE_VERSION}:{chat_id}{scope}", payload={
+                "message_thread_id": config["announcements"],
+                "text": f"{config['name'].upper()} — CLIENTS\n"
+                        + (f"{config['client_page_scope']} members only. Confirm access with /pages.\n" if config.get("client_page_scope") else "") +
+                        "Availability: Yes / No.\n"
+                        "/ready lasts 60 minutes; /busy stops offers.\n"
+                        "Round robin: 15 minutes to accept. Missed clients go to the earliest Ready member, with 10 minutes to accept.\n"
+                        "After accepting, send /ready for another client.\n"
+                        f"Client list: /clients\nhttps://t.me/c/{internal}/{thread_id}",
+            }))
+        return queued
     version = f"{GUIDE_VERSION}-hourly" if poll_enabled(chat_id) else GUIDE_VERSION
+    ownership = ("New buttons: Accept client, Take client, Client list, and Hand over. "
+                 "Only the current editor can request a handover. The chosen teammate must accept before ownership changes.\n\n"
+                 if handover_enabled(chat_id) else
+                 "Buttons: Accept client, Take client, and Client list. Accepted clients stay with their confirmed editor.\n\n")
     availability = ("Your selected hours in today's hourly poll also enter the client queue during those hours. "
                     "A missed offer needs /ready or a newer current-hour poll selection. "
                     "After /busy, send /ready to rejoin.\n\n" if poll_enabled(chat_id) else "")
@@ -343,14 +440,13 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
         dedupe_key=f"ready-rollout:v{version}:{chat_id}", payload={
             "message_thread_id": config["announcements"],
-            "text": f"{config['name'].upper()} - CLIENT LIST + HANDOVERS\n\n"
+            "text": f"{config['name'].upper()} - CLIENT LIST" + (" + HANDOVERS" if handover_enabled(chat_id) else "") + "\n\n" +
                     f"New offers: {ACCEPTANCE_MINUTES} minutes to accept; warning after {ACCEPTANCE_MINUTES - WARNING_BEFORE_MINUTES} minutes. Older offers keep their printed deadline.\n"
                     "See who is available and who handles each client: /clients in NEW CLIENTS.\n"
                     "Send /ready ONCE to receive clients; WORKING keeps you queued for the next client. "
                     f"Send /busy IMMEDIATELY when full or leaving. A missed acceptance deadline means PAUSED until {resume}.\n\n"
                     + availability +
-                    "New buttons: Accept client, Take client, Client list, and Hand over. "
-                    "Only the current editor can request a handover. The chosen teammate must accept before ownership changes.\n\n"
+                    ownership +
                     "Buttons not working? Use /ready, /busy, WORKING + token, or TAKE + token in NEW CLIENTS. "
                     "Veo Done Deal tracking is read-only: post readable client, page and Price Deal text in DONE DEALS. The bot summarizes it in DAILY REPORTS. No sale codes or Done Deal buttons are needed.\n\n"
                     f"Open NEW CLIENTS for the short guide and controls:\nhttps://t.me/c/{internal}/{thread_id}",

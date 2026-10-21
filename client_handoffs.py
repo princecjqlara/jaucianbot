@@ -30,9 +30,11 @@ def end_delivered(row: dict, now: dt.datetime) -> bool:
     if ended(row):
         return True
     member = _mention(int(p["new_client_assignee_id"]), p.get("new_client_assignee_name") or str(p["new_client_assignee_id"]))
+    short = (f"{member}, your acceptance turn has ended for {html.escape(p.get('new_client_contact_name') or 'this client')}. "
+             "Send /ready to rejoin.")
     enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
         dedupe_key=marker(row, "turn-ended"), payload={
-            "text": f"{member}, your acceptance turn has ended for {html.escape(p.get('new_client_contact_name') or 'this client')} "
+            "text": short if ready.renewal_required(int(row["chat_id"])) else f"{member}, your acceptance turn has ended for {html.escape(p.get('new_client_contact_name') or 'this client')} "
                     f"({html.escape(p.get('new_client_page') or 'Page')}). No WORKING confirmation was recorded within your acceptance window. "
                     "Your automatic assignments are paused. Send /ready when available again; use /busy when you need to stop. "
                     "Please stop using the old offer. We will open TAKE or arrange the next handoff after this notice. "
@@ -65,9 +67,11 @@ def warning(row: dict, now: dt.datetime) -> None:
         return
     remaining = max(1, math.ceil((deadline - now).total_seconds() / 60))
     member = _mention(int(p["new_client_assignee_id"]), p.get("new_client_assignee_name") or str(p["new_client_assignee_id"]))
+    short = (f"{member}, offer for {html.escape(p.get('new_client_contact_name') or 'this client')} "
+             f"ends in {remaining} minutes. Tap Accept client.")
     enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
         dedupe_key=marker(row, "warning"), payload={
-            "text": f"{member}, your acceptance window for {html.escape(p.get('new_client_contact_name') or 'this client')} ends in {remaining} minutes. "
+            "text": short if ready.renewal_required(int(row["chat_id"])) else f"{member}, your acceptance window for {html.escape(p.get('new_client_contact_name') or 'this client')} ends in {remaining} minutes. "
                     f"Reply <code>WORKING {p['new_client_token']}</code> if you are taking it. "
                     "If unanswered, your turn ends and we notify you before opening TAKE.",
             "parse_mode": "HTML", "message_thread_id": p["new_client_thread_id"],
@@ -119,15 +123,19 @@ def close_offers(row: dict, now: dt.datetime, status: str) -> None:
     brief = ""
     if row.get("telegram_message_id"):
         rows = request("scheduled_actions?" + urllib.parse.urlencode({
-            "select": "payload->text", "id": f"eq.{row['id']}", "limit": 1,
+            "select": "payload", "id": f"eq.{row['id']}", "limit": 1,
         })) or []
-        original = (rows[0].get("text") or "") if rows else ""
+        full = (rows[0].get("payload") or {}) if rows else {}
+        original = (full.get("text") or rows[0].get("text") or "") if rows else ""
         # Keep the brief accessible from the TAKE message's original-details link.
         brief = html.unescape(re.sub(r"<[^>]*>", "", original.split("Please review the CRM conversation", 1)[0]))
         brief = brief[:2400]
         while len(html.escape(brief)) > 2800:
             brief = brief[:-100]
         brief = html.escape(brief)
+        if ready.renewal_required(int(row["chat_id"])):
+            from new_client_automation import client_brief
+            brief = client_brief({**p, **full})
     for message_id in filter(None, ids):
         enqueue_scheduled_action(chat_id=int(row["chat_id"]), action_type="message", scheduled_for=now,
             dedupe_key=f"client-close:{row['id']}:{message_id}:{p.get('new_client_phase')}:owner-{int(p.get('new_client_handover_revision') or 0)}",
@@ -137,7 +145,8 @@ def close_offers(row: dict, now: dt.datetime, status: str) -> None:
                      "client_handoff_generation": int(p.get("new_client_offer_generation") or 0),
                      "client_handoff_phase": p.get("new_client_phase"),
                      "client_handoff_revision": int(p.get("new_client_handover_revision") or 0),
-                     "text": f"CLIENT STATUS — {html.escape(p.get('new_client_contact_name') or 'Client')}\nPage: {html.escape(p.get('new_client_page') or 'Page')}\n{html.escape(status)}\nUse the latest offer and wait for its owner confirmation before contacting this client."
+                     "text": (f"CLIENT STATUS\n{html.escape(status)}" if ready.renewal_required(int(row["chat_id"])) else
+                              f"CLIENT STATUS — {html.escape(p.get('new_client_contact_name') or 'Client')}\nPage: {html.escape(p.get('new_client_page') or 'Page')}\n{html.escape(status)}\nUse the latest offer and wait for its owner confirmation before contacting this client.")
                              + ("\n\n" + brief if message_id == row.get("telegram_message_id") else "")})
 
 
