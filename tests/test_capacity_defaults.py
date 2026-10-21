@@ -134,6 +134,18 @@ class TomorrowSummaryTests(unittest.TestCase):
         self.assertIn("Shared across businesses: 1", text)
         self.assertNotIn("6.33", text)
 
+    def test_team_board_uses_personal_history_from_other_teams_in_the_same_business(self):
+        caps = {"members": {str(VEO): []}, "businesses": {"veo": [member(7, [3, 3, 3])]}}
+        roster = {VEO: [{"user_id": 7}]}
+        action = {"chat_id": daily.DAILY_REPORTS_CHAT_ID, "payload": {"organized_staffing_date": str(TODAY),
+            "organized_staffing_version": reports.VERSION, "report_source_ids": [VEO], "report_source_chat_id": VEO}}
+        with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \
+                patch.object(reports, "allowed_chat_ids", return_value={VEO, daily.DAILY_REPORTS_CHAT_ID}), \
+                patch.object(reports, "staffing_context", return_value=(caps, roster, roster)):
+            self.assertTrue(reports.prepare_delivery(action, NOW))
+        self.assertIn("Tomorrow estimated capacity: 3.00", action["payload"]["text"])
+        self.assertIn("Personal history: 1 · Provisional: 0", action["payload"]["text"])
+
     def test_missing_poll_is_reported_as_partial_and_not_inactive(self):
         rosters = {VEO: None, OTHER: [{"user_id": 2}], SUNO: []}
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())

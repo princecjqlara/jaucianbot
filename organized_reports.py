@@ -655,7 +655,8 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
     elif chat:
         business = "veo" if chat in GROUPS else "suno"
         default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
-        text = staffing_text(chat, today, current[chat], upcoming[chat], capacities["members"].get(str(chat), []), default)
+        people = capacities.get("businesses", {}).get(business, capacities["members"].get(str(chat), []))
+        text = staffing_text(chat, today, current[chat], upcoming[chat], people, default)
     else:
         def unique_count(rosters):
             users = {int(u["user_id"]) for roster in rosters.values() for u in roster or []}
@@ -667,7 +668,8 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
         for source in sorted(teams):
             business = "veo" if source in GROUPS else "suno"
             default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
-            data = forecast(upcoming[source], capacities["members"].get(str(source), []), default)
+            people = capacities.get("businesses", {}).get(business, capacities["members"].get(str(source), []))
+            data = forecast(upcoming[source], people, default)
             avg = f"{data['average']:.2f}" if data["average"] is not None else "unknown"
             unit = "receipts" if source in SUNO_GROUPS else "DD"
             total = f"{data['total']:.2f}" if data['total'] is not None else "?"
