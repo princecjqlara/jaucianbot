@@ -18,13 +18,14 @@ import report_topics
 import suno_capacity
 import recent_capacity
 import member_presence
+import capacity_defaults
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, receipt_messages, request, poll_answers_for_range)
 from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS, MANILA,
     SUNO_GROUPS, messages_for_day, money, split_message, quota_for)
 from trabawho_receipts import receipt_report
 
-VERSION = 6
+VERSION = 7
 
 
 def sources(approved: set[int]) -> set[int]:
@@ -59,7 +60,7 @@ def previous_messages(day: dt.date, teams: set[int]) -> dict[tuple[int, str], li
     rows = request("scheduled_actions?" + urllib.parse.urlencode({
         "select": "payload,telegram_message_id,dedupe_key", "chat_id": f"eq.{DAILY_REPORTS_CHAT_ID}",
         "dedupe_key": f"like.organized-daily:v*:{day}:{_scope(teams)}:*",
-        "status": "eq.sent", "telegram_message_id": "gt.0", "order": "id.asc", "limit": 1000,
+        "status": "in.(sent,pending,processing,failed)", "telegram_message_id": "gt.0", "order": "id.asc", "limit": 1000,
     })) or []
     result = defaultdict(dict)
     for row in rows:
@@ -76,7 +77,7 @@ def previous_messages(day: dt.date, teams: set[int]) -> dict[tuple[int, str], li
 def previous_texts(day: dt.date, teams: set[int]) -> dict[int, str]:
     rows = request("scheduled_actions?" + urllib.parse.urlencode({
         "select": "payload,telegram_message_id", "chat_id": f"eq.{DAILY_REPORTS_CHAT_ID}",
-        "dedupe_key": f"like.organized-daily:v*:{day}:{_scope(teams)}:*", "status": "eq.sent",
+        "dedupe_key": f"like.organized-daily:v*:{day}:{_scope(teams)}:*", "status": "in.(sent,pending,processing,failed)",
         "telegram_message_id": "gt.0", "order": "id.asc", "limit": 1000,
     })) or []
     return {int(r["telegram_message_id"]): r["payload"].get("text", "") for r in rows}
@@ -138,7 +139,7 @@ def current_capacities(capacities: dict, teams: set[int], now: dt.datetime) -> d
         current, coverage = member_presence.filter_current(chat, capacities["members"].get(str(chat), []), now, budget=budget)
         result["members"][str(chat)] = current
         result["membership"][str(chat)] = coverage
-    return result
+    return capacity_defaults.enrich(result, teams) if result.get("date") else result
 
 
 def payroll_count(chat: int, day: dt.date) -> dict | None:
@@ -259,6 +260,10 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines += [f"Best 3 days: {best}", f"Estimated capacity: {estimate:.2f} · Safe target: {safe_text}"]
             if not plan.get("attendance_confirmed_for_top_three"):
                 lines.append("Based on output dates; attendance is unverified.")
+        elif plan.get("provisional"):
+            safe_text = f"{plan['safe_plan_per_day']}/day" if plan['safe_plan_per_day'] else "under 1/day"
+            lines.append(f"Provisional planning: {plan['planning_average_per_day']:.2f}/day · Safe target: {safe_text}")
+            lines.append(f"Personal history: {plan.get('personal_output_dates', 0)}/3 output dates; uses the business default.")
         else:
             lines.append(f"Capacity / safe target: pending ({plan.get('eligible_output_days', 0)}/3 output dates)")
         if plan.get("active_day_average") is not None:
@@ -272,10 +277,10 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     if not members:
         lines += ["", "No verified current members with readable recent history."]
     lines += ["", "14 completed days. Estimate = average of the best 3 output dates. Safe = floor(estimate × 80%).",
-        "Under 3 output dates: target pending. Missing attendance stays unknown; output-day averages omit zero-output dates.",
+        "Under 3 output dates: provisional business default, blended with early outputs. Missing attendance stays unknown.",
         "Safe targets are planning estimates, not guaranteed maximums. Under 1/day does not mean unable to work."]
     if chat in SUNO_GROUPS:
-        lines += ["Includes non-bot clients' receipts. Repeat payments may count; receipts are not completed songs."]
+        lines += ["Personal history combines Suno teams and non-bot clients' receipts. Repeat payments may count; receipts are not completed songs."]
     else:
         lines += ["Member history combines VEO teams; team figures may overlap."]
     lines += ["Verified current members only. Readable export/live-bot records; missing or unreadable posts are excluded."]
@@ -422,45 +427,104 @@ def summary_text(day: dt.date, financials: dict[int, dict]) -> str:
     return "\n".join(lines)
 
 
+class VerifiedRoster(list):
+    def __init__(self, users, unverified=0):
+        super().__init__(users)
+        self.unverified = unverified
+
+
 def _rosters(teams: set[int], day: dt.date, now: dt.datetime | None = None) -> dict[int, list[dict] | None]:
     counts = daily_poll_counts(teams, day)
     rosters = {chat: page_access.scoped_voters(chat, daily_poll_active_users(counts[chat]["poll_id"]), day)
             if counts.get(chat, {}).get("poll_id") else None for chat in teams}
     now = now or dt.datetime.now(dt.timezone.utc)
-    budget = {"remaining": 4}
-    return {chat: member_presence.filter_current(chat, users, now, budget=budget)[0] if users is not None else None
-            for chat, users in rosters.items()}
+    budget = {"remaining": 16}
+    result = {}
+    for chat, users in rosters.items():
+        if users is None:
+            result[chat] = None
+            continue
+        current, coverage = member_presence.filter_current(chat, users, now, budget=budget)
+        result[chat] = VerifiedRoster(current, coverage["unverified"])
+    return result
 
 
-def forecast(roster: list[dict] | None, members: list[dict]) -> dict:
+def forecast(roster: list[dict] | None, members: list[dict], default: dict | None = None) -> dict:
     if roster is None:
-        return {"active": None, "rated": 0, "average": None, "total": None, "conservative": None}
+        return {"active": None, "rated": 0, "provisional": 0, "average": None, "total": None, "conservative": None}
     lookup = {int(m["user_id"]): m for m in members if m.get("user_id") is not None}
     unique = {int(user["user_id"]) for user in roster}
-    plans = [(lookup.get(uid) or {}).get("planning") or {} for uid in unique]
+    people = [lookup.get(uid) or {"user_id": uid, "planning": {}} for uid in unique]
+    if default is not None:
+        people = [capacity_defaults.apply(m, default) for m in people]
+    plans = [m.get("planning") or {} for m in people]
     rated = [p for p in plans if p.get("planning_average_per_day") is not None and p.get("safe_plan_per_day") is not None]
-    total = sum(p["planning_average_per_day"] for p in rated) if rated else None
-    return {"active": len(unique), "rated": len(rated), "average": total / len(rated) if rated else None,
-        "total": total, "conservative": sum(p["safe_plan_per_day"] for p in rated) if rated else None}
+    total = sum(p["planning_average_per_day"] for p in rated) if rated or default is not None else None
+    provisional = sum(bool(p.get("provisional")) for p in rated)
+    return {"active": len(unique), "rated": len(rated) - provisional, "provisional": provisional,
+        "average": total / len(rated) if rated else None, "total": total,
+        "conservative": sum(p["safe_plan_per_day"] for p in rated) if rated or default is not None else None}
 
 
-def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None, members: list[dict]) -> str:
-    data = forecast(next_roster, members)
+def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None, members: list[dict], default: dict | None = None) -> str:
+    data = forecast(next_roster, members, default)
     unit = "receipt posts/day" if chat in SUNO_GROUPS else "Done Deals/day"
     active = str(len({int(u["user_id"]) for u in now_roster})) if now_roster is not None else "untracked poll"
     tomorrow = today + dt.timedelta(days=1)
     lines = ["STAFFING SUMMARY", AVAILABILITY_GROUPS[chat]["name"], f"Active {today}: {active}",
              f"Active tomorrow ({tomorrow}): {data['active'] if data['active'] is not None else 'untracked poll'}"]
     if data["average"] is not None:
-        lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per rated member",
+        lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per {'active' if default else 'rated'} member",
             f"Estimated team total: {data['total']:.2f} · Safe team target: {data['conservative']:.0f}",
-            f"Rated: {data['rated']}/{data['active']}; others unknown."]
+            f"Personal history: {data['rated']} · Provisional: {data['provisional']}"]
     else:
         lines += ["Tomorrow average: pending availability poll." if data["active"] is None else
                   "Tomorrow average: pending history." if data["active"] else "Tomorrow average: no Active voters."]
     if not automation_controls.chat_enabled(chat):
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
-    lines += ["14-day top-three estimates; not production guarantees. Updates as votes change."]
+    if default:
+        lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit}; replaced after 3 personal output dates."]
+    if getattr(next_roster, "unverified", 0):
+        lines += [f"Membership pending for {next_roster.unverified} Active vote(s); excluded from totals."]
+    lines += ["14-day planning estimates; not guarantees. Current members only. Updates as votes change."]
+    return "\n".join(lines)
+
+
+def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities: dict) -> str:
+    lines = ["TOMORROW CAPACITY", f"{today + dt.timedelta(days=1)} (PHT)"]
+    by_business = {}
+    for business, family in (("veo", set(GROUPS)), ("suno", set(SUNO_GROUPS))):
+        chats = teams.intersection(family)
+        users = {int(u["user_id"]): u for chat in chats for u in rosters.get(chat) or []}
+        by_business[business] = set(users)
+        missing = sum(rosters.get(chat) is None for chat in chats)
+        roster = list(users.values()) if missing < len(chats) else None
+        members = capacities.get("businesses", {}).get(business)
+        if members is None:
+            members = capacity_defaults.unique_members([m for c in chats for m in capacities["members"].get(str(c), [])],
+                today - dt.timedelta(days=1), combine_days=business == "suno")
+        default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, members)
+        data = forecast(roster, members, default)
+        unit = "DD/day" if business == "veo" else "receipts/day"
+        if data["active"] is None:
+            lines += [f"{business.upper()}: pending availability polls."]
+        else:
+            average = f"{data['average']:.2f}" if data["average"] is not None else "n/a"
+            lines += [f"{business.upper()}: {data['active']} Active · Total {data['total']:.2f} {unit}",
+                f"Average {average}/member · Safe total {data['conservative']:.0f}",
+                f"Personal {data['rated']} · Provisional {data['provisional']}"]
+            lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({default['peer_members']} peers)."]
+        if missing:
+            lines.append(f"{missing} team poll(s) untracked; totals are partial.")
+        unverified = sum(getattr(rosters.get(chat), "unverified", 0) for chat in chats)
+        if unverified:
+            lines.append(f"Membership pending for {unverified} Active vote(s); totals are partial.")
+    shared = len(by_business["veo"].intersection(by_business["suno"]))
+    lines += ["Each person counts once per business. VEO and Suno units stay separate."]
+    if shared:
+        lines += [f"Shared across businesses: {shared}; capacity may overlap."]
+    lines += ["Provisional defaults update with personal history. Suno counts readable payment receipts.",
+              "Verified current members only; estimates are not production guarantees."]
     return "\n".join(lines)
 
 
@@ -526,9 +590,10 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
                         "message_thread_id": report_topics.TEAM_THREADS[chat], "organized_report_date": day.isoformat(),
                         "organized_report_version": VERSION, "report_source_chat_id": chat, "report_category": category}))
     summary_ids = previous.get((0, "summary"), [])
-    if not summary_ids or old_text.get(summary_ids[0]) != saved["summary"]:
-        queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
+    queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
+            repeat_interval_minutes=5,
             dedupe_key=f"{financial_key}:summary", payload={"text": saved["summary"], "disable_notification": True,
+                "financial_summary_text": saved["summary"], "organized_summary_date": day.isoformat(),
                 "organized_report_date": day.isoformat(), "organized_report_version": VERSION,
                 "report_category": "summary", **({"edit_message_id": summary_ids[0]} if summary_ids else {})}))
     edits = previous.get((0, "salary_totals"), [])
@@ -555,42 +620,59 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
     return queued
 
 
+def staffing_context(now: dt.datetime, teams: set[int], cache: dict) -> tuple:
+    today = now.astimezone(MANILA).date()
+    key = (today, tuple(sorted(teams)))
+    if key not in cache:
+        raw = _read(capacity_key(today - dt.timedelta(days=1), teams))
+        if raw is None:
+            raise RuntimeError("Staffing capacity snapshot is not available yet")
+        capacities = current_capacities(raw, teams, now)
+        cache[key] = capacities, _rosters(teams, today, now), _rosters(teams, today + dt.timedelta(days=1), now)
+    return cache[key]
+
+
 def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) -> bool:
     payload = action["payload"]
-    if not payload.get("organized_staffing_date"):
+    summary = bool(payload.get("organized_summary_date"))
+    if not payload.get("organized_staffing_date") and not summary:
         return True
     approved = allowed_chat_ids()
     today = now.astimezone(MANILA).date()
     teams = sources(approved)
-    if (not report_topics.enabled() or int(action["chat_id"]) != DAILY_REPORTS_CHAT_ID
-            or payload.get("organized_staffing_version", 1) != VERSION
-            or payload["organized_staffing_date"] != today.isoformat() or set(payload["report_source_ids"]) != teams):
+    valid = (payload.get("organized_report_version") == VERSION and
+             payload["organized_summary_date"] == str(today - dt.timedelta(days=1))) if summary else (
+             payload.get("organized_staffing_version", 1) == VERSION and
+             payload["organized_staffing_date"] == today.isoformat() and set(payload["report_source_ids"]) == teams)
+    if not report_topics.enabled() or int(action["chat_id"]) != DAILY_REPORTS_CHAT_ID or not valid:
         action["repeat_interval_minutes"] = None
         return False
     cache = cache if cache is not None else {}
-    key = (today, tuple(sorted(teams)))
-    if key not in cache:
-        capacities = _read(capacity_key(today - dt.timedelta(days=1), teams))
-        if capacities is None:
-            raise RuntimeError("Staffing capacity snapshot is not available yet")
-        cache[key] = capacities, _rosters(teams, today, now), _rosters(teams, today + dt.timedelta(days=1), now)
-    capacities, current, upcoming = cache[key]
-    chat = int(payload["report_source_chat_id"])
-    if chat:
-        text = staffing_text(chat, today, current[chat], upcoming[chat], capacities["members"].get(str(chat), []))
+    capacities, current, upcoming = staffing_context(now, teams, cache)
+    chat = int(payload.get("report_source_chat_id") or 0)
+    if summary:
+        text = payload["financial_summary_text"] + "\n\n" + tomorrow_summary(today, teams, upcoming, capacities)
+    elif chat:
+        business = "veo" if chat in GROUPS else "suno"
+        default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
+        text = staffing_text(chat, today, current[chat], upcoming[chat], capacities["members"].get(str(chat), []), default)
     else:
         def unique_count(rosters):
             users = {int(u["user_id"]) for roster in rosters.values() for u in roster or []}
             missing = sum(roster is None for roster in rosters.values())
             return f"{len(users)} recorded" + (f" · {missing} untracked poll(s)" if missing else "")
         lines = ["STAFFING SUMMARY", f"{today} (PHT)", f"Active today: {unique_count(current)}",
-                 f"Active tomorrow ({today + dt.timedelta(days=1)}): {unique_count(upcoming)}"]
+                 f"Active tomorrow ({today + dt.timedelta(days=1)}): {unique_count(upcoming)}", "",
+                 tomorrow_summary(today, teams, upcoming, capacities), "", "BY TEAM"]
         for source in sorted(teams):
-            data = forecast(upcoming[source], capacities["members"].get(str(source), []))
+            business = "veo" if source in GROUPS else "suno"
+            default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
+            data = forecast(upcoming[source], capacities["members"].get(str(source), []), default)
             avg = f"{data['average']:.2f}" if data["average"] is not None else "unknown"
             unit = "receipts" if source in SUNO_GROUPS else "DD"
-            lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {data['active'] if data['active'] is not None else '?'} Active tomorrow · avg {avg} {unit}/day"]
-        lines += ["Averages cover rated voters only. Shared members count once in headcounts; team totals overlap.",
+            total = f"{data['total']:.2f}" if data['total'] is not None else "?"
+            lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {data['active'] if data['active'] is not None else '?'} Active · total {total} · avg {avg} {unit}/day"]
+        lines += ["Averages include clearly marked provisional defaults. Team totals overlap for shared members.",
                   "Declared availability; polls may be incomplete. Updates as votes change."]
         text = "\n".join(lines)
     fingerprint = hashlib.sha256(text.encode()).hexdigest()

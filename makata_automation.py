@@ -230,16 +230,22 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
     capacity = suno_capacity.report(now, chat_id=MAKATA_CHAT_ID)
     import report_topics
     if report_topics.enabled():
-        from member_presence import filter_current
-        capacity["members"], _ = filter_current(MAKATA_CHAT_ID, capacity["members"], now)
+        import organized_reports
+        from cloud_store import allowed_chat_ids
+        approved = allowed_chat_ids()
+        history_day = min(day, now.astimezone(MANILA).date() - dt.timedelta(days=1))
+        current = organized_reports.current_capacities(organized_reports.load_capacity(history_day, now, approved),
+            organized_reports.sources(approved), now)
+        capacity["members"] = current["members"].get(str(MAKATA_CHAT_ID), [])
     lines += ["", "RECEIPT CAPACITY — ESTIMATES"]
     if not capacity["members"]:
         lines.append("Pending receipt and attendance history.")
     for member in capacity["members"]:
         plan = member["planning"]
         if plan.get("policy") == "top-three-14d-v1":
-            estimate, safe, peak = plan["estimated_capacity_per_day"], plan["safe_plan_per_day"], plan["observed_daily_peak"]
-            lines.append(f"{member['name']}: estimate {f'{estimate:.2f}/day' if estimate is not None else 'pending'} · "
+            estimate, safe, peak = plan.get("planning_average_per_day"), plan["safe_plan_per_day"], plan["observed_daily_peak"]
+            label = "provisional" if plan.get("provisional") else "estimate"
+            lines.append(f"{member['name']}: {label} {f'{estimate:.2f}/day' if estimate is not None else 'pending'} · "
                 f"safe {str(safe) + '/day' if safe is not None else 'pending'} · recorded peak {peak if peak is not None else 'unknown'}")
             continue
         safe, reach = plan["safe_plan_per_day"], plan["reachable_target_per_day"]

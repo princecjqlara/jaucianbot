@@ -28,6 +28,7 @@ def delivery_allowed(action: dict) -> bool:
     if key.startswith("organized-daily:"):
         from organized_reports import VERSION
         if int((action.get("payload") or {}).get("organized_report_version", 1)) != VERSION:
+            action["repeat_interval_minutes"] = None
             return False
         p = action.get("payload") or {}
         if p.get("capacity_member_ids"):

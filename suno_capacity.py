@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import member_capacity
+import recent_capacity
 from cloud_store import archive_status, poll_answers_for_range, receipt_messages, song_jobs
 from cloud_store import enqueue_scheduled_action, record_automation_marker, request, allowed_chat_ids
 from daily_automation import DAILY_REPORTS_CHAT_ID, MANILA, TRABAWHO, TRABAWHO_CHAT_ID, SUNO_GROUPS
@@ -157,7 +158,8 @@ def summarize(rows: list[dict], answers: list[dict], jobs: list[dict] | None, st
             "receipt_active_day_average": round(sum(p["receipts"].get(d, 0) for d in active) / len(active), 2) if active else None,
             "confirmed_deliveries": deliveries if jobs is not None else None,
             "delivery_daily_peak": max(p["delivered"].values(), default=0) if jobs is not None else None,
-            "planning": plan, "open_songs": p["open_songs"] if jobs is not None else None,
+            "planning": plan, "daily": daily[-recent_capacity.WINDOW_DAYS:] if report_topics.enabled() else daily,
+            "open_songs": p["open_songs"] if jobs is not None else None,
             "overdue_songs": p["overdue_songs"] if jobs is not None else None,
             "on_time_deliveries": p["on_time"] if jobs is not None else None,
             "late_deliveries": p["late"] if jobs is not None else None,

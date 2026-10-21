@@ -8,6 +8,25 @@ access. Existing ownership is preserved; archived offer buttons cannot accept
 new work while the VEO feature is off. VEO availability counts all members.
 Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
+
+Capacity defaults are separate by business. Each day's starting default is the
+median of current members' personal 14-day top-three estimates, deduplicated by
+Telegram ID, once five peers are rated. Initial fallbacks are 4/3 Done Deals/day
+for VEO and 2 receipt posts/day for Suno, based on the October 8–21 peer review.
+With zero personal output dates, use the default provisionally. With one or two,
+blend those counts with the remaining default dates in a three-date estimate,
+capped at the default until the third output date. Three eligible dates replace
+the default with the member's own top-three mean. The safe target remains
+floor(estimate × 80%). These are planning assumptions, not measured maximums.
+Attendance and observed output remain unchanged; missing attendance is unknown.
+
+The daily sales/salary summary and staffing boards show tomorrow's Active total,
+capacity total, average per Active member, safe target, and personal/provisional
+counts separately for VEO and Suno. Shared members count once within each
+business; mixed business units are never added. Suno personal history combines
+receipt counts by date across Suno teams before calculating a member estimate.
+The summary silently refreshes the same post every five minutes as votes change.
+Unverified membership and missing polls are shown as partial coverage.
 Client lists contain every row without Next/Previous controls; long lists use
 consecutive messages, updated in place through the scheduled outbox.
 

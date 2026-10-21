@@ -111,6 +111,7 @@ class OrganizedReportsTests(unittest.TestCase):
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \
                 patch.object(reports, "allowed_chat_ids", return_value={TARGET, VEO}), \
                 patch.object(reports, "_read", return_value=capacity), \
+                patch.object(reports, "current_capacities", return_value=capacity), \
                 patch.object(reports, "_rosters", return_value=roster):
             self.assertTrue(reports.prepare_delivery(action, NOW))
             action["telegram_message_id"] = 500

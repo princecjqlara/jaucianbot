@@ -26,6 +26,7 @@ REQUIRED_TEST_FILES = (
     "test_recent_capacity.py",
     "test_member_presence_and_salary_totals.py",
     "test_veo_client_feature_switch.py",
+    "test_capacity_defaults.py",
 )
 
 
