@@ -18,10 +18,10 @@ NOW = dt.datetime(2026, 10, 21, 20, tzinfo=dt.timezone.utc)
 TODAY = dt.date(2026, 10, 22)
 
 
-def member(uid, counts):
+def member(uid, counts, attendance="Active"):
     start = END - dt.timedelta(days=len(counts) - 1)
     person = {"user_id": uid, "name": str(uid), "daily": [
-        {"date": str(start + dt.timedelta(days=i)), "done_deals": n, "attendance": "Unknown"}
+        {"date": str(start + dt.timedelta(days=i)), "done_deals": n, "attendance": attendance}
         for i, n in enumerate(counts)]}
     person["planning"] = recent_capacity.planning(person, END)
     return person
@@ -31,10 +31,10 @@ class BusinessDefaultTests(unittest.TestCase):
     def test_businesses_have_separate_seeds_and_receipt_units(self):
         veo = defaults.baseline("veo", [])
         suno = defaults.baseline("suno", [])
-        self.assertEqual(veo["capacity_per_day"], 4 / 3)
-        self.assertEqual(suno["capacity_per_day"], 2)
+        self.assertEqual(veo["capacity_per_day"], 0.5)
+        self.assertEqual(suno["capacity_per_day"], 0.6)
         self.assertNotEqual(veo["unit"], suno["unit"])
-        self.assertEqual(veo["source"], "initial_business_seed")
+        self.assertEqual(veo["source"], "reviewed_peer_fallback")
 
     def test_median_uses_only_personal_estimates_and_resists_one_extreme_member(self):
         people = [member(i, [n, n, n]) for i, n in enumerate([1, 1, 1, 1, 100])]
@@ -42,18 +42,40 @@ class BusinessDefaultTests(unittest.TestCase):
         baseline = defaults.baseline("veo", people)
         self.assertEqual(baseline["capacity_per_day"], 1)
         self.assertEqual(baseline["peer_members"], 5)
-        self.assertEqual(baseline["source"], "current_peer_median")
+        self.assertEqual(baseline["source"], "current_peer_active_day_median")
+
+    def test_defaults_include_zero_output_active_days_instead_of_top_three_only(self):
+        people = [member(uid, [1, 0, 1, 0, 1, 0]) for uid in range(5)]
+        self.assertTrue(all(m["planning"]["estimated_capacity_per_day"] == 1 for m in people))
+        result = defaults.baseline("veo", people)
+        self.assertEqual(result["capacity_per_day"], 0.5)
+        self.assertEqual(result["peer_members"], 5)
+
+    def test_unknown_attendance_and_insufficient_output_do_not_set_peer_default(self):
+        people = [member(uid, [5, 5, 5], "Unknown") for uid in range(5)]
+        people += [member(uid, [1, 0, 0]) for uid in range(5, 10)]
+        result = defaults.baseline("suno", people)
+        self.assertEqual(result["peer_members"], 0)
+        self.assertEqual(result["capacity_per_day"], 0.6)
+
+    def test_sub_one_rates_and_safe_targets_keep_precision_without_minimum_one(self):
+        people = [member(uid, [1, 0, 0] * 3) for uid in range(5)]
+        default = defaults.baseline("veo", people)
+        self.assertAlmostEqual(default["capacity_per_day"], 1 / 3)
+        plan = defaults.apply(member(9, []), default)["planning"]
+        self.assertAlmostEqual(plan["planning_average_per_day"], 1 / 3)
+        self.assertAlmostEqual(plan["safe_plan_per_day"], 4 / 15)
 
     def test_small_cohort_keeps_initial_seed_instead_of_following_one_peak(self):
-        self.assertEqual(defaults.baseline("suno", [member(1, [10, 10, 10])])["capacity_per_day"], 2)
+        self.assertEqual(defaults.baseline("suno", [member(1, [10, 10, 10])])["capacity_per_day"], 0.6)
 
     def test_no_data_receives_provisional_plan_without_inventing_output_or_attendance(self):
         person = member(1, [])
         result = defaults.apply(person, defaults.baseline("veo", []))
         p = result["planning"]
         self.assertTrue(p["provisional"])
-        self.assertEqual(p["planning_average_per_day"], 4 / 3)
-        self.assertEqual(p["safe_plan_per_day"], 1)
+        self.assertEqual(p["planning_average_per_day"], 0.5)
+        self.assertEqual(p["safe_plan_per_day"], 0.4)
         self.assertIsNone(p["estimated_capacity_per_day"])
         self.assertIsNone(p["observed_daily_peak"])
         self.assertEqual(result["daily"], [])
@@ -61,9 +83,12 @@ class BusinessDefaultTests(unittest.TestCase):
 
     def test_one_and_two_outputs_blend_but_cannot_raise_default_until_third_date(self):
         default = defaults.baseline("suno", [])
-        self.assertAlmostEqual(defaults.apply(member(1, [1]), default)["planning"]["planning_average_per_day"], 5 / 3)
-        self.assertAlmostEqual(defaults.apply(member(1, [1, 1]), default)["planning"]["planning_average_per_day"], 4 / 3)
-        self.assertEqual(defaults.apply(member(1, [10, 9]), default)["planning"]["planning_average_per_day"], 2)
+        self.assertEqual(defaults.apply(member(1, [1]), default)["planning"]["planning_average_per_day"], 0.6)
+        self.assertEqual(defaults.apply(member(1, [1, 1]), default)["planning"]["planning_average_per_day"], 0.6)
+        self.assertEqual(defaults.apply(member(1, [10, 9]), default)["planning"]["planning_average_per_day"], 0.6)
+        higher_peer_default = {**default, "capacity_per_day": 2}
+        self.assertAlmostEqual(defaults.apply(member(1, [1]), higher_peer_default)["planning"]["planning_average_per_day"], 5 / 3)
+        self.assertAlmostEqual(defaults.apply(member(1, [1, 1]), higher_peer_default)["planning"]["planning_average_per_day"], 4 / 3)
         personal = defaults.apply(member(1, [10, 9, 8]), default)["planning"]
         self.assertFalse(personal["provisional"])
         self.assertEqual(personal["planning_average_per_day"], 9)
@@ -94,9 +119,9 @@ class BusinessDefaultTests(unittest.TestCase):
         self.assertEqual(result["active"], 2)
         self.assertEqual(result["rated"], 1)
         self.assertEqual(result["provisional"], 1)
-        self.assertAlmostEqual(result["total"], 13 / 3)
-        self.assertAlmostEqual(result["average"], 13 / 6)
-        self.assertEqual(result["conservative"], 3)
+        self.assertAlmostEqual(result["total"], 3.5)
+        self.assertAlmostEqual(result["average"], 1.75)
+        self.assertEqual(result["conservative"], 2.4)
 
     def test_missing_poll_stays_unknown_and_no_voters_has_no_average(self):
         default = defaults.baseline("veo", [])
@@ -108,9 +133,15 @@ class BusinessDefaultTests(unittest.TestCase):
     def test_daily_detail_labels_default_as_provisional_and_preserves_unknown_peak(self):
         person = defaults.apply(member(1, []), defaults.baseline("veo", []))
         text = reports.capacity_text(VEO, END, [person])
-        self.assertIn("Provisional planning: 1.33/day", text)
+        self.assertIn("Provisional planning: 0.50/day · Safe target: 0.40/day", text)
         self.assertIn("0/3 output dates", text)
         self.assertIn("Output average / peak: unknown", text)
+
+    def test_staffing_report_keeps_sub_one_safe_team_total(self):
+        default = defaults.baseline("veo", [])
+        text = reports.staffing_text(VEO, TODAY, [], [{"user_id": 7}], [], default)
+        self.assertIn("Estimated team total: 0.50 · Safe team target: 0.40", text)
+        self.assertIn("Starting default: 0.50", text)
 
     def test_former_members_are_filtered_before_business_default_is_computed(self):
         raw = {"date": str(END), "members": {str(VEO): [member(1, [1, 1, 1]), member(2, [100, 100, 100])]}}
@@ -128,8 +159,8 @@ class TomorrowSummaryTests(unittest.TestCase):
     def test_summary_deduplicates_within_business_and_keeps_units_and_totals_separate(self):
         rosters = {VEO: [{"user_id": 1}, {"user_id": 2}], OTHER: [{"user_id": 1}], SUNO: [{"user_id": 1}]}
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
-        self.assertIn("VEO: 2 Active · Total 4.33 DD/day", text)
-        self.assertIn("Average 2.17/member", text)
+        self.assertIn("VEO: 2 Active · Total 3.50 DD/day", text)
+        self.assertIn("Average 1.75/member · Safe total 2.40", text)
         self.assertIn("SUNO: 1 Active · Total 2.00 receipts/day", text)
         self.assertIn("Shared across businesses: 1", text)
         self.assertNotIn("6.33", text)

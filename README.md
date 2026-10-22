@@ -10,14 +10,19 @@ Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
 
 Capacity defaults are separate by business. Each day's starting default is the
-median of current members' personal 14-day top-three estimates, deduplicated by
-Telegram ID, once five peers are rated. Initial fallbacks are 4/3 Done Deals/day
-for VEO and 2 receipt posts/day for Suno, based on the October 8–21 peer review.
+median of current members' recorded Active-day averages over the last 14 completed
+dates, including zero-output Active dates and deduplicated by Telegram ID. Each
+reference peer needs three declared Active dates and three eligible output dates;
+at least five peers are required. Reviewed fallbacks are 0.50 Done Deals/day for
+VEO and 0.60 receipt posts/day for Suno, based on October 8–21 records from 28 and
+7 current peers respectively. These describe recorded sales output and may be
+limited by available demand; they do not measure a production maximum.
 With zero personal output dates, use the default provisionally. With one or two,
 blend those counts with the remaining default dates in a three-date estimate,
 capped at the default until the third output date. Three eligible dates replace
-the default with the member's own top-three mean. The safe target remains
-floor(estimate × 80%). These are planning assumptions, not measured maximums.
+the default with the member's own top-three mean. Provisional safe targets are
+80% of the estimate, preserving fractional rates below one. Personal top-three
+safe targets retain floor(estimate × 80%). Team summaries retain fractional totals.
 Attendance and observed output remain unchanged; missing attendance is unknown.
 
 The daily sales/salary summary and staffing boards show tomorrow's Active total,

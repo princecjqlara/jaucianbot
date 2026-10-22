@@ -8,9 +8,14 @@ from fractions import Fraction
 
 import recent_capacity
 
-POLICY = "business-median-prior-v1"
-SEEDS = {"veo": 4 / 3, "suno": 2.0}
+POLICY = "peer-active-day-median-v2"
+# Reviewed October 8–21 records: 28 current VEO peers and 7 current Suno peers.
+SEEDS = {"veo": 0.5, "suno": 0.6}
 MIN_PEERS = 5
+MIN_ACTIVE_DAYS = 3
+MIN_OUTPUT_DAYS = 3
+SEED_REVIEW = {"start_date": "2026-10-08", "end_date": "2026-10-21",
+               "peer_members": {"veo": 28, "suno": 7}}
 
 
 def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = False) -> list[dict]:
@@ -36,12 +41,20 @@ def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = Fa
 
 
 def baseline(business: str, members: list[dict]) -> dict:
-    values = [(m.get("planning") or {}).get("estimated_capacity_per_day") for m in members]
-    values = [v for v in values if v is not None]
+    # Best output dates omit zero-output Active days and overstate a starting plan.
+    # Use typical recorded output on declared Active dates from established peers.
+    plans = [m.get("planning") or {} for m in members]
+    values = [p["active_day_average"] for p in plans
+        if p.get("estimated_capacity_per_day") is not None
+        and p.get("known_active_days", 0) >= MIN_ACTIVE_DAYS
+        and p.get("eligible_output_days", 0) >= MIN_OUTPUT_DAYS
+        and p.get("active_day_average") is not None]
     enough = len(values) >= MIN_PEERS
     rate = statistics.median(values) if enough else SEEDS[business]
     return {"policy": POLICY, "business": business, "capacity_per_day": rate,
-        "peer_members": len(values), "source": "current_peer_median" if enough else "initial_business_seed",
+        "peer_members": len(values), "source": "current_peer_active_day_median" if enough else "reviewed_peer_fallback",
+        "minimum_active_days": MIN_ACTIVE_DAYS, "minimum_output_days": MIN_OUTPUT_DAYS,
+        "minimum_peers": MIN_PEERS, "reviewed_fallback": SEED_REVIEW,
         "unit": "Done Deals/day" if business == "veo" else "receipt posts/day"}
 
 
@@ -55,7 +68,7 @@ def apply(member: dict, default: dict) -> dict:
     prior = Fraction(default["capacity_per_day"]).limit_denominator(1_000_000)
     blend = (sum(top) + (3 - len(top)) * prior) / 3
     value = min(prior, blend)  # One unusually high date cannot raise a new member above the default.
-    plan.update(planning_average_per_day=float(value), safe_plan_per_day=int(value * 4 / 5),
+    plan.update(planning_average_per_day=float(value), safe_plan_per_day=float(value * 4 / 5),
         provisional=True, default_policy=POLICY, default_capacity_per_day=float(prior),
         default_peer_members=default["peer_members"], personal_output_dates=len(top),
         estimate_origin="blended_default" if top else "business_default")

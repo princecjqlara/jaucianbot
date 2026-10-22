@@ -261,7 +261,7 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             if not plan.get("attendance_confirmed_for_top_three"):
                 lines.append("Based on output dates; attendance is unverified.")
         elif plan.get("provisional"):
-            safe_text = f"{plan['safe_plan_per_day']}/day" if plan['safe_plan_per_day'] else "under 1/day"
+            safe_text = f"{plan['safe_plan_per_day']:.2f}/day"
             lines.append(f"Provisional planning: {plan['planning_average_per_day']:.2f}/day · Safe target: {safe_text}")
             lines.append(f"Personal history: {plan.get('personal_output_dates', 0)}/3 output dates; uses the business default.")
         else:
@@ -276,8 +276,9 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines.append(f"Review: {plan['inactive_output_conflicts']} Inactive/output conflict(s) excluded from the plan.")
     if not members:
         lines += ["", "No verified current members with readable recent history."]
-    lines += ["", "14 completed days. Estimate = average of the best 3 output dates. Safe = floor(estimate × 80%).",
+    lines += ["", "14 completed days. Personal estimate = best 3 output dates; personal safe = floor(estimate × 80%).",
         "Under 3 output dates: provisional business default, blended with early outputs. Missing attendance stays unknown.",
+        "Defaults use peers' Active-day averages, including zeros. Provisional safe = 80%, keeping decimals.",
         "Safe targets are planning estimates, not guaranteed maximums. Under 1/day does not mean unable to work."]
     if chat in SUNO_GROUPS:
         lines += ["Personal history combines Suno teams and non-bot clients' receipts. Repeat payments may count; receipts are not completed songs."]
@@ -475,7 +476,7 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
              f"Active tomorrow ({tomorrow}): {data['active'] if data['active'] is not None else 'untracked poll'}"]
     if data["average"] is not None:
         lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per {'active' if default else 'rated'} member",
-            f"Estimated team total: {data['total']:.2f} · Safe team target: {data['conservative']:.0f}",
+            f"Estimated team total: {data['total']:.2f} · Safe team target: {data['conservative']:.2f}",
             f"Personal history: {data['rated']} · Provisional: {data['provisional']}"]
     else:
         lines += ["Tomorrow average: pending availability poll." if data["active"] is None else
@@ -484,6 +485,7 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
     if default:
         lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit}; replaced after 3 personal output dates."]
+        lines += ["Default basis: peers' Active-day averages, including zero output."]
     if getattr(next_roster, "unverified", 0):
         lines += [f"Membership pending for {next_roster.unverified} Active vote(s); excluded from totals."]
     lines += ["14-day planning estimates; not guarantees. Current members only. Updates as votes change."]
@@ -511,7 +513,7 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
         else:
             average = f"{data['average']:.2f}" if data["average"] is not None else "n/a"
             lines += [f"{business.upper()}: {data['active']} Active · Total {data['total']:.2f} {unit}",
-                f"Average {average}/member · Safe total {data['conservative']:.0f}",
+                f"Average {average}/member · Safe total {data['conservative']:.2f}",
                 f"Personal {data['rated']} · Provisional {data['provisional']}"]
             lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({default['peer_members']} peers)."]
         if missing:
@@ -523,7 +525,8 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
     lines += ["Each person counts once per business. VEO and Suno units stay separate."]
     if shared:
         lines += [f"Shared across businesses: {shared}; capacity may overlap."]
-    lines += ["Provisional defaults update with personal history. Suno counts readable payment receipts.",
+    lines += ["Defaults use peers' Active-day averages, including zeros; provisional safe targets keep decimals.",
+              "Provisional defaults update with personal history. Suno counts readable payment receipts.",
               "Verified current members only; estimates are not production guarantees."]
     return "\n".join(lines)
 
@@ -543,8 +546,9 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
     # Fresh API failures remain unknown and are omitted rather than guessed.
     if any(c.get("pending_verification") for c in capacities.get("membership", {}).values()):
         return 0
-    membership_scope = hashlib.sha256(str(sorted((chat, sorted(m["user_id"] for m in capacities["members"].get(str(chat), [])))
-        for chat in teams)).encode()).hexdigest()[:10]
+    membership_scope = hashlib.sha256(str((capacity_defaults.POLICY,
+        sorted((chat, sorted(m["user_id"] for m in capacities["members"].get(str(chat), [])))
+        for chat in teams))).encode()).hexdigest()[:10]
     key = f"organized-daily:v{VERSION}:{day}:{_scope(teams)}:{membership_scope}"
     financial_key = f"organized-daily:v{VERSION}:{day}:{_scope(teams)}:financial"
     if _read(key + ":complete") is not None:
