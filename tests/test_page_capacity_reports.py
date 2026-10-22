@@ -117,6 +117,8 @@ class PageCapacityTests(unittest.TestCase):
         self.assertEqual(page["active"], 2)
         self.assertEqual(page["unknown"], 1)
         self.assertIsNone(page["average"])
+        self.assertIsNone(page["total"])
+        self.assertIsNone(page["conservative"])
         self.assertIn("Avg Unknown", "\n".join(pages.render(result)))
 
     def test_veo_and_suno_page_ids_and_units_stay_separate(self):

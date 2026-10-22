@@ -66,7 +66,7 @@ def build(today: dt.date, teams: set[int], rosters: dict, capacities: dict, inpu
             data = forecast(users, members, default)
             # An average for all Active page members cannot omit unknown rates.
             if data["unknown"]:
-                data["average"] = None
+                data.update(average=None, total=None, conservative=None)
             unconfirmed = page["unconfirmed"].difference(page["users"])
             missing_access.update(unconfirmed)
             results.append({"page_id": page["page_id"], "name": page["name"], **data,
