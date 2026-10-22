@@ -916,6 +916,8 @@ The scheduler can deliver within that hour; missed earlier hours are skipped.
 VEO and Suno use the same reminder schedule, independently of new-client mode.
 Either Yes or No stops future tags. Withdrawal makes a member unanswered again.
 Votes and current membership are checked immediately before each delivery.
+Team administrators and owners are excluded from reminder mentions, using their
+current Telegram role in that team.
 Messages stay in ACTIVE TOMORROW with a poll link, split into at most twenty
 names per message for readability, without a pagination interface. Durable
 date/hour/team keys prevent repeated scheduler ticks from duplicating reminders.

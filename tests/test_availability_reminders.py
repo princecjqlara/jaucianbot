@@ -83,6 +83,45 @@ class ReminderTests(unittest.TestCase):
                 patch.object(member_presence, "records", return_value={1: membership(1)}):
             self.assertFalse(reminders.prepare_delivery(action(1), NOW))
 
+    def test_team_owners_and_admins_are_excluded_in_veo_and_suno(self):
+        cached = {1: membership(1, "creator", current=True),
+                  2: membership(2, "administrator", current=True),
+                  3: membership(3), 4: membership(4, "restricted", current=True)}
+        for chat in (CHAT, MAKATA_CHAT_ID, TRABAWHO_CHAT_ID):
+            item = action(1, 2, 3, 4)
+            item["chat_id"] = chat
+            with self.subTest(chat=chat), \
+                    patch.dict(reminders.AVAILABILITY_GROUPS, {MAKATA_CHAT_ID: {"name": "Makata"}}), \
+                    patch.object(reminders, "poll", return_value=POLL), \
+                    patch.object(reminders, "daily_poll_answers", return_value=[]), \
+                    patch.object(member_presence, "records", return_value=cached):
+                self.assertTrue(reminders.prepare_delivery(item, NOW))
+            for uid in (1, 2):
+                self.assertNotIn(f"tg://user?id={uid}", item["payload"]["text"])
+            for uid in (3, 4):
+                self.assertIn(f"tg://user?id={uid}", item["payload"]["text"])
+
+    def test_admin_only_reminder_is_suppressed(self):
+        with patch.object(reminders, "poll", return_value=POLL), \
+                patch.object(reminders, "daily_poll_answers", return_value=[]), \
+                patch.object(member_presence, "records", return_value={
+                    1: membership(1, "administrator", current=True)}):
+            self.assertFalse(reminders.prepare_delivery(action(1), NOW))
+
+    def test_promotion_after_queueing_is_checked_before_delivery(self):
+        cached = {1: membership(1, expires_at=(NOW - dt.timedelta(minutes=1)).isoformat())}
+
+        def promoted(chat, uid, now):
+            cached[uid] = membership(uid, "administrator", current=True)
+            return cached[uid]
+
+        with patch.object(reminders, "poll", return_value=POLL), \
+                patch.object(reminders, "daily_poll_answers", return_value=[]), \
+                patch.object(member_presence, "records", side_effect=lambda chat: dict(cached)), \
+                patch.object(member_presence, "_verify", side_effect=promoted) as verify:
+            self.assertFalse(reminders.prepare_delivery(action(1), NOW))
+        verify.assert_called_once_with(CHAT, 1, NOW)
+
     def test_departed_unknown_and_name_only_users_never_get_mentions(self):
         with patch.object(reminders, "poll", return_value=POLL), \
                 patch.object(reminders, "daily_poll_answers", return_value=[]), \

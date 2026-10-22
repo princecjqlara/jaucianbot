@@ -129,7 +129,8 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
     people, _ = member_presence.filter_current(chat, candidates, now,
         budget={"remaining": MENTIONS_PER_MESSAGE}, humans_only=True)
     cached = member_presence.records(chat) if people else {}
-    people = [p for p in people if not cached.get(int(p["user_id"]), {}).get("is_bot")]
+    people = [p for p in people if cached.get(int(p["user_id"]), {}).get("status") in {"member", "restricted"}
+              and not cached[int(p["user_id"])].get("is_bot")]
     # A vote may arrive while membership API requests are in flight.
     answered.update(int(row["user_id"]) for row in daily_poll_answers(current_poll["poll_id"]))
     mentions = []

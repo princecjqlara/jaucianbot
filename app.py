@@ -68,7 +68,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.33"
+AUTOMATION_VERSION = "2026-10-22.34"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -105,6 +105,7 @@ def status_route(environ, start_response):
     return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
                                         "automation": automation,
                                         "availability_reminders": {"enabled": availability_reminders.enabled(),
+                                            "exclude_admins": True,
                                             "hours_pht": list(availability_reminders.HOURS)},
                                         "done_deal_tracking": done_deal_tracking.mode()})
 
