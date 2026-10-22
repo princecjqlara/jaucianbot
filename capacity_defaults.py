@@ -58,6 +58,13 @@ def baseline(business: str, members: list[dict]) -> dict:
         "unit": "Done Deals/day" if business == "veo" else "receipt posts/day"}
 
 
+def peer_label(default: dict) -> str:
+    if default.get("source") == "reviewed_peer_fallback":
+        review = default.get("reviewed_fallback", SEED_REVIEW)
+        return f"{review['peer_members'][default['business']]} reviewed peers"
+    return f"{default['peer_members']} current peers"
+
+
 def apply(member: dict, default: dict) -> dict:
     plan = dict(member.get("planning") or {})
     if plan.get("estimated_capacity_per_day") is not None or (

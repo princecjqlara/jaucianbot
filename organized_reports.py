@@ -484,7 +484,7 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
     if not automation_controls.chat_enabled(chat):
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
     if default:
-        lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit}; replaced after 3 personal output dates."]
+        lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)}); replaced after 3 personal output dates."]
         lines += ["Default basis: peers' Active-day averages, including zero output."]
     if getattr(next_roster, "unverified", 0):
         lines += [f"Membership pending for {next_roster.unverified} Active vote(s); excluded from totals."]
@@ -515,7 +515,7 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
             lines += [f"{business.upper()}: {data['active']} Active · Total {data['total']:.2f} {unit}",
                 f"Average {average}/member · Safe total {data['conservative']:.2f}",
                 f"Personal {data['rated']} · Provisional {data['provisional']}"]
-            lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({default['peer_members']} peers)."]
+            lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)})."]
         if missing:
             lines.append(f"{missing} team poll(s) untracked; totals are partial.")
         unverified = sum(getattr(rosters.get(chat), "unverified", 0) for chat in chats)

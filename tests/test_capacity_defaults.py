@@ -69,6 +69,13 @@ class BusinessDefaultTests(unittest.TestCase):
     def test_small_cohort_keeps_initial_seed_instead_of_following_one_peak(self):
         self.assertEqual(defaults.baseline("suno", [member(1, [10, 10, 10])])["capacity_per_day"], 0.6)
 
+    def test_peer_label_distinguishes_reviewed_fallback_from_current_cohort(self):
+        fallback = defaults.baseline("suno", [member(1, [10, 10, 10])])
+        self.assertEqual(fallback["peer_members"], 1)
+        self.assertEqual(defaults.peer_label(fallback), "7 reviewed peers")
+        live = defaults.baseline("veo", [member(uid, [1, 0, 1, 0, 1, 0]) for uid in range(5)])
+        self.assertEqual(defaults.peer_label(live), "5 current peers")
+
     def test_no_data_receives_provisional_plan_without_inventing_output_or_attendance(self):
         person = member(1, [])
         result = defaults.apply(person, defaults.baseline("veo", []))
