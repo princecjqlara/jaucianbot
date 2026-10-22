@@ -13,11 +13,13 @@ Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
 
 Suno and Makata use a provisional historical peer default for a member with fewer
-than three personal output dates. The shared Suno default is the median of current
-members' third-highest daily receipt counts over the last 14 completed dates.
-Peers need three distinct eligible output dates; explicit Inactive/output
-conflicts are excluded. Unknown attendance remains unverified. Recorded zero
-Active dates remain part of the separate observed Active-day receipt average.
+than three personal output dates. The shared Suno default is the median of
+established current peers' recorded receipts per declared Active day over the
+last 14 completed dates, including zero-receipt Active days. Peers need at least
+three declared Active dates and three eligible output dates. Unknown/Inactive
+attendance is excluded from the Active-day rate; explicit Inactive/output
+conflicts are excluded from the personal estimate. The wider observed cohort
+remains a separate descriptive reference, including less-established members.
 Each Telegram ID counts once. A small cohort displays its actual size without a
 fixed fallback, percentage buffer or minimum-one rounding. No usable peer history
 means Unknown. The provisional plan changes to a personal estimate after three

@@ -52,12 +52,12 @@ class BusinessDefaultTests(unittest.TestCase):
         self.assertEqual(result["capacity_per_day"], 0.5)
         self.assertEqual(result["peer_members"], 5)
 
-    def test_suno_repeat_default_uses_recorded_output_dates_with_unknown_attendance_but_not_insufficient_dates(self):
+    def test_suno_default_requires_both_active_day_history_and_sufficient_output_dates(self):
         people = [member(uid, [5, 5, 5], "Unknown") for uid in range(5)]
         people += [member(uid, [1, 0, 0]) for uid in range(5, 10)]
         result = defaults.baseline("suno", people)
-        self.assertEqual(result["peer_members"], 5)
-        self.assertEqual(result["capacity_per_day"], 5)
+        self.assertEqual(result["peer_members"], 0)
+        self.assertIsNone(result["capacity_per_day"])
         self.assertAlmostEqual(result["peer_reference_per_day"], 1 / 3)
 
     def test_sub_one_rates_and_safe_targets_keep_precision_without_minimum_one(self):

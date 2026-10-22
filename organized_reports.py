@@ -308,7 +308,7 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
         lines += ["", "No verified current members with readable recent history."]
     if chat in SUNO_GROUPS:
         lines += ["", "14 completed days. Under 3 output dates: provisional shared Suno default; replaced by personal history at 3 dates.",
-            "Default = median of peers' third-highest daily receipt counts. No eligible peers: Unknown. No assumed default safety buffer.",
+            "Default = median of established peers' Active-day receipt averages, including zeros. No eligible peers: Unknown. No assumed default safety buffer.",
             "Personal estimate = best 3 output dates; personal safe = floor(estimate × 80%). Estimates are not guarantees.",
             "Personal history combines Suno teams and non-bot clients' receipts. Repeat payments may count; receipts are not completed songs."]
     else:
@@ -507,7 +507,7 @@ def forecast(roster: list[dict] | None, members: list[dict], default: dict | Non
 def suno_reference_text(reference: dict, unit: str) -> list[str]:
     value = reference.get("capacity_per_day")
     return [f"Suno new-member default: {value:.2f} {unit} ({reference['peer_members']} current peers; provisional)."
-        if value is not None else "Suno new-member default: Unknown (no peers with 3 output dates)."]
+        if value is not None else "Suno new-member default: Unknown (no peers with 3 Active and 3 output dates)."]
 
 
 def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None, members: list[dict], default: dict | None = None) -> str:
@@ -529,7 +529,7 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
     if default and default.get("business") == "suno":
         lines += suno_reference_text(default, unit)
-        lines += ["Default = median of Suno peers' third-highest daily receipt counts (3 distinct dates each).",
+        lines += ["Default = median Active-day receipt rate of Suno peers with 3 Active and 3 output dates; includes zeros.",
             "Default replaced at 3 personal output dates. Provisional safe targets stay Unknown."]
     elif default:
         lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)}); replaced after 3 personal output dates."]
@@ -580,7 +580,7 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
     lines += ["Each person counts once per business. VEO and Suno units stay separate."]
     if shared:
         lines += [f"Shared across businesses: {shared}; capacity may overlap."]
-    lines += ["Suno default = median of peers' third-highest daily receipt counts (3 distinct output dates each).",
+    lines += ["Suno default = median Active-day receipt rate of peers with 3 Active and 3 output dates; includes zeros.",
               "Suno defaults are provisional, keep decimals, and change to personal estimates after 3 output dates. No assumed default safety buffer.",
               "Verified current members only; estimates are not production guarantees."]
     return "\n".join(lines)

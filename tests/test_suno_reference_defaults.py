@@ -37,13 +37,14 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
 
     def test_reference_is_exact_median_of_recorded_active_day_rates(self):
         people = [person(1, [1, 0]), person(2, [3, 0, 0]), person(3, [0, 0]),
-                  person(4, [100, 100, 100], "Unknown"), person(5, [100], "Inactive")]
+                  person(4, [100, 100, 100], "Unknown"), person(5, [100], "Inactive"),
+                  person(7, [1, 0, 1, 0, 1, 0])]
         people += [copy.deepcopy(people[1]), person(None, [100])]
         result = defaults.baseline("suno", people)
         self.assertEqual(result["peer_members"], 1)
-        self.assertEqual(result["reference_peer_members"], 3)
+        self.assertEqual(result["reference_peer_members"], 4)
         self.assertEqual(result["peer_reference_per_day"], 0.5)
-        self.assertEqual(result["capacity_per_day"], 100)
+        self.assertEqual(result["capacity_per_day"], 0.5)
         self.assertEqual(defaults.peer_label(result), "1 current peers")
 
     def test_zero_receipts_are_preserved_as_observation_without_inventing_a_repeated_output_default(self):
@@ -163,7 +164,7 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
             self.assertTrue(reports.prepare_delivery(item, NOW))
         self.assertIn("Suno new-member default: 10.00", item["payload"]["text"])
         self.assertIn("Estimated team total: 10.00 · Safe team target: Unknown", item["payload"]["text"])
-        self.assertIn("Suno peers' third-highest", item["payload"]["text"])
+        self.assertIn("median Active-day receipt rate of Suno peers", item["payload"]["text"])
 
     def test_makata_private_daily_correction_edits_existing_report_and_removes_old_parts(self):
         saved = {}
@@ -210,11 +211,11 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
     def test_default_refreshes_from_actual_receipts_without_a_fixed_seed_or_provisional_feedback(self):
         people = [person(1, [3, 2, 1]), person(2, [8, 4, 2])]
         first = defaults.baseline("suno", people)
-        self.assertEqual(first["capacity_per_day"], 1.5)
+        self.assertAlmostEqual(first["capacity_per_day"], 10 / 3)
         new = defaults.apply(person(3, []), first)
-        self.assertEqual(defaults.baseline("suno", people + [new])["capacity_per_day"], 1.5)
+        self.assertAlmostEqual(defaults.baseline("suno", people + [new])["capacity_per_day"], 10 / 3)
         refreshed = defaults.baseline("suno", [person(1, [2, 1, 1]), person(2, [1, 1, 1])])
-        self.assertEqual(refreshed["capacity_per_day"], 1)
+        self.assertAlmostEqual(refreshed["capacity_per_day"], 7 / 6)
 
     def test_third_personal_output_date_replaces_suno_default(self):
         reference = defaults.baseline("suno", [person(7, [1, 1, 1])])
@@ -224,14 +225,35 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertEqual(plan["safe_plan_per_day"], 2)
         self.assertFalse(plan["provisional"])
 
-    def test_repeat_default_is_median_of_third_best_counts_not_peak_or_top_three_average(self):
-        people = [person(i, counts) for i, counts in enumerate(
+    def test_established_active_day_default_uses_recorded_zeros_and_resists_peaks(self):
+        people = [person(i, list(counts) + [0] * 4) for i, counts in enumerate(
             ([2, 2, 1], [4, 1, 1], [1, 1, 1], [2, 1, 1], [2, 2, 2], [6, 3, 3], [3, 2, 2]))]
         people += [person(20, [1000, 1000]), person(21, [1000, 1000, 1000], "Inactive")]
         result = defaults.baseline("suno", people)
         self.assertEqual(result["peer_members"], 7)
-        self.assertEqual(result["capacity_per_day"], 1)
-        self.assertEqual(result["source"], "recorded_peer_third_best_median")
+        self.assertAlmostEqual(result["capacity_per_day"], 6 / 7)
+        self.assertEqual(result["source"], "established_peer_active_day_median")
+
+    def test_reviewed_suno_peer_active_day_rates_produce_point_six_without_a_fixed_seed(self):
+        counts = ([2, 2, 1, 0, 0, 0, 0], [4, 1, 1, 1] + [0] * 9,
+            [1, 1, 1, 0, 0, 0, 0], [1, 1, 0, 0], [2, 2, 2] + [0] * 6,
+            [2, 1, 1, 0], [1, 1, 1, 0, 0])
+        people = [person(i, values) for i, values in enumerate(counts)]
+        # A receipt on an Unknown date can supply output-history evidence but
+        # must not enter the declared Active-day numerator or denominator.
+        people[3]["daily"].insert(0, {"date": str(DAY - dt.timedelta(days=4)),
+            "done_deals": 2, "attendance": "Unknown"})
+        people[3]["planning"] = recent_capacity.planning(people[3], DAY)
+        result = defaults.baseline("suno", people)
+        self.assertEqual(result["peer_members"], 7)
+        self.assertEqual(result["capacity_per_day"], 0.6)
+        plan = defaults.apply(person(90, []), result)["planning"]
+        self.assertEqual(plan["planning_average_per_day"], 0.6)
+        self.assertIsNone(plan["safe_plan_per_day"])
+
+    def test_no_established_peers_means_unknown_instead_of_a_guessed_lower_number(self):
+        result = defaults.baseline("suno", [person(1, [1, 0]), person(2, [20, 20, 20], "Unknown")])
+        self.assertIsNone(result["capacity_per_day"])
 
 
 if __name__ == "__main__":
