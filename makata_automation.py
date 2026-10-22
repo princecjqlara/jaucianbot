@@ -290,7 +290,7 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     if not targets:
         return 0
     reference_policy = report_topics.enabled()
-    base = f"makata-daily-report:v{4 if reference_policy else 2}:{day}"
+    base = f"makata-daily-report:v{5 if reference_policy else 2}:{day}"
     missing = [target for target in targets if _read(f"{base}:complete:{target}") is None]
     if not missing:
         return 0

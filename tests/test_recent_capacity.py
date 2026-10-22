@@ -153,6 +153,7 @@ class SalaryAndLayoutTests(unittest.TestCase):
                 patch.object(reports, "_read", side_effect=lambda key: saved.get(key)), \
                 patch.object(reports, "_save", side_effect=save), \
                 patch.object(reports, "load_capacity", return_value={"members": {str(CHAT): []}}), \
+                patch.object(reports, "replacement_request", return_value={}), \
                 patch.object(reports.concern_reports, "snapshot", return_value={"groups": []}), \
                 patch.object(reports, "finances", return_value=f), \
                 patch.object(reports, "previous_messages", return_value={(CHAT, "sales"): [501]}), \

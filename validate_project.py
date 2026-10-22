@@ -29,6 +29,7 @@ REQUIRED_TEST_FILES = (
     "test_capacity_defaults.py",
     "test_availability_reminders.py",
     "test_suno_reference_defaults.py",
+    "test_report_replacement.py",
 )
 
 

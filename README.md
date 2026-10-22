@@ -13,10 +13,11 @@ Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
 
 Suno and Makata use a provisional historical peer default for a member with fewer
-than three personal output dates. The shared Suno default is the median of current members' recorded
-receipts on declared Active dates divided by each member's declared Active dates
-over the last 14 completed dates. Recorded zeros are included; Unknown/Inactive
-attendance and identities without a usable Active-day denominator are excluded.
+than three personal output dates. The shared Suno default is the median of current
+members' third-highest daily receipt counts over the last 14 completed dates.
+Peers need three distinct eligible output dates; explicit Inactive/output
+conflicts are excluded. Unknown attendance remains unverified. Recorded zero
+Active dates remain part of the separate observed Active-day receipt average.
 Each Telegram ID counts once. A small cohort displays its actual size without a
 fixed fallback, percentage buffer or minimum-one rounding. No usable peer history
 means Unknown. The provisional plan changes to a personal estimate after three
@@ -40,6 +41,11 @@ Unverified membership and missing polls are shown as partial coverage.
 Makata's authorized private daily report uses the same shared Suno default.
 The correction edits its existing daily report where
 available and retires any old extra parts, rather than duplicating the report.
+An explicit `./remote_windows.ps1 replace-reports --date YYYY-MM-DD` request
+rebuilds yesterday's organized report set, then queues removal of that day's old
+bot reports in DAILY REPORTS. The scheduler confirms all removals before posting
+the replacements in their existing topics. Old recurring summaries stop; current
+staffing boards remain in place. Requests never invoke delivery directly.
 Client lists contain every row without Next/Previous controls; long lists use
 consecutive messages, updated in place through the scheduled outbox.
 

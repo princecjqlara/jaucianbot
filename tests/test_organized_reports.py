@@ -112,6 +112,7 @@ class OrganizedReportsTests(unittest.TestCase):
                 patch.object(reports, "allowed_chat_ids", return_value={TARGET, VEO}), \
                 patch.object(reports, "_read", return_value=capacity), \
                 patch.object(reports, "current_capacities", return_value=capacity), \
+                patch.object(reports, "replacement_request", return_value={}), \
                 patch.object(reports, "_rosters", return_value=roster):
             self.assertTrue(reports.prepare_delivery(action, NOW))
             action["telegram_message_id"] = 500
@@ -140,6 +141,7 @@ class OrganizedReportsTests(unittest.TestCase):
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true", "AUTOMATION_CHAT_IDS": str(TARGET)}), \
                 patch.object(reports, "_read", side_effect=lambda key: saved.get(key)), \
                 patch.object(reports, "_save", side_effect=save), \
+                patch.object(reports, "replacement_request", return_value={}), \
                 patch.object(reports, "load_capacity", return_value=capacity), \
                 patch.object(reports, "previous_messages", return_value={}), \
                 patch.object(reports, "previous_texts", return_value={}), \

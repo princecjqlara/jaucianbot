@@ -39,6 +39,8 @@ def main() -> None:
     summary = commands.add_parser("daily-summary", help="Read-only Done Deal counts, total and average preview")
     summary.add_argument("--group", type=int)
     summary.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
+    replace_reports = commands.add_parser("replace-reports", help="Request replacement of yesterday's bot reports in DAILY REPORTS via the scheduler")
+    replace_reports.add_argument("--date", required=True, help="Yesterday's Philippine date, YYYY-MM-DD")
     concerns = commands.add_parser("concerns", help="Read-only daily concerns preview")
     concerns.add_argument("--date", help="Philippine work date, YYYY-MM-DD")
     referrals = commands.add_parser("referrals")
@@ -121,6 +123,10 @@ def main() -> None:
         path = "/api/suno/makata"
         method = "POST"
         body = json.dumps({"action": "send_report", "date": args.date, "request_id": uuid.uuid4().hex}).encode("utf-8")
+    elif args.command == "replace-reports":
+        path = "/api/reports/replace"
+        method = "POST"
+        body = json.dumps({"date": args.date, "request_id": uuid.uuid4().hex}).encode("utf-8")
     elif args.command == "daily-summary":
         params = {k: v for k, v in {"group": args.group, "date": args.date}.items() if v is not None}
         path = "/api/reports/daily-summary?" + urllib.parse.urlencode(params)

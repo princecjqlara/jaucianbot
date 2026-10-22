@@ -68,7 +68,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.39"
+AUTOMATION_VERSION = "2026-10-22.40"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -335,6 +335,24 @@ def referrals_audit_route(environ, start_response):
     except Exception as error:
         print(f"Referral audit failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False})
+
+
+def report_replacement_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    allowed = allowed_chat_ids()
+    if DAILY_REPORTS_CHAT_ID not in allowed:
+        return response(start_response, 403, {"ok": False})
+    try:
+        body = read_json_body(environ)
+        return response(start_response, 200, organized_reports.request_replacement(
+            dt.date.fromisoformat(str(body.get("date") or "")), dt.datetime.now(dt.timezone.utc),
+            allowed, str(body.get("request_id") or "")))
+    except ValueError:
+        return response(start_response, 400, {"ok": False, "error": "invalid report replacement request"})
+    except Exception as error:
+        print(f"Report replacement request failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "report_replacement_unavailable"})
 
 
 def daily_summary_route(environ, start_response):
@@ -1139,6 +1157,10 @@ def app(environ, start_response):
         return referrals_audit_route(environ, start_response)
     if path == "/api/reports/plan" and method == "GET":
         return daily_plan_route(environ, start_response)
+    if path == "/api/reports/replace":
+        if method != "POST":
+            return response(start_response, 405, {"ok": False})
+        return report_replacement_route(environ, start_response)
     if path == "/api/reports/daily-summary" and method == "GET":
         return daily_summary_route(environ, start_response)
     if path == "/api/reports/concerns" and method == "GET":

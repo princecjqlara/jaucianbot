@@ -8,7 +8,7 @@ from fractions import Fraction
 
 import recent_capacity
 
-POLICY = "suno-historical-peer-default-v4"
+POLICY = "suno-repeat-output-default-v5"
 # VEO retains its existing reviewed planning default.
 SEEDS = {"veo": 0.5}
 MIN_PEERS = 5
@@ -42,16 +42,20 @@ def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = Fa
 
 def baseline(business: str, members: list[dict]) -> dict:
     if business == "suno":
-        # Peer history supplies a provisional starting plan, never a measured
-        # personal capacity. Include Active-day zeros without a fixed seed.
+        # A third-highest daily count was reached on at least three dates.
+        # Peer history supplies a provisional starting plan, not a personal limit.
         people = {int(m["user_id"]): m for m in members if m.get("user_id") is not None}
         plans = [m.get("planning") or {} for m in people.values()]
-        values = [p["active_day_average"] for p in plans
+        observed = [p["active_day_average"] for p in plans
             if p.get("known_active_days", 0) > 0 and p.get("active_day_average") is not None]
+        values = [p["top_three_daily_outputs"][2] for p in plans
+            if len(p.get("top_three_daily_outputs", [])) == 3
+            and p.get("estimated_capacity_per_day") is not None and not p.get("provisional")]
         rate = statistics.median(values) if values else None
         return {"policy": POLICY, "business": business, "capacity_per_day": rate,
-            "peer_reference_per_day": rate, "peer_members": len(values),
-            "source": "recorded_peer_active_day_median", "unit": "receipt posts/day"}
+            "peer_reference_per_day": statistics.median(observed) if observed else None,
+            "reference_peer_members": len(observed), "peer_members": len(values),
+            "source": "recorded_peer_third_best_median", "unit": "receipt posts/day"}
     # Best output dates omit zero-output Active days and overstate a starting plan.
     # Use typical recorded output on declared Active dates from established peers.
     plans = [m.get("planning") or {} for m in members]
