@@ -28,7 +28,7 @@ from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS
 from trabawho_receipts import receipt_report
 
 VERSION = 8
-CAPACITY_CACHE_VERSION = 7
+CAPACITY_CACHE_VERSION = 8
 
 
 def sources(approved: set[int]) -> set[int]:

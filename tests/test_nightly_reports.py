@@ -127,7 +127,7 @@ class NightlyQueueTests(unittest.TestCase):
         self.assertIn("2026-10-23 (PHT)", summary)
         self.assertIn("through 2026-10-21", summary)
         capacity = next(a["payload"]["text"] for a in actions.values() if a["payload"].get("report_category") == "capacity")
-        self.assertIn("First personal estimate: 2.00/day", capacity)
+        self.assertIn("Nightly baseline: 2.00/day", capacity)
         self.assertIn("2026-10-08 to 2026-10-21", capacity)
 
     def test_first_attempt_after_midnight_reports_yesterday_and_its_next_day(self):
@@ -194,7 +194,7 @@ class CapacityChangeTests(unittest.TestCase):
         self.assertIn("Increased: 1.00 → 2.00", result["veo", 1]["text"])
         self.assertIn("Decreased: 3.00 → 2.00", result["veo", 2]["text"])
         self.assertIn("Unchanged: 2.00", result["veo", 3]["text"])
-        self.assertIn("First personal estimate", result["veo", 4]["text"])
+        self.assertIn("Personal estimate now available", result["veo", 4]["text"])
         self.assertIn("Provisional", result["veo", 5]["text"])
 
     def test_same_person_in_veo_and_suno_has_separate_comparisons(self):

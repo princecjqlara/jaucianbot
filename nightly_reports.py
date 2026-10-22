@@ -52,8 +52,10 @@ def changes(current: dict, previous: dict | None) -> dict[tuple[str, int], dict]
             prior = before.get("estimated_capacity_per_day")
             if value is None:
                 text = "Provisional; personal history still below 3 output dates."
+            elif not previous:
+                text = f"Nightly baseline: {value:.2f}/day; comparison starts with the next report."
             elif prior is None:
-                text = f"First personal estimate: {value:.2f}/day."
+                text = f"Personal estimate now available: {value:.2f}/day."
             elif abs(value - prior) < 1e-10:
                 text = f"Unchanged: {value:.2f}/day."
             else:
