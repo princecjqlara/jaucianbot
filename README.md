@@ -909,3 +909,15 @@ clients; VEO output remains readable Done Deals. Active-day averages separately
 include declared Active dates with zero output. Staffing summaries use these
 same estimates for tomorrow's actual voters. Corrections reuse existing report
 and staffing messages where available.
+
+With `AVAILABILITY_REMINDERS_ENABLED=true`, tomorrow-availability reminders tag known current human members who have not
+answered the team's poll at 08:00, 11:00, 14:00, 17:00, 20:00 and 22:00 PHT.
+The scheduler can deliver within that hour; missed earlier hours are skipped.
+VEO and Suno use the same reminder schedule, independently of new-client mode.
+Either Yes or No stops future tags. Withdrawal makes a member unanswered again.
+Votes and current membership are checked immediately before each delivery.
+Messages stay in ACTIVE TOMORROW with a poll link, split into at most twenty
+names per message for readability, without a pagination interface. Durable
+date/hour/team keys prevent repeated scheduler ticks from duplicating reminders.
+Candidate IDs come from captured authors, previous voters and observed joins;
+Telegram's bot API cannot enumerate silent members who have never been captured.

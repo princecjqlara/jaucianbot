@@ -109,6 +109,20 @@ def save_poll_answer(update: dict, allowed: set[int]) -> bool:
     hourly = save_answer(update, allowed)
     if hourly is not None:
         return hourly
+    answer = update.get("poll_answer") or {}
+    if answer.get("option_ids") == []:
+        # Withdrawing a vote is unanswered, rather than a No response.
+        poll_id, user_id = answer.get("poll_id"), (answer.get("user") or {}).get("id")
+        if not poll_id or not isinstance(user_id, int) or user_id <= 0:
+            return False
+        rows = request("daily_polls?" + urllib.parse.urlencode({
+            "select": "chat_id", "poll_id": f"eq.{poll_id}", "limit": 1})) or []
+        if not rows or int(rows[0]["chat_id"]) not in allowed:
+            return False
+        request("daily_poll_answers?" + urllib.parse.urlencode({
+            "poll_id": f"eq.{poll_id}", "user_id": f"eq.{user_id}"}),
+            method="DELETE", prefer="return=minimal")
+        return True
     result = request(
         "rpc/insights_ingest_poll_answer",
         {"p_update": update, "p_allowed_ids": sorted(allowed)},

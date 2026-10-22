@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 
-TABLES = {"chats", "messages", "scheduled_actions", "daily_poll_answers"}
+TABLES = {"chats", "messages", "scheduled_actions", "daily_polls", "daily_poll_answers"}
 RPCS = {
     "insights_ingest_update": (("p_update", "jsonb"), ("p_allowed_ids", "bigint[]")),
     "insights_ingest_poll_answer": (("p_update", "jsonb"), ("p_allowed_ids", "bigint[]")),
@@ -148,9 +148,12 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
             values.append(Jsonb(value) if cast == "jsonb" else value)
         return (sql.SQL("SELECT * FROM {}({})").format(sql.Identifier("public", name), sql.SQL(",").join(arguments)),
                 values, "boolean" if name in BOOLEAN_RPCS else "rows")
-    if route not in TABLES or method not in {"GET", "POST", "PATCH"}:
+    if route not in TABLES or method not in {"GET", "POST", "PATCH", "DELETE"}:
         raise ValueError("Unsupported archive operation")
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    if method == "DELETE" and (route != "daily_poll_answers" or set(params) != {"poll_id", "user_id"}
+            or any(len(value) != 1 or not value[0].startswith("eq.") for value in params.values())):
+        raise ValueError("Vote withdrawal requires one exact poll and user")
     latest_guard = params.pop("new_client_latest_guard", None)
     if latest_guard is not None and (latest_guard != ["true"] or route != "scheduled_actions" or method != "PATCH"
                                     or not isinstance(payload, dict) or not payload.get("payload", {}).get("new_client_acknowledged_at")
@@ -159,7 +162,10 @@ def compile_request(path: str, payload=None, *, prefer=None, method=None):
     selection, join = _selection(params.get("select", ["*"])[0])
     where, values = _where(params)
     table = sql.Identifier("public", route)
-    if method == "GET":
+    if method == "DELETE":
+        statement = sql.SQL("DELETE FROM {} AS a").format(table) + where
+        return statement, values, "minimal"
+    elif method == "GET":
         statement = sql.SQL("SELECT {} FROM {} AS a").format(selection, table)
         if join:
             if route != "daily_poll_answers":

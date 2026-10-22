@@ -48,6 +48,7 @@ import makata_automation
 import report_topics
 import organized_reports
 import member_presence
+import availability_reminders
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -67,7 +68,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.32"
+AUTOMATION_VERSION = "2026-10-22.33"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -103,6 +104,8 @@ def status_route(environ, start_response):
         return response(start_response, 503, payload)
     return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
                                         "automation": automation,
+                                        "availability_reminders": {"enabled": availability_reminders.enabled(),
+                                            "hours_pht": list(availability_reminders.HOURS)},
                                         "done_deal_tracking": done_deal_tracking.mode()})
 
 
@@ -656,6 +659,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
                     raise RuntimeError("disabled new-client action was not deferred")
                 continue
             now = dt.datetime.now(dt.timezone.utc)
+            if not availability_reminders.prepare_delivery(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete availability reminder was not finalized")
+                continue
             if not report_topics.delivery_allowed(action):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("obsolete public report was not finalized")
@@ -888,6 +895,11 @@ def dispatch_route(environ, start_response):
         except Exception as daily_error:
             queue_errors.append("daily")
             print(f"Daily queue failed: {type(daily_error).__name__}")
+        try:
+            queued += availability_reminders.queue(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as reminder_error:
+            queue_errors.append("availability_reminders")
+            print(f"Availability reminder queue failed: {type(reminder_error).__name__}")
         if TRABAWHO_CHAT_ID in allowed:
             try:
                 queued += queue_trabawho_automation(dt.datetime.now(dt.timezone.utc), allowed)
