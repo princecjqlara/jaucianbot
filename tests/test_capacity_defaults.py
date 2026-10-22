@@ -8,6 +8,7 @@ import capacity_defaults as defaults
 import daily_automation as daily
 import organized_reports as reports
 import recent_capacity
+from test_page_capacity_reports import fixture_inputs
 
 VEO = -1003647732254
 OTHER = -1004423057797
@@ -28,6 +29,11 @@ def member(uid, counts, attendance="Active"):
 
 
 class BusinessDefaultTests(unittest.TestCase):
+    def setUp(self):
+        self.patch = patch.object(reports.page_capacity, "load", return_value=fixture_inputs())
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
     def test_businesses_have_separate_seeds_and_receipt_units(self):
         veo = defaults.baseline("veo", [])
         suno = defaults.baseline("suno", [])
@@ -149,7 +155,7 @@ class BusinessDefaultTests(unittest.TestCase):
     def test_staffing_report_keeps_sub_one_safe_team_total(self):
         default = defaults.baseline("veo", [])
         text = reports.staffing_text(VEO, TODAY, [], [{"user_id": 7}], [], default)
-        self.assertIn("Estimated team total: 0.50 · Safe team target: 0.40", text)
+        self.assertIn("Estimated total: 0.50 · Safe target: 0.40", text)
         self.assertIn("Starting default: 0.50", text)
 
     def test_former_members_are_filtered_before_business_default_is_computed(self):
@@ -161,6 +167,11 @@ class BusinessDefaultTests(unittest.TestCase):
 
 
 class TomorrowSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.patch = patch.object(reports.page_capacity, "load", return_value=fixture_inputs())
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
     def capacities(self):
         return {"date": str(END), "members": {str(VEO): [member(1, [3, 3, 3])],
             str(OTHER): [member(1, [3, 3, 3])], str(SUNO): [member(1, [2, 2, 2])]}}
@@ -168,11 +179,11 @@ class TomorrowSummaryTests(unittest.TestCase):
     def test_summary_deduplicates_within_business_and_keeps_units_and_totals_separate(self):
         rosters = {VEO: [{"user_id": 1}, {"user_id": 2}], OTHER: [{"user_id": 1}], SUNO: [{"user_id": 1}]}
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
-        self.assertIn("VEO: 2 Active · Total 3.50 DD/day", text)
-        self.assertIn("Average 1.75/member · Safe total 2.40", text)
-        self.assertIn("SUNO: 1 Active · Total 2.00 receipts/day", text)
-        self.assertIn("Personal 1 · Provisional 0 · Unknown 0", text)
-        self.assertIn("Shared across businesses: 1", text)
+        self.assertIn("Sama Ka Na Media: 2 active · Avg 1.75 · 1 provisional", text)
+        self.assertIn("Vista Media Agency: 1 active · Avg 3.00", text)
+        self.assertIn("Hiraya Studio: 1 active · Avg 2.00", text)
+        self.assertIn("SUNO · receipts/day", text)
+        self.assertIn("page totals overlap", text)
         self.assertNotIn("6.33", text)
 
     def test_team_board_uses_personal_history_from_other_teams_in_the_same_business(self):
@@ -184,14 +195,14 @@ class TomorrowSummaryTests(unittest.TestCase):
                 patch.object(reports, "allowed_chat_ids", return_value={VEO, daily.DAILY_REPORTS_CHAT_ID}), \
                 patch.object(reports, "staffing_context", return_value=(caps, roster, roster)):
             self.assertTrue(reports.prepare_delivery(action, NOW))
-        self.assertIn("Tomorrow estimated capacity: 3.00", action["payload"]["text"])
+        self.assertIn("Sama Ka Na Media: 1 active · Avg 3.00", action["payload"]["text"])
         self.assertIn("Personal history: 1 · Provisional: 0", action["payload"]["text"])
 
     def test_missing_poll_is_reported_as_partial_and_not_inactive(self):
         rosters = {VEO: None, OTHER: [{"user_id": 2}], SUNO: []}
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
-        self.assertIn("1 team poll(s) untracked; totals are partial", text)
-        self.assertIn("VEO: 1 Active", text)
+        self.assertIn("Availability polls untracked: 1; page figures are partial", text)
+        self.assertIn("Vista Media Agency: 1 active", text)
 
     def test_sales_summary_updates_same_post_as_votes_change_and_stays_quiet_when_unchanged(self):
         caps = self.capacities()
@@ -211,7 +222,7 @@ class TomorrowSummaryTests(unittest.TestCase):
         text = action["payload"]["text"]
         self.assertEqual(text.count("Existing totals"), 1)
         self.assertEqual(text.count("TOMORROW CAPACITY"), 1)
-        self.assertIn("VEO: 2 Active", text)
+        self.assertIn("Sama Ka Na Media: 2 active", text)
 
     def test_old_financial_summary_stops_its_recurring_checks(self):
         action = {"chat_id": daily.DAILY_REPORTS_CHAT_ID, "repeat_interval_minutes": 5, "payload": {

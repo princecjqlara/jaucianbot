@@ -19,6 +19,7 @@ import suno_capacity
 import recent_capacity
 import member_presence
 import capacity_defaults
+import page_capacity
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, receipt_messages, request, poll_answers_for_range)
 from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS, MANILA,
@@ -510,79 +511,40 @@ def suno_reference_text(reference: dict, unit: str) -> list[str]:
         if value is not None else "Suno new-member default: Unknown (no peers with 3 Active and 3 output dates)."]
 
 
-def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None, members: list[dict], default: dict | None = None) -> str:
-    data = forecast(next_roster, members, default)
-    unit = "receipt posts/day" if chat in SUNO_GROUPS else "Done Deals/day"
+def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None,
+                  members: list[dict], default: dict | None = None, *, page_inputs: dict | None = None,
+                  page_rosters: dict | None = None) -> str:
     active = str(len({int(u["user_id"]) for u in now_roster})) if now_roster is not None else "untracked poll"
+    next_active = str(len({int(u["user_id"]) for u in next_roster})) if next_roster is not None else "untracked poll"
     tomorrow = today + dt.timedelta(days=1)
     lines = ["STAFFING SUMMARY", AVAILABILITY_GROUPS[chat]["name"], f"Active {today}: {active}",
-             f"Active tomorrow ({tomorrow}): {data['active'] if data['active'] is not None else 'untracked poll'}"]
-    if data["average"] is not None:
-        safe = f"{data['conservative']:.2f}" if data['conservative'] is not None else "Unknown"
-        lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per {'active' if default and not data['unknown'] else 'rated'} member",
-            f"Estimated team total: {data['total']:.2f} · Safe team target: {safe}",
-            f"Personal history: {data['rated']} · Provisional: {data['provisional']} · Unknown: {data['unknown']}"]
-    else:
-        lines += ["Tomorrow average: pending availability poll." if data["active"] is None else
-                  "Tomorrow average: Unknown (no personal estimate)." if data["active"] else "Tomorrow average: no Active voters."]
+             f"Active tomorrow ({tomorrow}): {next_active}", "", "TOMORROW CAPACITY BY PAGE"]
+    business = "veo" if chat in GROUPS else "suno"
+    capacities = {"members": {str(chat): members}, "businesses": {business: members},
+        "defaults": {business: default} if default is not None else {}}
+    inputs = page_inputs if page_inputs is not None else page_capacity.load({chat})
+    page_ids = set(inputs.get(chat, {}).get("pages", {}).values())
+    rosters = page_rosters if page_rosters is not None else {chat: next_roster}
+    page_teams = {source for source in rosters
+        if page_ids.intersection(inputs.get(source, {}).get("pages", {}).values())
+        and (source in GROUPS) == (chat in GROUPS)}
+    page_teams.add(chat)
+    scoped_inputs = {source: {**inputs.get(source, {}), "pages": {
+        name: pid for name, pid in inputs.get(source, {}).get("pages", {}).items() if pid in page_ids}}
+        for source in page_teams}
+    data = page_capacity.build(today, page_teams, rosters, capacities, scoped_inputs)
+    lines += page_capacity.render(data, detailed=True)
     if not automation_controls.chat_enabled(chat):
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
-    if default and default.get("business") == "suno":
-        lines += suno_reference_text(default, unit)
-        lines += ["Default = median Active-day receipt rate of Suno peers with 3 Active and 3 output dates; includes zeros.",
-            "Default replaced at 3 personal output dates. Provisional safe targets stay Unknown."]
-    elif default:
-        lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)}); replaced after 3 personal output dates."]
-        lines += ["Default basis: peers' Active-day averages, including zero output."]
-    if data["unknown"]:
-        lines.append("Unknown members are excluded from the total and average.")
-    if getattr(next_roster, "unverified", 0):
-        lines += [f"Membership pending for {next_roster.unverified} Active vote(s); excluded from totals."]
-    lines += ["14-day planning estimates; not guarantees. Current members only. Updates as votes change."]
     return "\n".join(lines)
 
 
 def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities: dict) -> str:
-    lines = ["TOMORROW CAPACITY", f"{today + dt.timedelta(days=1)} (PHT)"]
-    by_business = {}
-    for business, family in (("veo", set(GROUPS)), ("suno", set(SUNO_GROUPS))):
-        chats = teams.intersection(family)
-        users = {int(u["user_id"]): u for chat in chats for u in rosters.get(chat) or []}
-        by_business[business] = set(users)
-        missing = sum(rosters.get(chat) is None for chat in chats)
-        roster = list(users.values()) if missing < len(chats) else None
-        members = capacities.get("businesses", {}).get(business)
-        if members is None:
-            members = capacity_defaults.unique_members([m for c in chats for m in capacities["members"].get(str(c), [])],
-                today - dt.timedelta(days=1), combine_days=business == "suno")
-        default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, members)
-        data = forecast(roster, members, default)
-        unit = "DD/day" if business == "veo" else "receipts/day"
-        if data["active"] is None:
-            lines += [f"{business.upper()}: pending availability polls."]
-        else:
-            average = f"{data['average']:.2f}" if data["average"] is not None else "n/a"
-            total = f"{data['total']:.2f}" if data['total'] is not None else "Unknown"
-            safe = f"{data['conservative']:.2f}" if data['conservative'] is not None else "Unknown"
-            lines += [f"{business.upper()}: {data['active']} Active · Total {total} {unit}",
-                f"Average {average}/member · Safe total {safe}",
-                f"Personal {data['rated']} · Provisional {data['provisional']} · Unknown {data['unknown']}"]
-            if business == "suno":
-                lines += suno_reference_text(default, unit)
-            else:
-                lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)})."]
-        if missing:
-            lines.append(f"{missing} team poll(s) untracked; totals are partial.")
-        unverified = sum(getattr(rosters.get(chat), "unverified", 0) for chat in chats)
-        if unverified:
-            lines.append(f"Membership pending for {unverified} Active vote(s); totals are partial.")
-    shared = len(by_business["veo"].intersection(by_business["suno"]))
-    lines += ["Each person counts once per business. VEO and Suno units stay separate."]
-    if shared:
-        lines += [f"Shared across businesses: {shared}; capacity may overlap."]
-    lines += ["Suno default = median Active-day receipt rate of peers with 3 Active and 3 output dates; includes zeros.",
-              "Suno defaults are provisional, keep decimals, and change to personal estimates after 3 output dates. No assumed default safety buffer.",
-              "Verified current members only; estimates are not production guarantees."]
+    lines = ["TOMORROW CAPACITY BY PAGE", f"{today + dt.timedelta(days=1)} (PHT)"]
+    inputs = capacities.get("page_inputs")
+    if inputs is None:
+        inputs = page_capacity.load(teams)
+    lines += page_capacity.render(page_capacity.build(today, teams, rosters, capacities, inputs))
     return "\n".join(lines)
 
 
@@ -710,6 +672,7 @@ def staffing_context(now: dt.datetime, teams: set[int], cache: dict) -> tuple:
             raise RuntimeError("Staffing capacity snapshot is not available yet")
         capacities = current_capacities(raw, teams, now)
         capacities["replacement_id"] = replacement_request(today - dt.timedelta(days=1)).get("request_id")
+        capacities["page_inputs"] = page_capacity.load(teams)
         cache[key] = capacities, _rosters(teams, today, now), _rosters(teams, today + dt.timedelta(days=1), now)
     return cache[key]
 
@@ -741,7 +704,8 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
         business = "veo" if chat in GROUPS else "suno"
         default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
         people = capacities.get("businesses", {}).get(business, capacities["members"].get(str(chat), []))
-        text = staffing_text(chat, today, current[chat], upcoming[chat], people, default)
+        text = staffing_text(chat, today, current[chat], upcoming[chat], people, default,
+            page_inputs=capacities.get("page_inputs"), page_rosters=upcoming)
     else:
         def unique_count(rosters):
             users = {int(u["user_id"]) for roster in rosters.values() for u in roster or []}
@@ -749,24 +713,7 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
             return f"{len(users)} recorded" + (f" · {missing} untracked poll(s)" if missing else "")
         lines = ["STAFFING SUMMARY", f"{today} (PHT)", f"Active today: {unique_count(current)}",
                  f"Active tomorrow ({today + dt.timedelta(days=1)}): {unique_count(upcoming)}", "",
-                 tomorrow_summary(today, teams, upcoming, capacities), "", "BY TEAM"]
-        for source in sorted(teams):
-            business = "veo" if source in GROUPS else "suno"
-            default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
-            people = capacities.get("businesses", {}).get(business, capacities["members"].get(str(source), []))
-            data = forecast(upcoming[source], people, default)
-            avg = f"{data['average']:.2f}" if data["average"] is not None else "unknown"
-            unit = "receipts" if source in SUNO_GROUPS else "DD"
-            total = f"{data['total']:.2f}" if data['total'] is not None else "Unknown"
-            active = data['active'] if data['active'] is not None else '?'
-            if source in SUNO_GROUPS:
-                unknown = data['unknown'] if data['unknown'] is not None else '?'
-                lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {active} Active · personal {data['rated']} · provisional {data['provisional']} · Unknown {unknown} · total {total} · avg {avg} {unit}/day"]
-            else:
-                lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {active} Active · total {total} · avg {avg} {unit}/day"]
-        lines += ["Totals include labelled provisional defaults. Unknown members are excluded from totals and averages.",
-                  "Team totals overlap for shared members.",
-                  "Declared availability; polls may be incomplete. Updates as votes change."]
+                 tomorrow_summary(today, teams, upcoming, capacities)]
         text = "\n".join(lines)
     fingerprint = hashlib.sha256(text.encode()).hexdigest()
     if action.get("telegram_message_id") and payload.get("_organized_fingerprint") == fingerprint:

@@ -9,6 +9,7 @@ import daily_automation as daily
 import organized_reports as reports
 import recent_capacity
 import makata_automation as makata
+from test_page_capacity_reports import fixture_inputs
 
 DAY = dt.date(2026, 10, 21)
 TODAY = DAY + dt.timedelta(days=1)
@@ -28,6 +29,14 @@ def person(uid, counts, attendance="Active"):
 
 
 class SunoReferenceDefaultsTests(unittest.TestCase):
+    def setUp(self):
+        self.patch = patch.object(reports.page_capacity, "load", return_value=fixture_inputs())
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+        self.groups = patch.dict(reports.SUNO_GROUPS, {MAKATA: daily.MAKATA})
+        self.groups.start()
+        self.addCleanup(self.groups.stop)
+
     def test_empty_reference_has_no_numeric_fallback_or_buffer(self):
         result = defaults.baseline("suno", [])
         self.assertIsNone(result["capacity_per_day"])
@@ -132,15 +141,14 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
             with self.subTest(chat=chat), patch.dict(reports.AVAILABILITY_GROUPS, {MAKATA: {"name": "Suno Makata"}}):
                 text = reports.staffing_text(chat, TODAY, [], roster, [person(1, [1, 2, 3])], reference)
             self.assertIn("Personal history: 1 · Provisional: 1 · Unknown: 0", text)
-            self.assertIn("Estimated team total: 3.00 · Safe team target: Unknown", text)
+            self.assertIn("Estimated total: 3.00 · Safe target: Unknown", text)
             self.assertIn("Suno new-member default: 1.00", text)
-            self.assertIn("Tomorrow estimated capacity: 1.50", text)
+            self.assertIn("2 active · Avg 1.50", text)
             self.assertNotIn("Starting default:", text)
         caps = {"date": str(DAY), "members": {str(SUNO): [person(1, [1, 2, 3])]}, "defaults": {"suno": reference}}
         text = reports.tomorrow_summary(TODAY, {SUNO}, {SUNO: roster}, caps)
-        self.assertIn("SUNO: 2 Active · Total 3.00 receipts/day", text)
-        self.assertIn("Average 1.50/member · Safe total Unknown", text)
-        self.assertIn("Personal 1 · Provisional 1 · Unknown 0", text)
+        self.assertIn("Hiraya Studio: 2 active · Avg 1.50 · 1 provisional", text)
+        self.assertIn("SUNO · receipts/day", text)
 
     def test_detail_report_does_not_repeat_assumed_default_formula(self):
         member = defaults.apply(person(1, [1]), defaults.baseline("suno", []))
@@ -163,8 +171,8 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
                 patch.object(reports, "staffing_context", return_value=(capacities, {MAKATA: []}, {MAKATA: [{"user_id": 1}]})):
             self.assertTrue(reports.prepare_delivery(item, NOW))
         self.assertIn("Suno new-member default: 10.00", item["payload"]["text"])
-        self.assertIn("Estimated team total: 10.00 · Safe team target: Unknown", item["payload"]["text"])
-        self.assertIn("median Active-day receipt rate of Suno peers", item["payload"]["text"])
+        self.assertIn("Estimated total: 10.00 · Safe target: Unknown", item["payload"]["text"])
+        self.assertIn("Makata Studios: 1 active · Avg 10.00", item["payload"]["text"])
 
     def test_makata_private_daily_correction_edits_existing_report_and_removes_old_parts(self):
         saved = {}

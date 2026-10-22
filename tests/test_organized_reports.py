@@ -9,6 +9,7 @@ import organized_reports as reports
 import report_topics
 from daily_automation import DAILY_REPORTS_CHAT_ID as TARGET, TRABAWHO_CHAT_ID as SUNO, GROUPS
 from test_wsgi import call_app
+from test_page_capacity_reports import fixture_inputs
 
 VEO = -1003647732254
 DAY = dt.date(2026, 10, 21)
@@ -16,6 +17,11 @@ NOW = dt.datetime(2026, 10, 21, 17, tzinfo=dt.timezone.utc)
 
 
 class OrganizedReportsTests(unittest.TestCase):
+    def setUp(self):
+        self.patch = patch.object(reports.page_capacity, "load", return_value=fixture_inputs())
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
     def test_report_bursts_use_recent_durable_deliveries_and_guarded_deferral(self):
         action = {"id": 99, "chat_id": TARGET, "status": "processing", "updated_at": NOW.isoformat(),
             "payload": {"_delivery_failures": 1}}
@@ -120,7 +126,7 @@ class OrganizedReportsTests(unittest.TestCase):
             action["payload"]["_organized_fingerprint"] = "old"
             self.assertTrue(reports.prepare_delivery(action, NOW))
         self.assertEqual(action["payload"]["edit_message_id"], 500)
-        self.assertIn("Tomorrow estimated capacity: 1.50", action["payload"]["text"])
+        self.assertIn("Sama Ka Na Media: 1 active · Avg 1.50", action["payload"]["text"])
         self.assertIn("2026-10-23", action["payload"]["text"])
 
     def test_expired_staffing_board_stops_recurring(self):
