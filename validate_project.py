@@ -17,6 +17,7 @@ REQUIRED_TEST_FILES = (
     "test_automation_controls.py",
     "test_veo_ready_policy.py",
     "test_page_access.py", "test_member_capacity.py",
+    "test_page_access_reminders.py",
     "test_capacity_daily_reports.py",
     "test_suno_capacity.py", "test_suno_team_policy.py",
     "test_tomorrow_capacity.py",
@@ -44,7 +45,7 @@ def main() -> int:
         print("Validation failed: required regression suites are missing or empty: " + ", ".join(missing),
               file=sys.stderr)
         return 1
-    prefixes = ("TELEGRAM_", "SUPABASE_", "CRM_", "SUNO_", "INSIGHTS_", "HOURLY_", "NEW_CLIENT_", "VEO_", "ARCHIVE_", "DONE_DEAL_", "AUTOMATION_", "MEMBER_CAPACITY_", "ORGANIZED_", "AVAILABILITY_")
+    prefixes = ("TELEGRAM_", "SUPABASE_", "CRM_", "SUNO_", "INSIGHTS_", "HOURLY_", "NEW_CLIENT_", "VEO_", "ARCHIVE_", "DONE_DEAL_", "AUTOMATION_", "MEMBER_CAPACITY_", "ORGANIZED_", "AVAILABILITY_", "PAGE_ACCESS_")
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(prefixes) and key not in {"ALLOWED_CHAT_IDS", "CRONJOB_API_KEY"}}
     return subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],

@@ -117,7 +117,8 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
     now = dt.datetime.now(dt.timezone.utc)
     p = {"user_id": int(user["id"]), "user_name": " ".join(filter(None, (
         user.get("first_name"), user.get("last_name")))) or user.get("username") or str(user["id"]),
-        "page_ids": pages, "page_access_version": version(chat_id), "update_id": int(update.get("update_id") or 0)}
+        "page_ids": pages, "answered": bool(selected),
+        "page_access_version": version(chat_id), "update_id": int(update.get("update_id") or 0)}
     part = int(meta.get("page_access_part") or 0)
     p["page_access_part"] = part
     key = f"page-access-member:{chat_id}:{user['id']}" + (f":part:{part}" if part else "")
@@ -142,9 +143,9 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
     raise RuntimeError("Page-access update conflicted; retry")
 
 
-def members(chat_id: int) -> dict[int, set[str]]:
+def answer_records(chat_id: int) -> list[dict]:
     if not enabled(chat_id):
-        return {}
+        return []
     rows = []
     while True:
         batch = request("scheduled_actions?" + urllib.parse.urlencode({
@@ -156,10 +157,22 @@ def members(chat_id: int) -> dict[int, set[str]]:
         rows.extend(batch)
         if len(batch) < 1000:
             break
+    return [row["payload"] for row in rows]
+
+
+def answered_members(chat_id: int, part: int = 0) -> set[int]:
+    # Legacy empty page lists cannot distinguish No access from a withdrawal.
+    # Preserve them as answered to avoid incorrectly tagging a No access voter.
+    return {int(p["user_id"]) for p in answer_records(chat_id)
+        if int(p.get("page_access_part") or 0) == part and p.get("answered", True)}
+
+
+def members(chat_id: int) -> dict[int, set[str]]:
+    if not enabled(chat_id):
+        return {}
     valid = set(page_map(chat_id).values())
     result = {}
-    for row in rows:
-        p = row["payload"]
+    for p in answer_records(chat_id):
         result.setdefault(int(p["user_id"]), set()).update(set(p.get("page_ids") or []).intersection(valid))
     return result
 

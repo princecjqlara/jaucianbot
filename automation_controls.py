@@ -23,11 +23,17 @@ def new_client_delivery_allowed(action: dict) -> bool:
     if new_clients_enabled(int(action["chat_id"])):
         return True
     payload = action.get("payload") or {}
-    if (page_access_polls_enabled(int(action["chat_id"])) and action.get("action_type") == "poll"
-            and str(action.get("dedupe_key") or "").startswith("page-access-send:")
-            and payload.get("page_access_version") and isinstance(payload.get("page_access_ids"), list)
+    if (page_access_polls_enabled(int(action["chat_id"]))
             and not any(k.startswith(("new_client_", "client_")) for k in payload)):
-        return True
+        key = str(action.get("dedupe_key") or "")
+        if (action.get("action_type") == "poll" and key.startswith("page-access-send:")
+                and payload.get("page_access_version") and isinstance(payload.get("page_access_ids"), list)):
+            return True
+        if (action.get("action_type") == "message" and key.startswith("page-access-nonvoter:")
+                and os.environ.get("PAGE_ACCESS_REMINDERS_ENABLED", "").strip().lower() == "true"
+                and payload.get("page_access_reminder_poll")
+                and isinstance(payload.get("page_access_reminder_members"), list)):
+            return True
     return not (any(k.startswith(("new_client_", "client_directory", "client_queue_", "client_handoff_",
                                  "client_transfer_", "page_access_")) for k in payload)
         or str(action.get("dedupe_key") or "").startswith(("new-client:", "new-client-", "ready-", "client-", "page-access-")))

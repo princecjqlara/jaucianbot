@@ -12,6 +12,16 @@ new work while the VEO feature is off. VEO availability counts all members.
 Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
 
+`PAGE_ACCESS_REMINDERS_ENABLED=true` adds one short daily nudge per page-access
+poll part, between 08:00 and 22:59 PHT. It tags only known, verified current human
+members who have not answered that part, excluding team owners and administrators.
+Page choices and No access both stop tags. Withdrawing a new-format vote makes it
+unanswered again. Older empty page-access records lack that distinction and stay
+excluded from reminders until updated, so No access voters are not falsely tagged.
+Votes and membership are rechecked before delivery. Reminders link to the poll in
+its existing topic and work with VEO client assignment disabled. Unobserved silent
+members cannot be discovered from the bot archive alone.
+
 Suno and Makata use a provisional historical peer default for a member with fewer
 than three personal output dates. The shared Suno default is the median of
 established current peers' recorded receipts per declared Active day over the
