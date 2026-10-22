@@ -694,6 +694,10 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
         return False
     cache = cache if cache is not None else {}
     capacities, current, upcoming = staffing_context(now, teams, cache)
+    # Do not replace personal histories/default cohorts with a partial sweep.
+    # Other scheduled deliveries continue; this recurring board checks again.
+    if any(c.get("pending_verification") for c in capacities.get("membership", {}).values()):
+        return False
     if summary and (payload.get("organized_refresh_id") or None) != capacities.get("replacement_id"):
         action["repeat_interval_minutes"] = None
         return False

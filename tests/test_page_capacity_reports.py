@@ -176,6 +176,21 @@ class PageAccessLoadingTests(unittest.TestCase):
 
 
 class PageReportDeliveryTests(unittest.TestCase):
+    def test_incomplete_membership_sweep_does_not_replace_personal_rates_with_defaults(self):
+        caps = {"members": {str(VEO): []}, "membership": {str(VEO): {"pending_verification": 1}},
+            "page_inputs": fixture_inputs()}
+        rosters = {VEO: [{"user_id": 1}]}
+        item = {"chat_id": daily.DAILY_REPORTS_CHAT_ID, "telegram_message_id": 252,
+            "repeat_interval_minutes": 5, "payload": {"text": "Existing complete estimates",
+                "organized_staffing_date": str(TODAY), "organized_staffing_version": reports.VERSION,
+                "report_source_ids": [VEO], "report_source_chat_id": 0}}
+        with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \
+                patch.object(reports, "allowed_chat_ids", return_value={VEO, daily.DAILY_REPORTS_CHAT_ID}), \
+                patch.object(reports, "staffing_context", return_value=(caps, rosters, rosters)):
+            self.assertFalse(reports.prepare_delivery(item, NOW))
+        self.assertEqual(item["payload"]["text"], "Existing complete estimates")
+        self.assertEqual(item["repeat_interval_minutes"], 5)
+
     def test_team_topic_uses_the_same_page_average_across_source_groups(self):
         survey = {chat: inputs({"Shared page": "shared"}, {1: {"shared"}, 2: {"shared"}})
             for chat in (VEO, OTHER)}
