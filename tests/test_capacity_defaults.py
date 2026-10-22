@@ -250,7 +250,7 @@ class TomorrowSummaryTests(unittest.TestCase):
                 patch.object(reports, "previous_texts", return_value={238: old}), \
                 patch.object(reports, "previous_staffing_id", return_value=None), \
                 patch.object(reports, "enqueue_scheduled_action", return_value=True) as queue:
-            reports.queue_automation(NOW, {VEO, daily.DAILY_REPORTS_CHAT_ID})
+            reports._queue_reports(NOW, {VEO, daily.DAILY_REPORTS_CHAT_ID})
         summary = next(c.kwargs for c in queue.call_args_list if c.kwargs["payload"].get("report_category") == "summary")
         self.assertEqual(summary["repeat_interval_minutes"], 5)
         self.assertEqual(summary["payload"]["edit_message_id"], 238)

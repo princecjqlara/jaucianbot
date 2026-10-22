@@ -214,7 +214,7 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
     end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time.min, tzinfo=MANILA).astimezone(dt.timezone.utc)
     report = receipt_report(receipt_messages(MAKATA_CHAT_ID, begin, end), day, day, chat_id=MAKATA_CHAT_ID)
     total = report["totals"]
-    tomorrow = now.astimezone(MANILA).date() + dt.timedelta(days=1)
+    tomorrow = day + dt.timedelta(days=1)
     count = daily_poll_counts({MAKATA_CHAT_ID}, tomorrow).get(MAKATA_CHAT_ID)
     lines = ["SUNO MAKATA — DAILY REPORT", f"{day:%b %d, %Y} (PHT)",
         f"Recorded receipts: {total['receipt_posts']}", f"Gross: {money(total['gross'])} · Recorded earnings: {money(total['salary'])}"]
@@ -232,13 +232,25 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
     import report_topics
     if report_topics.enabled():
         import organized_reports
+        import nightly_reports
         from cloud_store import allowed_chat_ids
         approved = allowed_chat_ids()
-        history_day = min(day, now.astimezone(MANILA).date() - dt.timedelta(days=1))
+        history_day = day - dt.timedelta(days=1) if nightly_reports.report_date(now) == day else min(
+            day, now.astimezone(MANILA).date() - dt.timedelta(days=1))
         current = organized_reports.current_capacities(organized_reports.load_capacity(history_day, now, approved),
             organized_reports.sources(approved), now)
+        if any(c.get("pending_verification") for c in current.get("membership", {}).values()):
+            raise RuntimeError("Capacity membership verification pending")
         capacity["members"] = current["members"].get(str(MAKATA_CHAT_ID), [])
         reference = current.get("defaults", {}).get("suno")
+        if nightly_reports.report_date(now) == day:
+            previous = organized_reports._read(f"nightly-personal-capacity:{day - dt.timedelta(days=1)}:"
+                f"{organized_reports._scope(organized_reports.sources(approved))}")
+            changes = nightly_reports.changes(current, previous)
+            for member in capacity["members"]:
+                change = changes.get(("suno", int(member["user_id"])))
+                if change:
+                    member["planning"] = {**member["planning"], "daily_capacity_change": change["text"]}
     lines += ["", "RECEIPT CAPACITY — ESTIMATES"]
     if not capacity["members"]:
         lines.append("Pending receipt and attendance history.")
@@ -252,6 +264,8 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
             label = "provisional" if plan.get("provisional") else "estimate"
             lines.append(f"{member['name']}: {label} {f'{estimate:.2f}/day' if estimate is not None else 'pending'} · "
                 f"safe {str(safe) + '/day' if safe is not None else 'pending'} · recorded peak {peak if peak is not None else 'unknown'}")
+            if plan.get("daily_capacity_change"):
+                lines.append(f"Change: {plan['daily_capacity_change']}")
             continue
         safe, reach = plan["safe_plan_per_day"], plan["reachable_target_per_day"]
         avg = member.get("recent_receipt_output_day_average")
@@ -277,9 +291,10 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     if not enabled() or MAKATA_CHAT_ID not in approved or not chat_enabled(MAKATA_CHAT_ID):
         return 0
     local = now.astimezone(MANILA)
-    if local.hour == 0 and local.minute < 10:
+    import nightly_reports
+    day = nightly_reports.report_date(now)
+    if day is None:
         return 0
-    day = local.date() - dt.timedelta(days=1)
     import report_topics
     targets = [DAILY_REPORTS_CHAT_ID] if (DAILY_REPORTS_CHAT_ID in approved
         and chat_enabled(DAILY_REPORTS_CHAT_ID) and not report_topics.enabled()) else []
@@ -290,7 +305,7 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     if not targets:
         return 0
     reference_policy = report_topics.enabled()
-    base = f"makata-daily-report:v{6 if reference_policy else 2}:{day}"
+    base = f"makata-daily-report:v7:{day}"
     missing = [target for target in targets if _read(f"{base}:complete:{target}") is None]
     if not missing:
         return 0
@@ -302,6 +317,7 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
         for number, text in enumerate(saved["parts"], 1):
             queued += int(enqueue_scheduled_action(chat_id=target, action_type="message", scheduled_for=now,
                 dedupe_key=f"{base}:{target}:part:{number}", payload={"text": text,
+                    **nightly_reports.payload(day),
                     "disable_notification": number > 1, "makata_private_report": target > 0,
                     "makata_source_chat_id": MAKATA_CHAT_ID, "makata_report_date": day.isoformat(),
                     **({"edit_message_id": prior[number]} if number in prior else {})}))
@@ -310,6 +326,7 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
                 continue
             queued += int(enqueue_scheduled_action(chat_id=target, action_type="message", scheduled_for=now,
                 dedupe_key=f"{base}:{target}:cleanup:{message_id}", payload={"text": "Makata report updated above.",
+                    **nightly_reports.payload(day),
                     "edit_message_id": message_id, "disable_notification": True,
                     "makata_private_report": target > 0, "makata_source_chat_id": MAKATA_CHAT_ID,
                     "makata_report_date": day.isoformat()}))

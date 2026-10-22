@@ -256,8 +256,8 @@ class MakataAutomationTests(unittest.TestCase):
                 patch.object(makata,"build_report",return_value="Makata only") as build, \
                 patch.object(makata,"record_automation_marker",side_effect=mark), \
                 patch.object(makata,"enqueue_scheduled_action",return_value=True) as queue:
-            self.assertEqual(makata.queue_reports(NOW,{CHAT,TARGET}),2)
-            self.assertEqual(makata.queue_reports(NOW,{CHAT,TARGET}),0)
+            self.assertEqual(makata.queue_reports(NOW.replace(hour=15, minute=59),{CHAT,TARGET}),2)
+            self.assertEqual(makata.queue_reports(NOW.replace(hour=15, minute=59),{CHAT,TARGET}),0)
         self.assertEqual({c.kwargs["chat_id"] for c in queue.call_args_list},{TARGET,99})
         build.assert_called_once()
 
@@ -266,7 +266,7 @@ class MakataAutomationTests(unittest.TestCase):
                 patch.object(makata,"_save",return_value={"parts":["Makata only"]}), \
                 patch.object(makata,"build_report",return_value="Makata only"), \
                 patch.object(makata,"record_automation_marker"),patch.object(makata,"enqueue_scheduled_action",return_value=True) as queue:
-            self.assertEqual(makata.queue_reports(NOW,{CHAT,TARGET}),1)
+            self.assertEqual(makata.queue_reports(NOW.replace(hour=15, minute=59),{CHAT,TARGET}),1)
         self.assertEqual(queue.call_args.kwargs["chat_id"],TARGET)
 
     def test_requested_current_day_report_is_provisional_private_and_preserves_daily_closeout(self):

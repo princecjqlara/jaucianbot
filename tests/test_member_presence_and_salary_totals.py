@@ -62,7 +62,7 @@ class CurrentMembershipTests(unittest.TestCase):
                 patch.object(reports, "current_capacities", return_value=capacities), \
                 patch.object(reports, "_read") as read, \
                 patch.object(reports, "enqueue_scheduled_action") as enqueue:
-            self.assertEqual(reports.queue_automation(NOW, {TARGET, CHAT}), 0)
+            self.assertEqual(reports._queue_reports(NOW, {TARGET, CHAT}), 0)
         read.assert_not_called()
         enqueue.assert_not_called()
 

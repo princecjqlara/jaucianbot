@@ -46,7 +46,7 @@ class ReportReplacementTests(unittest.TestCase):
         with ExitStack() as stack:
             saved, actions = self.fixture(stack)
             done = stack.enter_context(patch.object(reports, "replacement_deletions_done", return_value=False))
-            self.assertEqual(reports.queue_automation(NOW, {VEO, TARGET}), 2)
+            self.assertEqual(reports._queue_reports(NOW, {VEO, TARGET}), 2)
             self.assertEqual({a["payload"]["delete_message_id"] for a in actions.values()}, {10, 11})
             self.assertTrue(any(key.endswith(":snapshot") for key in saved))
             self.assertFalse(any(key.endswith(":complete") for key in saved))
@@ -54,8 +54,8 @@ class ReportReplacementTests(unittest.TestCase):
                 self.assertTrue(report_topics.delivery_allowed(action))
                 self.assertEqual(action["chat_id"], TARGET)
             done.return_value = True
-            self.assertGreater(reports.queue_automation(NOW, {VEO, TARGET}), 0)
-            self.assertEqual(reports.queue_automation(NOW, {VEO, TARGET}), 0)
+            self.assertGreater(reports._queue_reports(NOW, {VEO, TARGET}), 0)
+            self.assertEqual(reports._queue_reports(NOW, {VEO, TARGET}), 0)
         posts = [a for a in actions.values() if a["payload"].get("report_category")]
         self.assertEqual({a["payload"]["report_category"] for a in posts},
             {"sales", "salary", "capacity", "problems", "summary", "salary_totals"})
@@ -72,18 +72,18 @@ class ReportReplacementTests(unittest.TestCase):
             _, actions = self.fixture(stack)
             stack.enter_context(patch.object(reports, "finances", side_effect=RuntimeError("source unavailable")))
             with self.assertRaises(RuntimeError):
-                reports.queue_automation(NOW, {VEO, TARGET})
+                reports._queue_reports(NOW, {VEO, TARGET})
         self.assertEqual(actions, {})
 
     def test_later_capacity_corrections_do_not_delete_or_republish_the_replacement_set(self):
         with ExitStack() as stack:
             _, actions = self.fixture(stack)
             stack.enter_context(patch.object(reports, "replacement_deletions_done", return_value=True))
-            reports.queue_automation(NOW, {VEO, TARGET})
+            reports._queue_reports(NOW, {VEO, TARGET})
             with patch.object(reports.capacity_defaults, "POLICY", "later-capacity-correction"), \
                     patch.object(reports, "previous_texts", return_value={30: "New capacity", 31: "New summary"}), \
                     patch.object(reports, "previous_messages", return_value={(VEO, "capacity"): [30], (0, "summary"): [31]}):
-                reports.queue_automation(NOW, {VEO, TARGET})
+                reports._queue_reports(NOW, {VEO, TARGET})
         deleted = {a["payload"]["delete_message_id"] for a in actions.values() if "delete_message_id" in a["payload"]}
         self.assertEqual(deleted, {10, 11})
         corrections = [a for a in actions.values() if a["payload"].get("edit_message_id") == 30]

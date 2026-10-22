@@ -190,8 +190,8 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
                 patch.object(makata, "record_automation_marker", side_effect=mark), \
                 patch.object(makata, "previous_report_parts", return_value={1: 70, 2: 71}), \
                 patch.object(makata, "enqueue_scheduled_action", return_value=True) as outbox:
-            self.assertEqual(makata.queue_reports(NOW, {MAKATA, daily.DAILY_REPORTS_CHAT_ID}), 2)
-            self.assertEqual(makata.queue_reports(NOW, {MAKATA, daily.DAILY_REPORTS_CHAT_ID}), 0)
+            self.assertEqual(makata.queue_reports(NOW.replace(hour=15, minute=59), {MAKATA, daily.DAILY_REPORTS_CHAT_ID}), 2)
+            self.assertEqual(makata.queue_reports(NOW.replace(hour=15, minute=59), {MAKATA, daily.DAILY_REPORTS_CHAT_ID}), 0)
         self.assertEqual({c.kwargs["chat_id"] for c in outbox.call_args_list}, {99})
         self.assertEqual(outbox.call_args_list[0].kwargs["payload"]["edit_message_id"], 70)
         self.assertEqual(outbox.call_args_list[1].kwargs["payload"]["edit_message_id"], 71)

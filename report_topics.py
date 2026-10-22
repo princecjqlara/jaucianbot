@@ -31,7 +31,7 @@ def delivery_allowed(action: dict) -> bool:
             action["repeat_interval_minutes"] = None
             return False
         p = action.get("payload") or {}
-        if p.get("capacity_member_ids"):
+        if p.get("capacity_member_ids") and not p.get("nightly_report_policy"):
             from member_presence import records, confirmed
             cached = records(int(p["report_source_chat_id"]))
             if any(not confirmed(cached.get(int(uid), {}), dt.datetime.now(dt.timezone.utc)) for uid in p["capacity_member_ids"]):

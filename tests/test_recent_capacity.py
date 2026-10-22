@@ -160,7 +160,7 @@ class SalaryAndLayoutTests(unittest.TestCase):
                 patch.object(reports, "previous_texts", return_value={}), \
                 patch.object(reports, "previous_staffing_id", return_value=701), \
                 patch.object(reports, "enqueue_scheduled_action", return_value=True) as queue:
-            reports.queue_automation(NOW, {CHAT, TARGET})
+            reports._queue_reports(NOW, {CHAT, TARGET})
         sales = next(c.kwargs for c in queue.call_args_list if c.kwargs["payload"].get("report_category") == "sales")
         self.assertEqual(sales["payload"]["edit_message_id"], 501)
         boards = [c.kwargs for c in queue.call_args_list if c.kwargs["payload"].get("organized_staffing_date")]

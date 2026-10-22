@@ -19,6 +19,7 @@ REQUIRED_TEST_FILES = (
     "test_page_access.py", "test_member_capacity.py",
     "test_page_access_reminders.py",
     "test_page_capacity_reports.py",
+    "test_nightly_reports.py",
     "test_capacity_daily_reports.py",
     "test_suno_capacity.py", "test_suno_team_policy.py",
     "test_tomorrow_capacity.py",

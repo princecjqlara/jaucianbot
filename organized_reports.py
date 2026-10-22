@@ -20,13 +20,15 @@ import recent_capacity
 import member_presence
 import capacity_defaults
 import page_capacity
+import nightly_reports
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, receipt_messages, request, poll_answers_for_range)
 from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS, MANILA,
     SUNO_GROUPS, messages_for_day, money, split_message, quota_for)
 from trabawho_receipts import receipt_report
 
-VERSION = 7
+VERSION = 8
+CAPACITY_CACHE_VERSION = 7
 
 
 def sources(approved: set[int]) -> set[int]:
@@ -126,7 +128,7 @@ def previous_staffing_id(today: dt.date, teams: set[int], chat: int) -> int | No
 
 
 def capacity_key(day: dt.date, teams: set[int]) -> str:
-    return f"organized-capacity:v{VERSION}:{day}:{_scope(teams)}"
+    return f"organized-capacity:v{CAPACITY_CACHE_VERSION}:{day}:{_scope(teams)}"
 
 
 def load_capacity(day: dt.date, now: dt.datetime, approved: set[int]) -> dict:
@@ -276,6 +278,8 @@ def finances(chat: int, day: dt.date) -> dict:
 
 def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     unit = "receipt posts/day" if chat in SUNO_GROUPS else "Done Deals/day"
+    day = max((dt.date.fromisoformat(m["planning"]["window_end"]) for m in members
+        if (m.get("planning") or {}).get("window_end")), default=day)
     start = day - dt.timedelta(days=recent_capacity.WINDOW_DAYS - 1)
     lines = ["CAPACITY UPDATE", AVAILABILITY_GROUPS[chat]["name"], f"{start} to {day} (PHT) · {unit}"]
     for member in sorted(members, key=lambda m: m["name"].casefold()):
@@ -305,6 +309,8 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines.append(f"Older recorded peak: {plan['historical_daily_peak']}/day ({plan['historical_peak_date']}); outside this planning window.")
         if plan.get("inactive_output_conflicts"):
             lines.append(f"Review: {plan['inactive_output_conflicts']} Inactive/output conflict(s) excluded from the plan.")
+        if plan.get("daily_capacity_change"):
+            lines.append(f"Change: {plan['daily_capacity_change']}")
     if not members:
         lines += ["", "No verified current members with readable recent history."]
     if chat in SUNO_GROUPS:
@@ -551,21 +557,38 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
 def queue_automation(now: dt.datetime, approved: set[int]) -> int:
     if not report_topics.enabled() or DAILY_REPORTS_CHAT_ID not in approved or not automation_controls.chat_enabled(DAILY_REPORTS_CHAT_ID):
         return 0
+    day = nightly_reports.report_date(now)
+    if day is None:
+        local = now.astimezone(MANILA)
+        # Prewarm history and bounded membership checks without publishing.
+        if local.hour == 23 and local.minute >= 45:
+            current_capacities(load_capacity(local.date() - dt.timedelta(days=1), now, approved), sources(approved), now)
+        return 0
+    return _queue_reports(now, approved, report_day=day, nightly=True)
+
+
+def _queue_reports(now: dt.datetime, approved: set[int], *, report_day: dt.date | None = None,
+                   nightly: bool = False) -> int:
+    if not report_topics.enabled() or DAILY_REPORTS_CHAT_ID not in approved or not automation_controls.chat_enabled(DAILY_REPORTS_CHAT_ID):
+        return 0
     local = now.astimezone(MANILA)
-    if local.hour == 0 and local.minute < 10:
+    if not nightly and local.hour == 0 and local.minute < 10:
         return 0
     teams = sources(approved)
     if not teams:
         return 0
-    day = local.date() - dt.timedelta(days=1)
-    capacities = current_capacities(load_capacity(day, now, approved), teams, now)
+    day = report_day or local.date() - dt.timedelta(days=1)
+    if nightly and _read(f"nightly-report-complete:{day}:{_scope(teams)}") is not None:
+        return 0
+    history_day = day - dt.timedelta(days=1) if nightly else day
+    capacities = current_capacities(load_capacity(history_day, now, approved), teams, now)
     # Finish the bounded membership sweep before publishing a partial roster.
     # Fresh API failures remain unknown and are omitted rather than guessed.
     if any(c.get("pending_verification") for c in capacities.get("membership", {}).values()):
         return 0
-    replacement = replacement_request(day)
+    replacement = {} if nightly else replacement_request(day)
     revision = str(replacement.get("request_id") or "")
-    membership_scope = hashlib.sha256(str((capacity_defaults.POLICY,
+    membership_scope = "nightly2359" if nightly else hashlib.sha256(str((capacity_defaults.POLICY,
         sorted((chat, sorted(m["user_id"] for m in capacities["members"].get(str(chat), [])))
         for chat in teams))).encode()).hexdigest()[:10]
     suffix = f":refresh:{revision}" if revision else ""
@@ -575,6 +598,15 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
         return 0
     saved = _read(key + ":snapshot")
     if saved is None:
+        if nightly:
+            previous = _read(f"nightly-personal-capacity:{day - dt.timedelta(days=1)}:{_scope(teams)}")
+            changes = nightly_reports.changes(capacities, previous)
+            for chat, members in capacities["members"].items():
+                business = "veo" if int(chat) in GROUPS else "suno"
+                for member in members:
+                    change = changes.get((business, int(member["user_id"])))
+                    if change:
+                        member["planning"] = {**member["planning"], "daily_capacity_change": change["text"]}
         concern_data = concern_reports.snapshot(day, approved, now)
         concerns, tracked = defaultdict(list), set()
         for group in concern_data["groups"]:
@@ -585,8 +617,30 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
             financials = dict(zip(sorted(teams), pool.map(lambda chat: finances(chat, day), sorted(teams))))
         sections = {str(chat): daily_sections(chat, day, financials[chat], capacities["members"].get(str(chat), []),
                     concerns[chat], chat in tracked) for chat in sorted(teams)}
-        saved = _save(key + ":snapshot", {"sections": sections, "summary": summary_text(day, financials),
-            "salary_totals": member_salary_totals(day, financials)}, now)
+        snapshot = {"sections": sections, "summary": summary_text(day, financials),
+            "salary_totals": member_salary_totals(day, financials)}
+        if nightly:
+            capacities["page_inputs"] = page_capacity.load(teams)
+            current, upcoming = _rosters(teams, day, now), _rosters(teams, day + dt.timedelta(days=1), now)
+            page_summary = tomorrow_summary(day, teams, upcoming, capacities)
+            snapshot["summary"] += "\n\n" + page_summary
+            snapshot["staffing"] = {str(chat): staffing_text(chat, day, current[chat], upcoming[chat],
+                capacities["businesses"]["veo" if chat in GROUPS else "suno"],
+                capacities["defaults"]["veo" if chat in GROUPS else "suno"],
+                page_inputs=capacities["page_inputs"], page_rosters=upcoming) for chat in teams}
+            snapshot["staffing"]["0"] = "STAFFING SUMMARY\n" + page_summary
+            cutoff = f"\n\nAs of {now.astimezone(MANILA):%b %d, %I:%M %p} PHT. Capacity uses completed dates through {history_day}."
+            snapshot["summary"] += cutoff
+            _save(f"nightly-personal-capacity:{day}:{_scope(teams)}", {"businesses": {
+                business: [{"user_id": m["user_id"], "planning": {
+                    "estimated_capacity_per_day": m["planning"].get("estimated_capacity_per_day")}} for m in people]
+                for business, people in capacities["businesses"].items()}}, now)
+        saved = _save(key + ":snapshot", snapshot, now)
+    def enqueue(**action):
+        if nightly:
+            action["repeat_interval_minutes"] = None
+            action["payload"].update(nightly_reports.payload(day))
+        return enqueue_scheduled_action(**action)
     queued = 0
     previous = previous_messages(day, teams)
     old_text = previous_texts(day, teams)
@@ -596,7 +650,7 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
         # scheduler to confirm every deletion before queueing replacement posts.
         removals = _save(financial_key + ":removals", {"message_ids": sorted(old_text)}, now)["message_ids"]
         for message_id in removals:
-            queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
+            queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
                 dedupe_key=f"{financial_key}:remove:{message_id}", payload={"delete_message_id": message_id,
                     "organized_replacement_delete": True, "organized_refresh_id": revision,
                     "organized_report_version": VERSION}))
@@ -613,7 +667,7 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
                     part = f"{category.upper()} — {AVAILABILITY_GROUPS[chat]['name']} (continued)\n\n{part}"
                 if number <= len(edits) and old_text.get(edits[number - 1]) == part:
                     continue
-                queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
+                queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
                     dedupe_key=f"{key if category == 'capacity' else financial_key}:{chat}:{category}:{number}", payload={"text": part,
                         "message_thread_id": report_topics.TEAM_THREADS[chat], "disable_notification": True,
                         "organized_report_date": day.isoformat(), "organized_report_version": VERSION,
@@ -623,16 +677,16 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
                         **({"edit_message_id": edits[number - 1]} if number <= len(edits) else {})}))
             for old_id in edits[len(parts):]:
                 link = concern_reports.link(DAILY_REPORTS_CHAT_ID, edits[0])
-                queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
+                queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
                     dedupe_key=f"{key if category == 'capacity' else financial_key}:{chat}:{category}:cleanup:{old_id}", payload={
                         "text": f"Updated {category} report: {link}", "edit_message_id": old_id, "disable_notification": True,
                         "message_thread_id": report_topics.TEAM_THREADS[chat], "organized_report_date": day.isoformat(),
                         "organized_report_version": VERSION, "report_source_chat_id": chat, "report_category": category}))
     summary_ids = previous.get((0, "summary"), [])
-    queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
+    queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
             repeat_interval_minutes=5,
             dedupe_key=f"{financial_key}:summary", payload={"text": saved["summary"], "disable_notification": True,
-                "financial_summary_text": saved["summary"], "organized_summary_date": day.isoformat(),
+                "financial_summary_text": saved["summary"], **({} if nightly else {"organized_summary_date": day.isoformat()}),
                 "organized_report_date": day.isoformat(), "organized_report_version": VERSION,
                 "organized_refresh_id": revision,
                 "report_category": "summary", **({"edit_message_id": summary_ids[0]} if summary_ids else {})}))
@@ -642,17 +696,19 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
             part = f"MEMBER SALARY TOTALS (continued)\n{day} (PHT)\n\n{part}"
         if number <= len(edits) and old_text.get(edits[number - 1]) == part:
             continue
-        queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
+        queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
             dedupe_key=f"{financial_key}:0:salary_totals:{number}", payload={"text": part, "disable_notification": True,
                 "organized_report_date": day.isoformat(), "organized_report_version": VERSION,
                 "organized_refresh_id": revision,
                 "report_category": "salary_totals", **({"edit_message_id": edits[number - 1]} if number <= len(edits) else {})}))
     for chat in [*sorted(teams), 0]:
-        prior_id = previous_staffing_id(local.date(), teams, chat)
-        queued += int(enqueue_scheduled_action(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
-            dedupe_key=f"organized-staffing:v{VERSION}:{local.date()}:{_scope(teams)}:{chat}", repeat_interval_minutes=5,
-            payload={"text": "Updating staffing summary…", "disable_notification": True,
-                "organized_staffing_date": local.date().isoformat(), "organized_staffing_version": VERSION,
+        staffing_day = day if nightly else local.date()
+        prior_id = previous_staffing_id(staffing_day, teams, chat)
+        queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=now,
+            dedupe_key=f"organized-staffing:v{VERSION}:{staffing_day}:{_scope(teams)}:{chat}", repeat_interval_minutes=5,
+            payload={"text": saved["staffing"][str(chat)] if nightly else "Updating staffing summary…", "disable_notification": True,
+                **({"organized_report_date": str(day)} if nightly else {"organized_staffing_date": staffing_day.isoformat()}),
+                "organized_staffing_version": VERSION,
                 "report_source_chat_id": chat,
                 "report_source_ids": sorted(teams),
                 **({"edit_message_id": prior_id} if prior_id else {}),
@@ -660,6 +716,8 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
     _save(key + ":complete", {"queued": True}, now)
     if first_publication:
         _save(financial_key + ":published", {"queued": True}, now)
+    if nightly:
+        _save(f"nightly-report-complete:{day}:{_scope(teams)}", {"queued": True}, now)
     return queued
 
 

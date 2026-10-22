@@ -69,7 +69,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.44"
+AUTOMATION_VERSION = "2026-10-22.45"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -110,6 +110,9 @@ def status_route(environ, start_response):
                                             "hours_pht": list(availability_reminders.HOURS)},
                                         "page_access_reminders": {"enabled": page_access_reminders.enabled(),
                                             "exclude_admins": True, "frequency": "once_per_day_per_poll_part"},
+                                        "daily_reports": {"time": "23:59", "timezone": "Asia/Manila",
+                                            "frequency": "once_per_day", "live_updates": False,
+                                            "capacity_changes": "nightly_personal_estimate_comparison"},
                                         "done_deal_tracking": done_deal_tracking.mode()})
 
 
@@ -681,6 +684,11 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
                     raise RuntimeError("disabled new-client action was not deferred")
                 continue
             now = dt.datetime.now(dt.timezone.utc)
+            import nightly_reports
+            if not nightly_reports.prepare_delivery(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete report schedule was not finalized")
+                continue
             if not availability_reminders.prepare_delivery(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("obsolete availability reminder was not finalized")

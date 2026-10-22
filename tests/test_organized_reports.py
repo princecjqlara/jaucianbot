@@ -155,8 +155,8 @@ class OrganizedReportsTests(unittest.TestCase):
                 patch.object(reports.concern_reports, "snapshot", return_value={"groups": []}), \
                 patch.object(reports, "finances", return_value=finance), \
                 patch.object(reports, "enqueue_scheduled_action", return_value=True) as queue:
-            self.assertEqual(reports.queue_automation(NOW, {VEO, TARGET}), 8)
-            self.assertEqual(reports.queue_automation(NOW, {VEO, TARGET}), 0)
+            self.assertEqual(reports._queue_reports(NOW, {VEO, TARGET}), 8)
+            self.assertEqual(reports._queue_reports(NOW, {VEO, TARGET}), 0)
             self.assertFalse(reports.automation_controls.chat_enabled(VEO))
         calls = [call.kwargs for call in queue.call_args_list]
         self.assertTrue(all(c["chat_id"] == TARGET for c in calls))
