@@ -119,6 +119,21 @@ class VeoFeatureSwitchTests(unittest.TestCase):
                 self.assertEqual(page_access.queue_veo_surveys(NOW, set(daily.GROUPS)), 0)
                 outbox.assert_not_called()
 
+    def test_real_outbox_and_sender_allow_surveys_with_client_assignment_off(self):
+        env = {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true", "AUTOMATION_CHAT_IDS": ",".join(map(str, daily.GROUPS))}
+        with patch.dict(os.environ, env), patch.object(cloud_store, "request", return_value=[{"id": 1}]) as db:
+            self.assertEqual(page_access.queue_veo_surveys(NOW, set(daily.GROUPS)), 6)
+            actions = [call.args[1] for call in db.call_args_list]
+            self.assertEqual({a["chat_id"] for a in actions}, set(daily.GROUPS))
+            with patch.object(telegram_sender, "telegram_call", return_value={"message_id": 700, "poll": {"id": "poll"}}) as api:
+                for action in actions:
+                    self.assertEqual(telegram_sender.send_scheduled_action(action)["message_id"], 700)
+            self.assertEqual(api.call_count, 6)
+            for call in api.call_args_list:
+                self.assertEqual(call.args[0], "sendPoll")
+                self.assertTrue(call.args[1]["allows_multiple_answers"])
+                self.assertFalse(call.args[1]["is_anonymous"])
+
     def test_surveys_skip_paused_and_unapproved_groups(self):
         other = next(chat for chat in daily.GROUPS if chat != MAIN)
         with patch.dict(os.environ, {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true", "AUTOMATION_CHAT_IDS": str(MAIN)}), \

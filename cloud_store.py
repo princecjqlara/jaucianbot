@@ -222,7 +222,8 @@ def enqueue_scheduled_action(
     if not chat_enabled(chat_id):
         return False
     from automation_controls import new_client_delivery_allowed
-    if not new_client_delivery_allowed({"chat_id": chat_id, "payload": payload, "dedupe_key": dedupe_key}):
+    if not new_client_delivery_allowed({"chat_id": chat_id, "action_type": action_type,
+                                        "payload": payload, "dedupe_key": dedupe_key}):
         return False
     rows = request(
         "scheduled_actions?on_conflict=dedupe_key&select=id",
