@@ -238,7 +238,7 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
         current = organized_reports.current_capacities(organized_reports.load_capacity(history_day, now, approved),
             organized_reports.sources(approved), now)
         capacity["members"] = current["members"].get(str(MAKATA_CHAT_ID), [])
-        reference = current.get("team_references", {}).get(str(MAKATA_CHAT_ID))
+        reference = current.get("defaults", {}).get("suno")
     lines += ["", "RECEIPT CAPACITY — ESTIMATES"]
     if not capacity["members"]:
         lines.append("Pending receipt and attendance history.")
@@ -290,7 +290,7 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     if not targets:
         return 0
     reference_policy = report_topics.enabled()
-    base = f"makata-daily-report:v{3 if reference_policy else 2}:{day}"
+    base = f"makata-daily-report:v{4 if reference_policy else 2}:{day}"
     missing = [target for target in targets if _read(f"{base}:complete:{target}") is None]
     if not missing:
         return 0

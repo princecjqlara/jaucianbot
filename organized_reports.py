@@ -261,7 +261,7 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             if not plan.get("attendance_confirmed_for_top_three"):
                 lines.append("Based on output dates; attendance is unverified.")
         elif plan.get("provisional"):
-            safe_text = f"{plan['safe_plan_per_day']:.2f}/day"
+            safe_text = f"{safe:.2f}/day" if safe is not None else "Unknown"
             lines.append(f"Provisional planning: {plan['planning_average_per_day']:.2f}/day · Safe target: {safe_text}")
             lines.append(f"Personal history: {plan.get('personal_output_dates', 0)}/3 output dates; uses the business default.")
         else:
@@ -278,8 +278,9 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     if not members:
         lines += ["", "No verified current members with readable recent history."]
     if chat in SUNO_GROUPS:
-        lines += ["", "14 completed days. Under 3 personal output dates: capacity and safe target Unknown.",
-            "No assumed numeric default or default buffer. Peer reference is a separate historical comparison.",
+        lines += ["", "14 completed days. Under 3 output dates: provisional shared Suno default; replaced by personal history at 3 dates.",
+            "Default = median of peers' receipts per declared Active day, including zeros. No peer history: Unknown. No assumed default safety buffer.",
+            "Personal estimate = best 3 output dates; personal safe = floor(estimate × 80%). Estimates are not guarantees.",
             "Personal history combines Suno teams and non-bot clients' receipts. Repeat payments may count; receipts are not completed songs."]
     else:
         lines += ["", "14 completed days. Personal estimate = best 3 output dates; personal safe = floor(estimate × 80%).",
@@ -463,22 +464,21 @@ def forecast(roster: list[dict] | None, members: list[dict], default: dict | Non
     if default is not None:
         people = [capacity_defaults.apply(m, default) for m in people]
     plans = [m.get("planning") or {} for m in people]
-    rated = [p for p in plans if p.get("planning_average_per_day") is not None and p.get("safe_plan_per_day") is not None]
-    reference_only = bool(default and default.get("reference_only"))
-    has_total = bool(rated) or bool(default is not None and (not reference_only or not unique))
+    rated = [p for p in plans if p.get("planning_average_per_day") is not None]
+    has_total = bool(rated) or not unique
     total = sum(p["planning_average_per_day"] for p in rated) if has_total else None
     provisional = sum(bool(p.get("provisional")) for p in rated)
     return {"active": len(unique), "rated": len(rated) - provisional, "provisional": provisional,
         "unknown": len(unique) - len(rated),
         "average": total / len(rated) if rated else None, "total": total,
-        "conservative": sum(p["safe_plan_per_day"] for p in rated) if has_total else None}
+        "conservative": sum(p["safe_plan_per_day"] for p in rated)
+            if has_total and all(p.get("safe_plan_per_day") is not None for p in rated) else None}
 
 
 def suno_reference_text(reference: dict, unit: str) -> list[str]:
-    value = reference.get("peer_reference_per_day")
-    return ["Missing-history default: Unknown.",
-        f"Peer receipt reference: {value:.2f} {unit} ({reference['peer_members']} current members); comparison only."
-        if value is not None else "Peer receipt reference: Unknown (no declared Active-day history)."]
+    value = reference.get("capacity_per_day")
+    return [f"Suno new-member default: {value:.2f} {unit} ({reference['peer_members']} current peers; provisional)."
+        if value is not None else "Suno new-member default: Unknown (no peer Active-day history)."]
 
 
 def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next_roster: list[dict] | None, members: list[dict], default: dict | None = None) -> str:
@@ -489,26 +489,24 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
     lines = ["STAFFING SUMMARY", AVAILABILITY_GROUPS[chat]["name"], f"Active {today}: {active}",
              f"Active tomorrow ({tomorrow}): {data['active'] if data['active'] is not None else 'untracked poll'}"]
     if data["average"] is not None:
-        if default and default.get("reference_only"):
-            lines += [f"Personal-history average: {data['average']:.2f} {unit} per member with history",
-                f"Known estimate subtotal: {data['total']:.2f} · Safe subtotal: {data['conservative']:.2f}",
-                f"History: {data['rated']}/{data['active']} · Unknown: {data['unknown']}"]
-        else:
-            lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per {'active' if default else 'rated'} member",
-                f"Estimated team total: {data['total']:.2f} · Safe team target: {data['conservative']:.2f}",
-                f"Personal history: {data['rated']} · Provisional: {data['provisional']}"]
+        safe = f"{data['conservative']:.2f}" if data['conservative'] is not None else "Unknown"
+        lines += [f"Tomorrow estimated capacity: {data['average']:.2f} {unit} per {'active' if default and not data['unknown'] else 'rated'} member",
+            f"Estimated team total: {data['total']:.2f} · Safe team target: {safe}",
+            f"Personal history: {data['rated']} · Provisional: {data['provisional']} · Unknown: {data['unknown']}"]
     else:
         lines += ["Tomorrow average: pending availability poll." if data["active"] is None else
                   "Tomorrow average: Unknown (no personal estimate)." if data["active"] else "Tomorrow average: no Active voters."]
     if not automation_controls.chat_enabled(chat):
         lines.append("Assignment bot paused; availability reflects recorded votes only.")
-    if default and default.get("reference_only"):
+    if default and default.get("business") == "suno":
         lines += suno_reference_text(default, unit)
-        if data["active"]:
-            lines.append("Unknown members are excluded from the subtotal and average.")
+        lines += ["Based on recorded Active-day receipt rates across Suno teams; includes zero-receipt Active days.",
+            "Default replaced at 3 personal output dates. Provisional safe targets stay Unknown."]
     elif default:
         lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)}); replaced after 3 personal output dates."]
         lines += ["Default basis: peers' Active-day averages, including zero output."]
+    if data["unknown"]:
+        lines.append("Unknown members are excluded from the total and average.")
     if getattr(next_roster, "unverified", 0):
         lines += [f"Membership pending for {next_roster.unverified} Active vote(s); excluded from totals."]
     lines += ["14-day planning estimates; not guarantees. Current members only. Updates as votes change."]
@@ -535,18 +533,14 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
             lines += [f"{business.upper()}: pending availability polls."]
         else:
             average = f"{data['average']:.2f}" if data["average"] is not None else "n/a"
-            if default.get("reference_only"):
-                lines += [f"SUNO: {data['active']} Active · Personal history {data['rated']} · Unknown {data['unknown']}"]
-                if data["average"] is not None:
-                    lines += [f"Known estimate subtotal: {data['total']:.2f} {unit} · Average {average}/member with history",
-                        f"Safe subtotal: {data['conservative']:.2f}. Unknown members excluded."]
-                else:
-                    lines += ["Personal estimate total / average: Unknown." if data["active"] else "No Active voters."]
+            total = f"{data['total']:.2f}" if data['total'] is not None else "Unknown"
+            safe = f"{data['conservative']:.2f}" if data['conservative'] is not None else "Unknown"
+            lines += [f"{business.upper()}: {data['active']} Active · Total {total} {unit}",
+                f"Average {average}/member · Safe total {safe}",
+                f"Personal {data['rated']} · Provisional {data['provisional']} · Unknown {data['unknown']}"]
+            if business == "suno":
                 lines += suno_reference_text(default, unit)
             else:
-                lines += [f"{business.upper()}: {data['active']} Active · Total {data['total']:.2f} {unit}",
-                    f"Average {average}/member · Safe total {data['conservative']:.2f}",
-                    f"Personal {data['rated']} · Provisional {data['provisional']}"]
                 lines += [f"Starting default: {default['capacity_per_day']:.2f} {unit} ({capacity_defaults.peer_label(default)})."]
         if missing:
             lines.append(f"{missing} team poll(s) untracked; totals are partial.")
@@ -557,8 +551,8 @@ def tomorrow_summary(today: dt.date, teams: set[int], rosters: dict, capacities:
     lines += ["Each person counts once per business. VEO and Suno units stay separate."]
     if shared:
         lines += [f"Shared across businesses: {shared}; capacity may overlap."]
-    lines += ["VEO provisional defaults retain decimals. Suno missing personal history stays Unknown.",
-              "Suno peer reference = median of recorded receipts per declared Active day; includes recorded zeros, excludes Unknown attendance.",
+    lines += ["Suno default = median of peers' receipts per recorded Active day, including zeros; Unknown attendance excluded.",
+              "Suno defaults are provisional, keep decimals, and change to personal estimates after 3 output dates. No assumed default safety buffer.",
               "Verified current members only; estimates are not production guarantees."]
     return "\n".join(lines)
 
@@ -691,8 +685,6 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
     elif chat:
         business = "veo" if chat in GROUPS else "suno"
         default = capacities.get("defaults", {}).get(business) or capacity_defaults.baseline(business, [])
-        if business == "suno":
-            default = capacities.get("team_references", {}).get(str(chat)) or default
         people = capacities.get("businesses", {}).get(business, capacities["members"].get(str(chat), []))
         text = staffing_text(chat, today, current[chat], upcoming[chat], people, default)
     else:
@@ -714,10 +706,10 @@ def prepare_delivery(action: dict, now: dt.datetime, cache: dict | None = None) 
             active = data['active'] if data['active'] is not None else '?'
             if source in SUNO_GROUPS:
                 unknown = data['unknown'] if data['unknown'] is not None else '?'
-                lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {active} Active · history {data['rated']}/{active} · Unknown {unknown} · known subtotal {total} · avg {avg} {unit}/day"]
+                lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {active} Active · personal {data['rated']} · provisional {data['provisional']} · Unknown {unknown} · total {total} · avg {avg} {unit}/day"]
             else:
                 lines += [f"• {AVAILABILITY_GROUPS[source]['name']}: {active} Active · total {total} · avg {avg} {unit}/day"]
-        lines += ["Suno averages cover members with personal history; other members stay Unknown. VEO includes provisional defaults.",
+        lines += ["Totals include labelled provisional defaults. Unknown members are excluded from totals and averages.",
                   "Team totals overlap for shared members.",
                   "Declared availability; polls may be incomplete. Updates as votes change."]
         text = "\n".join(lines)

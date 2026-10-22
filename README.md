@@ -2,23 +2,26 @@
 
 VEO automation is enabled across all six VEO teams. With
 `VEO_NEW_CLIENTS_ENABLED=false`, availability and reports stay on while
-new-client offers, Ready controls, acceptance, client lists and page-access
-prompts stay off for VEO. Suno assignments use their own readiness and page
+new-client offers, Ready controls, acceptance and client lists stay off for VEO.
+`VEO_PAGE_ACCESS_POLLS_ENABLED=true` independently enables a public multi-select
+page-access poll in each active VEO team's New Clients topic, with a No access
+option. Answers are tracked separately from attendance; the poll does not enable
+assignments. Suno assignments use their own readiness and page
 access. Existing ownership is preserved; archived offer buttons cannot accept
 new work while the VEO feature is off. VEO availability counts all members.
 Makata's client list shows when it is waiting for Ready members; tapping Ready
 immediately queues an assignment check. All sends use the normal scheduler.
 
-Suno and Makata have no numeric capacity default for a member with fewer than
-three personal output dates. Their capacity and default safe target remain
-Unknown. The separate peer reference is the median of current members' recorded
+Suno and Makata use a provisional historical peer default for a member with fewer
+than three personal output dates. The shared Suno default is the median of current members' recorded
 receipts on declared Active dates divided by each member's declared Active dates
 over the last 14 completed dates. Recorded zeros are included; Unknown/Inactive
 attendance and identities without a usable Active-day denominator are excluded.
 Each Telegram ID counts once. A small cohort displays its actual size without a
-fixed fallback, percentage buffer, minimum-one rounding, or imputation into a
-new member's capacity. Makata's team reference uses its own team's records;
-missing attendance does not inherit another team's availability votes.
+fixed fallback, percentage buffer or minimum-one rounding. No usable peer history
+means Unknown. The provisional plan changes to a personal estimate after three
+personal output dates; its safe target stays Unknown. Makata can use shared Suno
+peer history without treating another team's votes as Makata attendance.
 
 VEO retains its existing median Active-day planning default after five peers
 with three Active and three output dates, with a reviewed 0.50 fallback.
@@ -27,16 +30,15 @@ personal top-three estimates retain their own planning policy. These describe
 recorded output and can be limited by demand; they do not verify production limits.
 
 The daily sales/salary summary and staffing boards show tomorrow's Active total,
-capacity totals and averages separately for VEO and Suno. Suno shows members
-with personal estimates and members whose capacity is Unknown. Known subtotals
-and averages exclude those Unknown members, rather than assigning them zero
-or a peer rate. VEO retains its personal/provisional counts. Shared members count once within each
+capacity totals and averages separately for VEO and Suno. Both show personal,
+provisional and Unknown counts. Totals and averages include labelled provisional
+plans and exclude Unknown members. Shared members count once within each
 business; mixed business units are never added. Suno personal history combines
 receipt counts by date across Suno teams before calculating a member estimate.
 The summary silently refreshes the same post every five minutes as votes change.
 Unverified membership and missing polls are shown as partial coverage.
-Makata's authorized private daily report uses the same Unknown/default rule and
-its own team reference. The correction edits its existing daily report where
+Makata's authorized private daily report uses the same shared Suno default.
+The correction edits its existing daily report where
 available and retires any old extra parts, rather than duplicating the report.
 Client lists contain every row without Next/Previous controls; long lists use
 consecutive messages, updated in place through the scheduled outbox.

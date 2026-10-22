@@ -33,7 +33,6 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertIsNone(result["capacity_per_day"])
         self.assertIsNone(result["peer_reference_per_day"])
         self.assertEqual(result["peer_members"], 0)
-        self.assertTrue(result["reference_only"])
         self.assertNotIn("suno", defaults.SEEDS)
 
     def test_reference_is_exact_median_of_recorded_active_day_rates(self):
@@ -43,24 +42,29 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         result = defaults.baseline("suno", people)
         self.assertEqual(result["peer_members"], 3)
         self.assertEqual(result["peer_reference_per_day"], 0.5)
-        self.assertIsNone(result["capacity_per_day"])
+        self.assertEqual(result["capacity_per_day"], 0.5)
         self.assertEqual(defaults.peer_label(result), "3 current peers")
 
-    def test_zero_receipts_with_declared_active_date_is_zero_reference_not_capacity(self):
+    def test_zero_receipts_with_declared_active_date_is_zero_default_not_unknown(self):
         result = defaults.baseline("suno", [person(1, [0])])
         self.assertEqual(result["peer_reference_per_day"], 0)
-        self.assertIsNone(result["capacity_per_day"])
+        self.assertEqual(result["capacity_per_day"], 0)
+        plan = defaults.apply(person(2, []), result)["planning"]
+        self.assertEqual(plan["planning_average_per_day"], 0)
+        self.assertTrue(plan["provisional"])
 
-    def test_zero_one_and_two_output_dates_never_inherit_peers_capacity(self):
+    def test_zero_one_and_two_output_dates_use_peer_plan_without_inventing_personal_capacity(self):
         reference = defaults.baseline("suno", [person(7, [10, 10, 10])])
         for counts in ([], [1], [10, 20]):
             member = person(1, counts)
             before = copy.deepcopy(member)
             plan = defaults.apply(member, reference)["planning"]
-            for key in ("planning_average_per_day", "safe_plan_per_day", "default_capacity_per_day", "buffer_fraction"):
+            for key in ("estimated_capacity_per_day", "safe_plan_per_day", "buffer_fraction"):
                 self.assertIsNone(plan[key])
-            self.assertEqual(plan["estimate_origin"], "insufficient_personal_history")
-            self.assertFalse(plan["provisional"])
+            self.assertEqual(plan["planning_average_per_day"], 10)
+            self.assertEqual(plan["default_capacity_per_day"], 10)
+            self.assertEqual(plan["estimate_origin"], "historical_peer_default")
+            self.assertTrue(plan["provisional"])
             self.assertEqual(member, before)
 
     def test_old_cached_provisional_seed_and_buffer_are_removed(self):
@@ -79,14 +83,16 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertEqual(plan["estimate_origin"], "personal_history")
         self.assertFalse(plan["provisional"])
 
-    def test_active_members_without_history_are_unknown_not_zero(self):
+    def test_active_members_without_history_use_peer_plan_in_total_and_average(self):
         reference = defaults.baseline("suno", [person(7, [10, 10, 10])])
         result = reports.forecast([{"user_id": 1}, {"user_id": 2}], [], reference)
         self.assertEqual(result["active"], 2)
-        self.assertEqual(result["unknown"], 2)
+        self.assertEqual(result["unknown"], 0)
         self.assertEqual(result["rated"], 0)
-        for key in ("average", "total", "conservative"):
-            self.assertIsNone(result[key])
+        self.assertEqual(result["provisional"], 2)
+        self.assertEqual(result["average"], 10)
+        self.assertEqual(result["total"], 20)
+        self.assertIsNone(result["conservative"])
 
     def test_partial_subtotal_and_average_only_cover_personal_history(self):
         reference = defaults.baseline("suno", [])
@@ -116,21 +122,22 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertEqual(result["defaults"]["suno"]["peer_reference_per_day"], 0.5)
         self.assertEqual(result["defaults"]["suno"]["peer_members"], 1)
 
-    def test_team_and_general_reports_label_unknown_members_and_comparison(self):
+    def test_team_and_general_reports_include_provisional_members_without_assumed_safe_target(self):
         reference = defaults.baseline("suno", [person(7, [1, 0])])
         roster = [{"user_id": 1}, {"user_id": 2}]
         for chat in (SUNO, MAKATA):
             with self.subTest(chat=chat), patch.dict(reports.AVAILABILITY_GROUPS, {MAKATA: {"name": "Suno Makata"}}):
                 text = reports.staffing_text(chat, TODAY, [], roster, [person(1, [1, 2, 3])], reference)
-            self.assertIn("History: 1/2 · Unknown: 1", text)
-            self.assertIn("Known estimate subtotal: 2.00", text)
-            self.assertIn("Missing-history default: Unknown", text)
-            self.assertIn("Peer receipt reference: 0.50", text)
+            self.assertIn("Personal history: 1 · Provisional: 1 · Unknown: 0", text)
+            self.assertIn("Estimated team total: 2.50 · Safe team target: Unknown", text)
+            self.assertIn("Suno new-member default: 0.50", text)
+            self.assertIn("Tomorrow estimated capacity: 1.25", text)
             self.assertNotIn("Starting default:", text)
         caps = {"date": str(DAY), "members": {str(SUNO): [person(1, [1, 2, 3])]}, "defaults": {"suno": reference}}
         text = reports.tomorrow_summary(TODAY, {SUNO}, {SUNO: roster}, caps)
-        self.assertIn("SUNO: 2 Active · Personal history 1 · Unknown 1", text)
-        self.assertIn("Average 2.00/member with history", text)
+        self.assertIn("SUNO: 2 Active · Total 2.50 receipts/day", text)
+        self.assertIn("Average 1.25/member · Safe total Unknown", text)
+        self.assertIn("Personal 1 · Provisional 1 · Unknown 0", text)
 
     def test_detail_report_does_not_repeat_assumed_default_formula(self):
         member = defaults.apply(person(1, [1]), defaults.baseline("suno", []))
@@ -139,7 +146,7 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertNotIn("Provisional planning:", text)
         self.assertNotIn("Provisional safe = 80%", text)
 
-    def test_makata_staffing_delivery_uses_own_team_reference(self):
+    def test_makata_staffing_uses_shared_suno_default_when_own_history_is_missing(self):
         business = defaults.baseline("suno", [person(7, [10, 10, 10])])
         own = defaults.baseline("suno", [])
         capacities = {"members": {str(MAKATA): []}, "businesses": {"suno": []},
@@ -150,10 +157,11 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \
                 patch.dict(reports.AVAILABILITY_GROUPS, {MAKATA: {"name": "Suno Makata"}}), \
                 patch.object(reports, "allowed_chat_ids", return_value={MAKATA, daily.DAILY_REPORTS_CHAT_ID}), \
-                patch.object(reports, "staffing_context", return_value=(capacities, {MAKATA: []}, {MAKATA: []})):
+                patch.object(reports, "staffing_context", return_value=(capacities, {MAKATA: []}, {MAKATA: [{"user_id": 1}]})):
             self.assertTrue(reports.prepare_delivery(item, NOW))
-        self.assertIn("Peer receipt reference: Unknown", item["payload"]["text"])
-        self.assertNotIn("10.00", item["payload"]["text"])
+        self.assertIn("Suno new-member default: 10.00", item["payload"]["text"])
+        self.assertIn("Estimated team total: 10.00 · Safe team target: Unknown", item["payload"]["text"])
+        self.assertIn("across Suno teams", item["payload"]["text"])
 
     def test_makata_private_daily_correction_edits_existing_report_and_removes_old_parts(self):
         saved = {}
@@ -167,7 +175,7 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
                 patch.dict(daily.SUNO_GROUPS, {MAKATA: daily.MAKATA}), \
                 patch.object(makata, "recipient", return_value={"chat_id": 99}), \
                 patch.object(makata, "_read", side_effect=saved.get), patch.object(makata, "_save", side_effect=save), \
-                patch.object(makata, "build_report", return_value="Capacity Unknown; peer reference only"), \
+                patch.object(makata, "build_report", return_value="Provisional historical peer default"), \
                 patch.object(makata, "record_automation_marker", side_effect=mark), \
                 patch.object(makata, "previous_report_parts", return_value={1: 70, 2: 71}), \
                 patch.object(makata, "enqueue_scheduled_action", return_value=True) as outbox:
@@ -178,10 +186,11 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
         self.assertEqual(outbox.call_args_list[1].kwargs["payload"]["edit_message_id"], 71)
         self.assertIn("updated above", outbox.call_args_list[1].kwargs["payload"]["text"])
 
-    def test_makata_private_report_uses_unknown_and_own_peer_reference(self):
-        reference = defaults.baseline("suno", [])
+    def test_makata_private_report_uses_provisional_shared_suno_default(self):
+        reference = defaults.baseline("suno", [person(7, [1, 0])])
         member = defaults.apply(person(1, []), reference)
-        capacity = {"members": {str(MAKATA): [member]}, "team_references": {str(MAKATA): reference}}
+        capacity = {"members": {str(MAKATA): [member]}, "defaults": {"suno": reference},
+            "team_references": {str(MAKATA): defaults.baseline("suno", [])}}
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \
                 patch.dict(daily.SUNO_GROUPS, {MAKATA: daily.MAKATA}), \
                 patch.object(makata, "receipt_messages", return_value=[]), \
@@ -192,9 +201,26 @@ class SunoReferenceDefaultsTests(unittest.TestCase):
                 patch.object(reports, "load_capacity", return_value={}), \
                 patch.object(reports, "current_capacities", return_value=capacity):
             text = makata.build_report(DAY, NOW)
-        self.assertIn("Member 1: capacity Unknown · safe target Unknown", text)
-        self.assertIn("Peer receipt reference: Unknown", text)
-        self.assertNotIn("provisional 0.60", text)
+        self.assertIn("Member 1: provisional 0.50/day · safe pending", text)
+        self.assertIn("Suno new-member default: 0.50", text)
+        self.assertNotIn("safe 0.40", text)
+
+    def test_default_refreshes_from_actual_receipts_without_a_fixed_seed_or_provisional_feedback(self):
+        people = [person(1, [1, 0]), person(2, [2, 0])]
+        first = defaults.baseline("suno", people)
+        self.assertEqual(first["capacity_per_day"], 0.75)
+        new = defaults.apply(person(3, []), first)
+        self.assertEqual(defaults.baseline("suno", people + [new])["capacity_per_day"], 0.75)
+        refreshed = defaults.baseline("suno", [person(1, [0, 0]), person(2, [1, 0])])
+        self.assertEqual(refreshed["capacity_per_day"], 0.25)
+
+    def test_third_personal_output_date_replaces_suno_default(self):
+        reference = defaults.baseline("suno", [person(7, [1, 0])])
+        self.assertEqual(defaults.apply(person(1, [4, 3]), reference)["planning"]["planning_average_per_day"], 0.5)
+        plan = defaults.apply(person(1, [4, 3, 2]), reference)["planning"]
+        self.assertEqual(plan["planning_average_per_day"], 3)
+        self.assertEqual(plan["safe_plan_per_day"], 2)
+        self.assertFalse(plan["provisional"])
 
 
 if __name__ == "__main__":

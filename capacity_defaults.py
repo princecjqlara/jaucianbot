@@ -8,7 +8,7 @@ from fractions import Fraction
 
 import recent_capacity
 
-POLICY = "suno-peer-reference-only-v3"
+POLICY = "suno-historical-peer-default-v4"
 # VEO retains its existing reviewed planning default.
 SEEDS = {"veo": 0.5}
 MIN_PEERS = 5
@@ -42,15 +42,16 @@ def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = Fa
 
 def baseline(business: str, members: list[dict]) -> dict:
     if business == "suno":
-        # A cohort statistic describes the cohort; it cannot supply an unrated
-        # person's capacity. Include recorded zeros and display the sample size.
+        # Peer history supplies a provisional starting plan, never a measured
+        # personal capacity. Include Active-day zeros without a fixed seed.
         people = {int(m["user_id"]): m for m in members if m.get("user_id") is not None}
         plans = [m.get("planning") or {} for m in people.values()]
         values = [p["active_day_average"] for p in plans
             if p.get("known_active_days", 0) > 0 and p.get("active_day_average") is not None]
-        return {"policy": POLICY, "business": business, "capacity_per_day": None,
-            "reference_only": True, "peer_reference_per_day": statistics.median(values) if values else None,
-            "peer_members": len(values), "source": "recorded_peer_reference", "unit": "receipt posts/day"}
+        rate = statistics.median(values) if values else None
+        return {"policy": POLICY, "business": business, "capacity_per_day": rate,
+            "peer_reference_per_day": rate, "peer_members": len(values),
+            "source": "recorded_peer_active_day_median", "unit": "receipt posts/day"}
     # Best output dates omit zero-output Active days and overstate a starting plan.
     # Use typical recorded output on declared Active dates from established peers.
     plans = [m.get("planning") or {} for m in members]
@@ -83,12 +84,13 @@ def apply(member: dict, default: dict) -> dict:
         return {**member, "planning": {**plan, "provisional": False, "estimate_origin": "personal_history"}}
     # Output/attendance/peak evidence stays untouched. A prior is never recorded as actual output.
     top = plan.get("top_three_daily_outputs", [])[:2]
-    if default.get("reference_only"):
-        plan.update(estimated_capacity_per_day=None, planning_average_per_day=None, safe_plan_per_day=None,
-            provisional=False, default_policy=POLICY, default_capacity_per_day=None,
+    if default.get("business") == "suno":
+        value = default.get("capacity_per_day")
+        plan.update(estimated_capacity_per_day=None, planning_average_per_day=value, safe_plan_per_day=None,
+            provisional=value is not None, default_policy=POLICY, default_capacity_per_day=value,
             buffer_fraction=None,
             default_peer_members=default["peer_members"], personal_output_dates=len(top),
-            estimate_origin="insufficient_personal_history")
+            estimate_origin="historical_peer_default" if value is not None else "insufficient_personal_history")
         return {**member, "planning": plan}
     prior = Fraction(default["capacity_per_day"]).limit_denominator(1_000_000)
     blend = (sum(top) + (3 - len(top)) * prior) / 3

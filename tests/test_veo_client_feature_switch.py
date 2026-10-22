@@ -88,6 +88,55 @@ class VeoFeatureSwitchTests(unittest.TestCase):
             self.assertEqual(call.kwargs["payload"]["options"], ["Yes", "No"])
             self.assertNotIn("Sama Ka Na Media", call.kwargs["payload"]["question"])
 
+    def test_page_surveys_run_in_all_six_groups_without_enabling_assignments(self):
+        env = {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true"}
+        with patch.dict(os.environ, env), patch.object(page_access, "enqueue_scheduled_action", return_value=True) as outbox:
+            self.assertEqual(page_access.queue_veo_surveys(NOW, set(daily.GROUPS)), 6)
+            actions = [{**call.kwargs} for call in outbox.call_args_list]
+            self.assertEqual({a["chat_id"] for a in actions}, set(daily.GROUPS))
+            for action in actions:
+                self.assertTrue(controls.new_client_delivery_allowed(action))
+                self.assertFalse(controls.new_clients_enabled(action["chat_id"]))
+                self.assertFalse(ready.enabled(action["chat_id"]))
+                self.assertTrue(action["payload"]["allows_multiple_answers"])
+                self.assertFalse(action["payload"]["is_anonymous"])
+                self.assertIn("No access", action["payload"]["options"])
+            state = controls.status(set(daily.GROUPS))
+        self.assertEqual(set(state["page_access_poll_enabled_chat_ids"]), set(daily.GROUPS))
+
+    def test_page_survey_exception_does_not_allow_ready_messages_or_client_offers(self):
+        survey = {"chat_id": MAIN, "action_type": "poll", "dedupe_key": "page-access-send:current",
+            "payload": {"page_access_version": "current", "page_access_ids": ["p1"]}}
+        with patch.dict(os.environ, {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true"}):
+            self.assertTrue(controls.new_client_delivery_allowed(survey))
+            for changes in ({"action_type": "message"}, {"dedupe_key": "new-client:old"},
+                    {"payload": {**survey["payload"], "new_client_token": "old"}},
+                    {"payload": {**survey["payload"], "client_directory": True}}):
+                self.assertFalse(controls.new_client_delivery_allowed({**survey, **changes}))
+        with patch.dict(os.environ, {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "false"}):
+            self.assertFalse(controls.new_client_delivery_allowed(survey))
+            with patch.object(page_access, "enqueue_scheduled_action") as outbox:
+                self.assertEqual(page_access.queue_veo_surveys(NOW, set(daily.GROUPS)), 0)
+                outbox.assert_not_called()
+
+    def test_surveys_skip_paused_and_unapproved_groups(self):
+        other = next(chat for chat in daily.GROUPS if chat != MAIN)
+        with patch.dict(os.environ, {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true", "AUTOMATION_CHAT_IDS": str(MAIN)}), \
+                patch.object(page_access, "enqueue_scheduled_action", return_value=True) as outbox:
+            self.assertEqual(page_access.queue_veo_surveys(NOW, {MAIN, other}), 1)
+            self.assertEqual(outbox.call_args.kwargs["chat_id"], MAIN)
+
+    def test_survey_answer_is_saved_without_becoming_an_availability_vote(self):
+        meta = {"chat_id": MAIN, "payload": {"page_access_version": page_access.version(MAIN), "page_ids": ["p1", "p2"]}}
+        update = {"update_id": 100, "poll_answer": {"poll_id": "access-poll", "option_ids": [0, 1],
+            "user": {"id": 12, "first_name": "Member"}}}
+        with patch.dict(os.environ, {**ENV, "VEO_PAGE_ACCESS_POLLS_ENABLED": "true"}), \
+                patch.object(page_access, "context", return_value=meta), patch.object(page_access, "request", return_value=[{"id": 1}]) as db, \
+                patch.object(cloud_store, "request") as attendance:
+            self.assertTrue(cloud_store.save_poll_answer(update, {MAIN}))
+        self.assertEqual(db.call_args.args[1]["payload"]["page_ids"], ["p1", "p2"])
+        attendance.assert_not_called()
+
 
 class MakataStartupTests(unittest.TestCase):
     def test_ready_button_queues_a_check_without_sending_from_the_webhook(self):

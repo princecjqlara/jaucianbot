@@ -68,7 +68,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.37"
+AUTOMATION_VERSION = "2026-10-22.38"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -861,6 +861,11 @@ def dispatch_route(environ, start_response):
         except Exception as concerns_error:
             queue_errors.append("concerns")
             print(f"Concerns queue failed: {type(concerns_error).__name__}")
+        try:
+            queued += page_access.queue_veo_surveys(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception as page_error:
+            queue_errors.append("veo_page_access")
+            print(f"VEO page-access survey queue failed: {type(page_error).__name__}")
         try:
             queued += organized_reports.queue_automation(dt.datetime.now(dt.timezone.utc), approved)
         except Exception as report_error:

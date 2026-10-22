@@ -31,7 +31,9 @@ def enabled(chat_id: int) -> bool:
 
 
 def version(chat_id: int) -> str:
-    return hashlib.sha256(json.dumps(sorted(page_map(chat_id).items())).encode()).hexdigest()[:12]
+    from daily_automation import GROUPS as VEO_GROUPS
+    scope = "veo-access-survey-v1:" if chat_id in VEO_GROUPS else ""
+    return hashlib.sha256((scope + json.dumps(sorted(page_map(chat_id).items()))).encode()).hexdigest()[:12]
 
 
 def poll_key(chat_id: int, part: int = 0) -> str:
@@ -46,8 +48,8 @@ def poll_record(chat_id: int, part: int = 0) -> dict | None:
 
 
 def queue_poll(chat_id: int, now: dt.datetime) -> int:
-    from automation_controls import new_clients_enabled
-    if not enabled(chat_id) or not new_clients_enabled(chat_id):
+    from automation_controls import page_access_polls_enabled
+    if not enabled(chat_id) or not page_access_polls_enabled(chat_id):
         return 0
     pages = list(page_map(chat_id).items())
     if not pages:
@@ -58,7 +60,7 @@ def queue_poll(chat_id: int, now: dt.datetime) -> int:
         choices = pages[offset:offset + 9]
         queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="poll", scheduled_for=now,
         dedupe_key=f"page-access-send:{chat_id}:{version(chat_id)}" + (f":part:{part}" if part else ""), payload={
-            "question": "Which pages can you receive clients from?" + (f" ({part + 1}/{total})" if total > 1 else ""),
+            "question": "Which pages do you have access to?" + (f" ({part + 1}/{total})" if total > 1 else ""),
             "options": [name for name, _ in choices] + (["None of these pages"] if total > 1 else ["No access"]),
             "is_anonymous": False, "allows_multiple_answers": True,
             "message_thread_id": GROUPS[chat_id]["contact_thread"],
@@ -66,6 +68,12 @@ def queue_poll(chat_id: int, now: dt.datetime) -> int:
             "page_access_part": part,
         }))
     return queued
+
+
+def queue_veo_surveys(now: dt.datetime, allowed: set[int]) -> int:
+    from daily_automation import GROUPS as VEO_GROUPS
+    from automation_controls import enabled_chat_ids
+    return sum(queue_poll(chat, now) for chat in sorted(enabled_chat_ids(allowed).intersection(VEO_GROUPS)))
 
 
 def register_poll(action: dict, message: dict, now: dt.datetime) -> bool:

@@ -57,7 +57,7 @@ class BusinessDefaultTests(unittest.TestCase):
         people += [member(uid, [1, 0, 0]) for uid in range(5, 10)]
         result = defaults.baseline("suno", people)
         self.assertEqual(result["peer_members"], 5)
-        self.assertIsNone(result["capacity_per_day"])
+        self.assertAlmostEqual(result["capacity_per_day"], 1 / 3)
         self.assertAlmostEqual(result["peer_reference_per_day"], 1 / 3)
 
     def test_sub_one_rates_and_safe_targets_keep_precision_without_minimum_one(self):
@@ -170,8 +170,8 @@ class TomorrowSummaryTests(unittest.TestCase):
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
         self.assertIn("VEO: 2 Active · Total 3.50 DD/day", text)
         self.assertIn("Average 1.75/member · Safe total 2.40", text)
-        self.assertIn("SUNO: 1 Active · Personal history 1 · Unknown 0", text)
-        self.assertIn("Known estimate subtotal: 2.00 receipts/day", text)
+        self.assertIn("SUNO: 1 Active · Total 2.00 receipts/day", text)
+        self.assertIn("Personal 1 · Provisional 0 · Unknown 0", text)
         self.assertIn("Shared across businesses: 1", text)
         self.assertNotIn("6.33", text)
 
