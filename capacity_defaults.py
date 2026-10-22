@@ -8,14 +8,14 @@ from fractions import Fraction
 
 import recent_capacity
 
-POLICY = "peer-active-day-median-v2"
-# Reviewed October 8–21 records: 28 current VEO peers and 7 current Suno peers.
-SEEDS = {"veo": 0.5, "suno": 0.6}
+POLICY = "suno-peer-reference-only-v3"
+# VEO retains its existing reviewed planning default.
+SEEDS = {"veo": 0.5}
 MIN_PEERS = 5
 MIN_ACTIVE_DAYS = 3
 MIN_OUTPUT_DAYS = 3
 SEED_REVIEW = {"start_date": "2026-10-08", "end_date": "2026-10-21",
-               "peer_members": {"veo": 28, "suno": 7}}
+               "peer_members": {"veo": 28}}
 
 
 def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = False) -> list[dict]:
@@ -41,6 +41,16 @@ def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = Fa
 
 
 def baseline(business: str, members: list[dict]) -> dict:
+    if business == "suno":
+        # A cohort statistic describes the cohort; it cannot supply an unrated
+        # person's capacity. Include recorded zeros and display the sample size.
+        people = {int(m["user_id"]): m for m in members if m.get("user_id") is not None}
+        plans = [m.get("planning") or {} for m in people.values()]
+        values = [p["active_day_average"] for p in plans
+            if p.get("known_active_days", 0) > 0 and p.get("active_day_average") is not None]
+        return {"policy": POLICY, "business": business, "capacity_per_day": None,
+            "reference_only": True, "peer_reference_per_day": statistics.median(values) if values else None,
+            "peer_members": len(values), "source": "recorded_peer_reference", "unit": "receipt posts/day"}
     # Best output dates omit zero-output Active days and overstate a starting plan.
     # Use typical recorded output on declared Active dates from established peers.
     plans = [m.get("planning") or {} for m in members]
@@ -68,10 +78,18 @@ def peer_label(default: dict) -> str:
 def apply(member: dict, default: dict) -> dict:
     plan = dict(member.get("planning") or {})
     if plan.get("estimated_capacity_per_day") is not None or (
-            "estimated_capacity_per_day" not in plan and plan.get("planning_average_per_day") is not None):
+            "estimated_capacity_per_day" not in plan and plan.get("planning_average_per_day") is not None
+            and not plan.get("provisional")):
         return {**member, "planning": {**plan, "provisional": False, "estimate_origin": "personal_history"}}
     # Output/attendance/peak evidence stays untouched. A prior is never recorded as actual output.
     top = plan.get("top_three_daily_outputs", [])[:2]
+    if default.get("reference_only"):
+        plan.update(estimated_capacity_per_day=None, planning_average_per_day=None, safe_plan_per_day=None,
+            provisional=False, default_policy=POLICY, default_capacity_per_day=None,
+            buffer_fraction=None,
+            default_peer_members=default["peer_members"], personal_output_dates=len(top),
+            estimate_origin="insufficient_personal_history")
+        return {**member, "planning": plan}
     prior = Fraction(default["capacity_per_day"]).limit_denominator(1_000_000)
     blend = (sum(top) + (3 - len(top)) * prior) / 3
     value = min(prior, blend)  # One unusually high date cannot raise a new member above the default.
@@ -92,7 +110,9 @@ def enrich(capacities: dict, teams: set[int]) -> dict:
         default = baseline(business, people)
         defaults[business] = default
         businesses[business] = [apply(m, default) for m in people]
-    result = {**capacities, "defaults": defaults, "businesses": businesses, "members": {}}
+    result = {**capacities, "defaults": defaults, "businesses": businesses, "members": {},
+        "team_references": {str(chat): baseline("suno", capacities["members"].get(str(chat), []))
+            for chat in teams.intersection(SUNO_GROUPS)}}
     lookup = {b: {m["user_id"]: m for m in people} for b, people in businesses.items()}
     for chat, members in capacities["members"].items():
         business = "veo" if int(chat) in GROUPS else "suno"

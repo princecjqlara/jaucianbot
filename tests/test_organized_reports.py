@@ -96,7 +96,7 @@ class OrganizedReportsTests(unittest.TestCase):
         text = reports.capacity_text(SUNO, DAY, [member])
         self.assertIn("Active-day average: 0.50", text)
         self.assertIn("including zero output", text)
-        self.assertIn("pending (2/3 output dates)", text)
+        self.assertIn("Unknown (2/3 output dates)", text)
         self.assertIn("non-bot clients", text)
         self.assertNotIn("delivery dates", text)
 

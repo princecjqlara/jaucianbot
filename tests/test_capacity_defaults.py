@@ -32,7 +32,8 @@ class BusinessDefaultTests(unittest.TestCase):
         veo = defaults.baseline("veo", [])
         suno = defaults.baseline("suno", [])
         self.assertEqual(veo["capacity_per_day"], 0.5)
-        self.assertEqual(suno["capacity_per_day"], 0.6)
+        self.assertIsNone(suno["capacity_per_day"])
+        self.assertIsNone(suno["peer_reference_per_day"])
         self.assertNotEqual(veo["unit"], suno["unit"])
         self.assertEqual(veo["source"], "reviewed_peer_fallback")
 
@@ -55,8 +56,9 @@ class BusinessDefaultTests(unittest.TestCase):
         people = [member(uid, [5, 5, 5], "Unknown") for uid in range(5)]
         people += [member(uid, [1, 0, 0]) for uid in range(5, 10)]
         result = defaults.baseline("suno", people)
-        self.assertEqual(result["peer_members"], 0)
-        self.assertEqual(result["capacity_per_day"], 0.6)
+        self.assertEqual(result["peer_members"], 5)
+        self.assertIsNone(result["capacity_per_day"])
+        self.assertAlmostEqual(result["peer_reference_per_day"], 1 / 3)
 
     def test_sub_one_rates_and_safe_targets_keep_precision_without_minimum_one(self):
         people = [member(uid, [1, 0, 0] * 3) for uid in range(5)]
@@ -67,12 +69,12 @@ class BusinessDefaultTests(unittest.TestCase):
         self.assertAlmostEqual(plan["safe_plan_per_day"], 4 / 15)
 
     def test_small_cohort_keeps_initial_seed_instead_of_following_one_peak(self):
-        self.assertEqual(defaults.baseline("suno", [member(1, [10, 10, 10])])["capacity_per_day"], 0.6)
+        self.assertEqual(defaults.baseline("veo", [member(1, [10, 10, 10])])["capacity_per_day"], 0.5)
 
     def test_peer_label_distinguishes_reviewed_fallback_from_current_cohort(self):
-        fallback = defaults.baseline("suno", [member(1, [10, 10, 10])])
+        fallback = defaults.baseline("veo", [member(1, [10, 10, 10])])
         self.assertEqual(fallback["peer_members"], 1)
-        self.assertEqual(defaults.peer_label(fallback), "7 reviewed peers")
+        self.assertEqual(defaults.peer_label(fallback), "28 reviewed peers")
         live = defaults.baseline("veo", [member(uid, [1, 0, 1, 0, 1, 0]) for uid in range(5)])
         self.assertEqual(defaults.peer_label(live), "5 current peers")
 
@@ -89,10 +91,10 @@ class BusinessDefaultTests(unittest.TestCase):
         self.assertIsNone(person["planning"]["planning_average_per_day"])
 
     def test_one_and_two_outputs_blend_but_cannot_raise_default_until_third_date(self):
-        default = defaults.baseline("suno", [])
-        self.assertEqual(defaults.apply(member(1, [1]), default)["planning"]["planning_average_per_day"], 0.6)
-        self.assertEqual(defaults.apply(member(1, [1, 1]), default)["planning"]["planning_average_per_day"], 0.6)
-        self.assertEqual(defaults.apply(member(1, [10, 9]), default)["planning"]["planning_average_per_day"], 0.6)
+        default = defaults.baseline("veo", [])
+        self.assertEqual(defaults.apply(member(1, [1]), default)["planning"]["planning_average_per_day"], 0.5)
+        self.assertEqual(defaults.apply(member(1, [1, 1]), default)["planning"]["planning_average_per_day"], 0.5)
+        self.assertEqual(defaults.apply(member(1, [10, 9]), default)["planning"]["planning_average_per_day"], 0.5)
         higher_peer_default = {**default, "capacity_per_day": 2}
         self.assertAlmostEqual(defaults.apply(member(1, [1]), higher_peer_default)["planning"]["planning_average_per_day"], 5 / 3)
         self.assertAlmostEqual(defaults.apply(member(1, [1, 1]), higher_peer_default)["planning"]["planning_average_per_day"], 4 / 3)
@@ -168,7 +170,8 @@ class TomorrowSummaryTests(unittest.TestCase):
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
         self.assertIn("VEO: 2 Active · Total 3.50 DD/day", text)
         self.assertIn("Average 1.75/member · Safe total 2.40", text)
-        self.assertIn("SUNO: 1 Active · Total 2.00 receipts/day", text)
+        self.assertIn("SUNO: 1 Active · Personal history 1 · Unknown 0", text)
+        self.assertIn("Known estimate subtotal: 2.00 receipts/day", text)
         self.assertIn("Shared across businesses: 1", text)
         self.assertNotIn("6.33", text)
 

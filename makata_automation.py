@@ -228,6 +228,7 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
         f"Excluded: {len(report['review'])} review posts, {report['coverage']['attachment_only_posts']} image-only receipts. Archive coverage may be incomplete."]
     import suno_capacity
     capacity = suno_capacity.report(now, chat_id=MAKATA_CHAT_ID)
+    reference = None
     import report_topics
     if report_topics.enabled():
         import organized_reports
@@ -237,6 +238,7 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
         current = organized_reports.current_capacities(organized_reports.load_capacity(history_day, now, approved),
             organized_reports.sources(approved), now)
         capacity["members"] = current["members"].get(str(MAKATA_CHAT_ID), [])
+        reference = current.get("team_references", {}).get(str(MAKATA_CHAT_ID))
     lines += ["", "RECEIPT CAPACITY — ESTIMATES"]
     if not capacity["members"]:
         lines.append("Pending receipt and attendance history.")
@@ -244,6 +246,9 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
         plan = member["planning"]
         if plan.get("policy") == "top-three-14d-v1":
             estimate, safe, peak = plan.get("planning_average_per_day"), plan["safe_plan_per_day"], plan["observed_daily_peak"]
+            if estimate is None and plan.get("estimate_origin") == "insufficient_personal_history":
+                lines.append(f"{member['name']}: capacity Unknown · safe target Unknown · recorded peak {peak if peak is not None else 'unknown'}")
+                continue
             label = "provisional" if plan.get("provisional") else "estimate"
             lines.append(f"{member['name']}: {label} {f'{estimate:.2f}/day' if estimate is not None else 'pending'} · "
                 f"safe {str(safe) + '/day' if safe is not None else 'pending'} · recorded peak {peak if peak is not None else 'unknown'}")
@@ -253,7 +258,18 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
         lines.append(f"{member['name']}: observed {f'{avg:.2f}/receipt day' if avg is not None else 'pending'} · "
             f"conservative {f'{safe:.2f}/day' if safe is not None else 'pending'} · typical {str(reach) + '/day' if reach is not None else 'pending'}")
     lines.append("Counts all readable receipts, including clients outside the bot. Production limits remain unverified.")
+    if reference is not None:
+        lines += organized_reports.suno_reference_text(reference, "receipt posts/day")
     return "\n".join(lines)
+
+
+def previous_report_parts(day: dt.date, target: int) -> dict[int, int]:
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({
+        "select": "dedupe_key,telegram_message_id", "chat_id": f"eq.{target}",
+        "dedupe_key": f"like.makata-daily-report:v*:{day}:{target}:part:*",
+        "telegram_message_id": "gt.0", "order": "id.asc", "limit": 1000,
+    })) or []
+    return {int(row["dedupe_key"].rsplit(":", 1)[-1]): int(row["telegram_message_id"]) for row in rows}
 
 
 def queue_reports(now: dt.datetime, approved: set[int]) -> int:
@@ -273,7 +289,8 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     queued = 0
     if not targets:
         return 0
-    base = f"makata-daily-report:v2:{day}"
+    reference_policy = report_topics.enabled()
+    base = f"makata-daily-report:v{3 if reference_policy else 2}:{day}"
     missing = [target for target in targets if _read(f"{base}:complete:{target}") is None]
     if not missing:
         return 0
@@ -281,11 +298,21 @@ def queue_reports(now: dt.datetime, approved: set[int]) -> int:
     if saved is None:
         saved = _save(base + ":snapshot", {"parts": split_message(build_report(day, now))}, now)
     for target in missing:
+        prior = previous_report_parts(day, target) if reference_policy else {}
         for number, text in enumerate(saved["parts"], 1):
             queued += int(enqueue_scheduled_action(chat_id=target, action_type="message", scheduled_for=now,
                 dedupe_key=f"{base}:{target}:part:{number}", payload={"text": text,
                     "disable_notification": number > 1, "makata_private_report": target > 0,
-                    "makata_source_chat_id": MAKATA_CHAT_ID, "makata_report_date": day.isoformat()}))
+                    "makata_source_chat_id": MAKATA_CHAT_ID, "makata_report_date": day.isoformat(),
+                    **({"edit_message_id": prior[number]} if number in prior else {})}))
+        for number, message_id in prior.items():
+            if number <= len(saved["parts"]):
+                continue
+            queued += int(enqueue_scheduled_action(chat_id=target, action_type="message", scheduled_for=now,
+                dedupe_key=f"{base}:{target}:cleanup:{message_id}", payload={"text": "Makata report updated above.",
+                    "edit_message_id": message_id, "disable_notification": True,
+                    "makata_private_report": target > 0, "makata_source_chat_id": MAKATA_CHAT_ID,
+                    "makata_report_date": day.isoformat()}))
         record_automation_marker(MAKATA_CHAT_ID, f"{base}:complete:{target}", now)
     return queued
 

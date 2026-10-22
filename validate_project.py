@@ -28,6 +28,7 @@ REQUIRED_TEST_FILES = (
     "test_veo_client_feature_switch.py",
     "test_capacity_defaults.py",
     "test_availability_reminders.py",
+    "test_suno_reference_defaults.py",
 )
 
 
