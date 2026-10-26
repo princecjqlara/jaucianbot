@@ -51,8 +51,8 @@ def reviewed_planning(member: dict, end: dt.date) -> dict:
     """
     import report_topics
     if report_topics.enabled():
-        import recent_capacity
-        return recent_capacity.planning(member, end)
+        import veo_forecast
+        return veo_forecast.planning(member, end)
     base = planning(member, end)
     active = [d["done_deals"] for d in member.get("daily", [])
               if base["window_start"] <= d["date"] <= base["window_end"] and d["attendance"] == "Active"]
@@ -92,6 +92,8 @@ def backtest(members: list[dict], end: dt.date) -> dict:
             predictions = {"old_rounded_plan": old["safe_plan_per_day"], "old_three_day_target": old["reachable_target_per_day"],
                            "active_day_mean": recent["planning_average_per_day"], "buffered_mean": recent["safe_plan_per_day"]}
             for label, predicted in predictions.items():
+                if predicted is None:
+                    continue
                 s = sums[label]
                 s["count"] += 1
                 s["predicted"] += predicted
@@ -301,8 +303,8 @@ def backread(allowed: set[int], now: dt.datetime, *, end: dt.date | None = None)
 def definitions() -> dict:
     import report_topics
     if report_topics.enabled():
-        import recent_capacity
-        return {**DEFINITIONS, "planning": recent_capacity.DEFINITION}
+        import veo_forecast
+        return {**DEFINITIONS, "planning": veo_forecast.DEFINITION}
     return DEFINITIONS
 
 

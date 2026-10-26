@@ -34,7 +34,9 @@ def delivery_allowed(action: dict) -> bool:
         if p.get("capacity_member_ids") and not p.get("nightly_report_policy"):
             from member_presence import records, confirmed
             cached = records(int(p["report_source_chat_id"]))
-            if any(not confirmed(cached.get(int(uid), {}), dt.datetime.now(dt.timezone.utc)) for uid in p["capacity_member_ids"]):
+            if any(cached.get(int(uid), {}).get("is_bot") is True or
+                   not confirmed(cached.get(int(uid), {}), dt.datetime.now(dt.timezone.utc))
+                   for uid in p["capacity_member_ids"]):
                 return False
     legacy = key.startswith(("daily-member-capacity:", "daily-suno-capacity:", "tomorrow-veo-capacity:",
         "daily-concerns:", "concerns-started:", "daily-report:", "historical-report:",

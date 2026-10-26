@@ -16,7 +16,7 @@ _suno_pages_cache = None
 
 def page_map(chat_id: int) -> dict[str, str]:
     if GROUPS[chat_id].get("client_source") != "suno":
-        return GROUPS[chat_id]["crm_pages"]
+        return GROUPS[chat_id].get("page_access_pages", GROUPS[chat_id]["crm_pages"])
     global _suno_pages_cache
     if _suno_pages_cache is None or time.monotonic() >= _suno_pages_cache[0]:
         from suno_store import suno_pages
@@ -31,9 +31,25 @@ def enabled(chat_id: int) -> bool:
 
 
 def version(chat_id: int) -> str:
+    return _catalog_version(chat_id, page_map(chat_id))
+
+
+def _catalog_version(chat_id: int, pages: dict[str, str]) -> str:
     from daily_automation import GROUPS as VEO_GROUPS
     scope = "veo-access-survey-v1:" if chat_id in VEO_GROUPS else ""
-    return hashlib.sha256((scope + json.dumps(sorted(page_map(chat_id).items()))).encode()).hexdigest()[:12]
+    return hashlib.sha256((scope + json.dumps(sorted(pages.items()))).encode()).hexdigest()[:12]
+
+
+def _compatible_catalogs(chat_id: int) -> dict[str, dict[str, str]]:
+    """Keep old votes scoped to the unchanged pages when a survey expands."""
+    pages = page_map(chat_id)
+    catalogs = {version(chat_id): pages}
+    config = GROUPS[chat_id]
+    previous = config.get("crm_pages", {})
+    if (config.get("page_access_pages") and previous and previous != pages
+            and all(pages.get(name) == pid for name, pid in previous.items())):
+        catalogs[_catalog_version(chat_id, previous)] = previous
+    return catalogs
 
 
 def poll_key(chat_id: int, part: int = 0) -> str:
@@ -107,7 +123,7 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
     if not poll:
         return None
     chat_id, meta = int(poll["chat_id"]), poll["payload"]
-    if meta.get("page_access_version") != version(chat_id):
+    if meta.get("page_access_version") not in _compatible_catalogs(chat_id):
         return True  # An obsolete poll cannot grant access to the current pages.
     user, selected = answer.get("user") or {}, answer.get("option_ids") or []
     if not user.get("id") or user.get("is_bot") or any(
@@ -118,7 +134,7 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
     p = {"user_id": int(user["id"]), "user_name": " ".join(filter(None, (
         user.get("first_name"), user.get("last_name")))) or user.get("username") or str(user["id"]),
         "page_ids": pages, "answered": bool(selected),
-        "page_access_version": version(chat_id), "update_id": int(update.get("update_id") or 0)}
+        "page_access_version": meta["page_access_version"], "update_id": int(update.get("update_id") or 0)}
     part = int(meta.get("page_access_part") or 0)
     p["page_access_part"] = part
     key = f"page-access-member:{chat_id}:{user['id']}" + (f":part:{part}" if part else "")
@@ -134,6 +150,9 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
         if not rows:
             raise RuntimeError("Page-access record missing")
         row = rows[0]
+        if (p["page_access_version"] != version(chat_id)
+                and row["payload"].get("page_access_version") == version(chat_id)):
+            return True  # A legacy poll cannot overwrite a vote in the expanded poll.
         if int(row["payload"].get("update_id", -1)) >= p["update_id"]:
             return True
         if request("scheduled_actions?" + urllib.parse.urlencode({
@@ -146,25 +165,38 @@ def save_answer(update: dict, allowed: set[int]) -> bool | None:
 def answer_records(chat_id: int) -> list[dict]:
     if not enabled(chat_id):
         return []
+    catalogs = _compatible_catalogs(chat_id)
+    versions = list(catalogs)
     rows = []
     while True:
         batch = request("scheduled_actions?" + urllib.parse.urlencode({
             "select": "payload", "chat_id": f"eq.{chat_id}",
             "dedupe_key": f"like.page-access-member:{chat_id}:*",
-            "payload->>page_access_version": f"eq.{version(chat_id)}",
+            "payload->>page_access_version": (f"eq.{versions[0]}" if len(versions) == 1
+                else "in.(" + ",".join(versions) + ")"),
             "order": "id.asc", "offset": len(rows), "limit": 1000,
         })) or []
         rows.extend(batch)
         if len(batch) < 1000:
             break
-    return [row["payload"] for row in rows]
+    answers = []
+    for row in rows:
+        p = row["payload"]
+        catalog = catalogs.get(p.get("page_access_version"))
+        if catalog is None:
+            continue
+        part = int(p.get("page_access_part") or 0)
+        answers.append({**p, "answered_page_ids": list(catalog.values())[part * 9:(part + 1) * 9]})
+    return answers
 
 
 def answered_members(chat_id: int, part: int = 0) -> set[int]:
     # Legacy empty page lists cannot distinguish No access from a withdrawal.
     # Preserve them as answered to avoid incorrectly tagging a No access voter.
+    current_pages = set(list(page_map(chat_id).values())[part * 9:(part + 1) * 9])
     return {int(p["user_id"]) for p in answer_records(chat_id)
-        if int(p.get("page_access_part") or 0) == part and p.get("answered", True)}
+        if int(p.get("page_access_part") or 0) == part and p.get("answered", True)
+        and current_pages.issubset(p.get("answered_page_ids", current_pages))}
 
 
 def members(chat_id: int) -> dict[int, set[str]]:
@@ -193,5 +225,5 @@ def scoped_voters(chat_id: int, users: list[dict], work_date: dt.date) -> list[d
     if not config.get("client_page_scope") or not enabled(chat_id) or work_date.isoformat() < config.get("page_scope_start", ""):
         return users
     access = members(chat_id)
-    valid = set(page_map(chat_id).values())
+    valid = set(config["crm_pages"].values())
     return [user for user in users if valid.intersection(access.get(int(user["user_id"]), set()))]

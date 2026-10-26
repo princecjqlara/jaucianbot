@@ -26,7 +26,7 @@ class ReportReplacementTests(unittest.TestCase):
         stack.enter_context(patch.object(reports, "_read", side_effect=saved.get))
         stack.enter_context(patch.object(reports, "_save", side_effect=lambda key, value, now: saved.setdefault(key, value)))
         stack.enter_context(patch.object(reports, "load_capacity", return_value={"date": str(DAY), "members": {str(VEO): []}}))
-        stack.enter_context(patch.object(reports, "current_capacities", side_effect=lambda raw, *args: raw))
+        stack.enter_context(patch.object(reports, "current_capacities", side_effect=lambda raw, *args, **kwargs: raw))
         stack.enter_context(patch.object(reports, "previous_messages", return_value={(VEO, "sales"): [10], (0, "summary"): [11]}))
         stack.enter_context(patch.object(reports, "previous_texts", return_value={10: "Old sales", 11: "Old summary"}))
         stack.enter_context(patch.object(reports, "previous_staffing_id", return_value=20))

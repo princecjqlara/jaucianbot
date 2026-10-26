@@ -8,6 +8,7 @@ import capacity_defaults
 import daily_automation as daily
 import organized_reports as reports
 import page_capacity as pages
+import veo_forecast
 
 TODAY = dt.date(2026, 10, 22)
 NOW = dt.datetime(2026, 10, 22, 7, tzinfo=dt.timezone.utc)
@@ -19,8 +20,10 @@ MAKATA = daily.MAKATA_CHAT_ID
 
 def member(uid, rate):
     return {"user_id": uid, "name": str(uid), "planning": {
+        "policy": veo_forecast.POLICY, "known_active_days": 3,
+        "uncalibrated_forecast_per_day": rate, "window_end": "2026-10-21",
         "estimated_capacity_per_day": rate, "planning_average_per_day": rate,
-        "safe_plan_per_day": int(rate * 0.8)}}
+        "safe_plan_per_day": rate * 0.8}}
 
 
 def inputs(mapping, access, answered=None):
@@ -79,7 +82,7 @@ class PageCapacityTests(unittest.TestCase):
         survey = {VEO: inputs({"A": "a"}, {})}
         data = pages.build(TODAY, {VEO}, {VEO: [{"user_id": 1}]}, self.capacities(), survey)
         text = "\n".join(pages.render(data))
-        self.assertIn("A: 0 active · Avg pending access", text)
+        self.assertIn("A: page access pending for 1 Active member(s)", text)
         self.assertIn("Page-access votes pending: 1", text)
 
     def test_explicit_no_access_is_not_treated_as_a_missing_vote(self):
@@ -106,7 +109,8 @@ class PageCapacityTests(unittest.TestCase):
         survey = {VEO: inputs({"A": "a", "B": "b"}, {7: {"a"}})}
         result = pages.build(TODAY, {VEO}, {VEO: [{"user_id": 7}]}, self.capacities(), survey)
         a, b = result["businesses"][0]["pages"]
-        self.assertEqual((a["average"], a["provisional"], a["conservative"]), (0.5, 1, 0.4))
+        self.assertEqual((a["average"], a["provisional"]), (0.2, 1))
+        self.assertAlmostEqual(a["conservative"], 0.16)
         self.assertEqual(b["active"], 0)
 
     def test_unknown_capacity_does_not_become_an_average_for_all_active_members(self):
@@ -146,6 +150,24 @@ class PageCapacityTests(unittest.TestCase):
 
 
 class PageAccessLoadingTests(unittest.TestCase):
+    def test_azshinari_is_reported_pending_until_expanded_access_is_confirmed(self):
+        sama = "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"
+        azshinari = "d3f40d05-aa54-498e-bff7-e9c4410b7471"
+        caps = {"members": {str(VEO): [member(1, 3)]}}
+        rosters = {VEO: [{"user_id": 1}]}
+        legacy = {"user_id": 1, "page_ids": [sama], "answered": True, "answered_page_ids": [sama]}
+        with patch.object(pages.page_access, "answer_records", return_value=[legacy]):
+            survey = pages.load({VEO})
+        text = "\n".join(pages.render(pages.build(TODAY, {VEO}, rosters, caps, survey)))
+        self.assertIn("Sama Ka Na Media: 1 active", text)
+        self.assertIn("Azshinari: page access pending for 1 Active member(s).", text)
+        expanded = {**legacy, "page_ids": [sama, azshinari], "answered_page_ids": [sama, azshinari]}
+        with patch.object(pages.page_access, "answer_records", return_value=[expanded]):
+            survey = pages.load({VEO})
+        text = "\n".join(pages.render(pages.build(TODAY, {VEO}, rosters, caps, survey)))
+        self.assertIn("Azshinari: 1 active", text)
+        self.assertIn("Sama Ka Na Media: 1 active", text)
+
     def test_load_uses_answers_while_veo_new_client_assignment_is_off(self):
         answers = [{"user_id": 1, "page_ids": ["a"], "answered": True},
             {"user_id": 2, "page_ids": [], "answered": True},

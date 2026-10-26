@@ -50,6 +50,7 @@ import organized_reports
 import member_presence
 import availability_reminders
 import page_access_reminders
+import team_surveys
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -69,7 +70,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-22.45"
+AUTOMATION_VERSION = "2026-10-26.1"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -456,6 +457,27 @@ def report_members_route(environ, start_response):
         return response(start_response, 503, {"ok": False})
 
 
+def report_surveys_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        data = read_json_body(environ)
+        groups = data.get("groups")
+        if not isinstance(groups, list) or any(isinstance(chat, bool) or not isinstance(chat, int) for chat in groups):
+            raise ValueError("Explicit numeric group IDs are required")
+        now = dt.datetime.now(dt.timezone.utc)
+        approved = allowed_chat_ids()
+        makata_automation.hydrate(approved)
+        result = team_surveys.request_refresh(groups, dt.date.fromisoformat(data["work_date"]),
+            now, approved, str(data.get("request_id", "")))
+        return response(start_response, 200, result)
+    except (ValueError, KeyError, TypeError):
+        return response(start_response, 400, {"ok": False, "error": "invalid_survey_request"})
+    except Exception as error:
+        print(f"Staffing survey request failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "survey_request_unavailable"})
+
+
 def messages_route(environ, start_response):
     if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
         return response(start_response, 401, {"ok": False})
@@ -682,6 +704,13 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
             if not automation_controls.new_client_delivery_allowed(action):
                 if not defer_scheduled_action(action):
                     raise RuntimeError("disabled new-client action was not deferred")
+                continue
+            if not team_surveys.prepare_delivery(action, dt.datetime.now(dt.timezone.utc)):
+                if action["payload"].get("_staffing_survey_obsolete"):
+                    if not finish_scheduled_action(action["id"], success=True, claim=action):
+                        raise RuntimeError("obsolete survey request was not finalized")
+                else:
+                    defer_scheduled_action(action)
                 continue
             now = dt.datetime.now(dt.timezone.utc)
             import nightly_reports
@@ -1189,6 +1218,10 @@ def app(environ, start_response):
         return report_topics_route(environ, start_response)
     if path == "/api/reports/members" and method == "GET":
         return report_members_route(environ, start_response)
+    if path == "/api/reports/surveys":
+        if method != "POST":
+            return response(start_response, 405, {"ok": False})
+        return report_surveys_route(environ, start_response)
     if path == "/api/suno/makata" and method in {"GET", "POST"}:
         return makata_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:

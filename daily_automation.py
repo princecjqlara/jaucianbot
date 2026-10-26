@@ -72,6 +72,10 @@ GROUPS = {
         "freebie": 26249,
         "contact_thread": 27622,
         "crm_pages": {"Sama Ka Na Media": "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"},
+        "page_access_pages": {
+            "Sama Ka Na Media": "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7",
+            "Azshinari": "d3f40d05-aa54-498e-bff7-e9c4410b7471",
+        },
         "client_page_scope": "Sama Ka Na Media",
         "page_scope_start": "2026-10-22",
         "active": 25893,

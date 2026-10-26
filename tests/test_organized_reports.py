@@ -7,6 +7,7 @@ from unittest.mock import patch
 import app
 import organized_reports as reports
 import report_topics
+import veo_forecast
 from daily_automation import DAILY_REPORTS_CHAT_ID as TARGET, TRABAWHO_CHAT_ID as SUNO, GROUPS
 from test_wsgi import call_app
 from test_page_capacity_reports import fixture_inputs
@@ -112,6 +113,7 @@ class OrganizedReportsTests(unittest.TestCase):
             "organized_staffing_version": reports.VERSION,
             "report_source_ids": [VEO], "report_source_chat_id": VEO}, "repeat_interval_minutes": 5}
         capacity = {"members": {str(VEO): [{"user_id": 7, "name": "A", "planning": {
+            "policy": veo_forecast.POLICY, "known_active_days": 3, "uncalibrated_forecast_per_day": 1.5,
             "planning_average_per_day": 1.5, "safe_plan_per_day": 1.2}}]}}
         roster = {VEO: [{"user_id": 7}]}
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}), \

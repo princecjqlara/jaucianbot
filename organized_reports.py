@@ -19,6 +19,7 @@ import suno_capacity
 import recent_capacity
 import member_presence
 import capacity_defaults
+import veo_forecast
 import page_capacity
 import nightly_reports
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
@@ -28,7 +29,7 @@ from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS
 from trabawho_receipts import receipt_report
 
 VERSION = 8
-CAPACITY_CACHE_VERSION = 8
+CAPACITY_CACHE_VERSION = 11
 
 
 def sources(approved: set[int]) -> set[int]:
@@ -138,23 +139,25 @@ def load_capacity(day: dt.date, now: dt.datetime, approved: set[int]) -> dict:
     if saved is not None:
         return saved
     veo = teams.intersection(GROUPS)
-    start = day - dt.timedelta(days=recent_capacity.WINDOW_DAYS - 1)
+    # Keep enough completed history to replay earlier forecasts for calibration.
+    import veo_forecast_offers
+    start = day - dt.timedelta(days=veo_forecast_offers.HISTORY_DAYS - 1)
     with ThreadPoolExecutor(max_workers=4) as pool:
         groups = list(pool.map(lambda chat: member_capacity.archive_report(chat, start, day), sorted(veo)))
     combined = member_capacity.combined(groups)["members"] if groups else []
     history = member_capacity.backread(veo, now, end=day)["combined"]["members"] if veo else []
     historical = {int(m["user_id"]): m for m in history if m.get("user_id") is not None}
     for member in combined:
-        member["planning"] = recent_capacity.planning(member, day)
+        member["planning"] = veo_forecast.planning(member, day)
         old = historical.get(member.get("user_id"))
         if old:
             peak = old["observed_daily_peak"]
             member["planning"]["historical_daily_peak"] = peak
             member["planning"]["historical_peak_date"] = max((d["date"] for d in old["daily"] if peak and d["done_deals"] == peak), default=None)
     members = {}
-    cutoff = start.isoformat()
+    cutoff = (day - dt.timedelta(days=recent_capacity.WINDOW_DAYS - 1)).isoformat()
     for chat in sorted(veo):
-        members[str(chat)] = [{k: v for k, v in member.items() if k != "daily"}
+        members[str(chat)] = [member
             for member in combined if GROUPS[chat]["name"] in member.get("teams", [])
             and (member.get("last_activity_date") or "") >= cutoff]
     for chat in sorted(teams.intersection(SUNO_GROUPS)):
@@ -164,14 +167,23 @@ def load_capacity(day: dt.date, now: dt.datetime, approved: set[int]) -> dict:
     return _save(key, {"date": day.isoformat(), "members": members}, now)
 
 
-def current_capacities(capacities: dict, teams: set[int], now: dt.datetime) -> dict:
+def current_capacities(capacities: dict, teams: set[int], now: dt.datetime, *, forecast_date: dt.date | None = None) -> dict:
     result = {**capacities, "members": {}, "membership": {}}
     budget = {"remaining": 32}
     for chat in sorted(teams):
-        current, coverage = member_presence.filter_current(chat, capacities["members"].get(str(chat), []), now, budget=budget)
+        current, coverage = member_presence.filter_current(chat, capacities["members"].get(str(chat), []), now, budget=budget, humans_only=True)
         result["members"][str(chat)] = current
         result["membership"][str(chat)] = coverage
-    return capacity_defaults.enrich(result, teams) if result.get("date") else result
+    result = capacity_defaults.enrich(result, teams) if result.get("date") else result
+    if forecast_date is not None and result.get("date"):
+        import live_forecast
+        scope_people = {int(p["user_id"]): p for chat in teams.intersection(GROUPS)
+            for p in capacities["members"].get(str(chat), []) if p.get("user_id") is not None}
+        complete = not any(c.get("pending_verification") for chat,c in result["membership"].items()
+            if int(chat) in GROUPS)
+        result = live_forecast.enrich(result, teams, dt.date.fromisoformat(result["date"]), forecast_date, now,
+            scope_people=list(scope_people.values()), complete=complete)
+    return result
 
 
 def payroll_count(chat: int, day: dt.date) -> dict | None:
@@ -277,6 +289,8 @@ def finances(chat: int, day: dt.date) -> dict:
 
 
 def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
+    if chat in GROUPS:
+        return veo_capacity_text(chat, day, members)
     unit = "receipt posts/day" if chat in SUNO_GROUPS else "Done Deals/day"
     day = max((dt.date.fromisoformat(m["planning"]["window_end"]) for m in members
         if (m.get("planning") or {}).get("window_end")), default=day)
@@ -325,6 +339,74 @@ def capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             "Safe targets are planning estimates, not guaranteed maximums. Under 1/day does not mean unable to work.",
             "Member history combines VEO teams; team figures may overlap."]
     lines += ["Verified current members only. Readable export/live-bot records; missing or unreadable posts are excluded."]
+    return "\n".join(lines)
+
+
+def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
+    day = max((dt.date.fromisoformat(m["planning"]["window_end"]) for m in members
+        if (m.get("planning") or {}).get("window_end")), default=day)
+    start = day - dt.timedelta(days=veo_forecast.WINDOW_DAYS - 1)
+    lines = ["RECORDED DD FORECAST", AVAILABILITY_GROUPS[chat]["name"],
+        f"{start} to {day} (PHT) · Done Deals/day"]
+    work_dates = {(m.get("planning") or {}).get("work_date") for m in members}
+    work_dates.discard(None)
+    if work_dates:
+        lines[-1] = f"Forecast for {max(work_dates)} (PHT) · Completed history through {day}"
+    for member in sorted(members, key=lambda m: m["name"].casefold()):
+        p = member.get("planning") or {}
+        lines += ["", " ".join(member["name"].split())]
+        if p.get("forecast_excluded"):
+            lines.append("Excluded from forecast by manager request; recorded history retained.")
+        elif p.get("planning_average_per_day") is not None:
+            label = ("Sparse-history trial forecast" if p.get("known_active_days", 0) else "Trial default forecast") if p.get("provisional") else "Personal forecast"
+            lines.append(f"{label}: {p['planning_average_per_day']:.2f}/day")
+            if p.get("safe_plan_per_day") is not None:
+                lines.append(f"80% planning buffer: {p['safe_plan_per_day']:.2f}/day")
+            if p.get("provisional"):
+                lines.append(f"Personal history: {p.get('known_active_days', 0)}/3 Active dates; weak starting prior 0.20/day.")
+            if p.get("calibration_available"):
+                lines.append(f"Recent forecast correction: x{p['calibration_factor']:.2f}.")
+            else:
+                lines.append("Insufficient correction history; uncalibrated trial.")
+            if p.get("selected_model"):
+                if p.get("offer_selection") or p.get("day_selection"):
+                    lines.append("Personal forecast retains adjustments only when earlier evidence supports them.")
+                else:
+                    label = "recent smoothed 7-day rate" if p["selected_model"] == veo_forecast.recent.POLICY else "14-day reference"
+                    lines.append(f"Selected personal model: {label}.")
+                checks = (p.get("offer_selection") or p.get("day_selection") or p.get("selection") or {}).get("scored_person_days", 0)
+                lines.append(f"Earlier personal forecasts compared: {checks}; selection is not a future accuracy guarantee.")
+        else:
+            lines.append("Forecast: pending history/default.")
+        if p.get("active_day_average") is not None:
+            lines.append(f"Active-day average: {p['active_day_average']:.2f} ({p['known_active_days']} dates, including zero output)")
+        if p.get("best_three_stretch_per_day") is not None:
+            lines.append(f"Best-three stretch reference: {p['best_three_stretch_per_day']:.2f}/day")
+        if p.get("observed_daily_peak") is not None:
+            lines.append(f"Recorded peak: {p['observed_daily_peak']}/day")
+        else:
+            lines.append("Output average / peak: unknown")
+        if p.get("inactive_output_conflicts"):
+            lines.append(f"Review: {p['inactive_output_conflicts']} Inactive/output conflict(s); excluded from Active-day rates.")
+        if p.get("daily_capacity_change"):
+            lines.append(f"Forecast change: {p['daily_capacity_change']}")
+    if not members:
+        lines += ["", "No verified current members with readable recent history."]
+    if work_dates:
+        lines += ["", "Personal forecasts use prior Active-date output, including zero-output Active dates.",
+            "Dated offer evidence is used only when supported by earlier personal and recent comparisons.",
+            "Insufficient evidence retains the prior personal estimate. Sparse histories remain provisional.",
+            "The 80% buffer is a planning choice, not a guaranteed production limit.",
+            "Shared people make team/page figures overlap. All verified current human members, including Melo, are eligible.",
+            "Missing attendance and page access remain unknown; paid-sale records do not measure completed production."]
+        return "\n".join(lines)
+    lines += ["", "Reference: 14-day Active mean including zeros; under 3 Active dates uses the 0.20 trial default.",
+        "Recent alternative: (Active DD + 3 x 0.20) / (Active dates + 3), over 7 completed dates.",
+        "Use the alternative only when at least 3 earlier personal forecasts have lower absolute error and no higher squared error.",
+        "Recent correction compares earlier forecasts with matched Active-date DD; requires 3 dates and 20 person-days.",
+        "Some people still worsen. The 80% buffer is a planning choice; forecasts are trials pending future validation.",
+        "History combines VEO teams; shared people make team/page figures overlap. All current human members are eligible.",
+        "Verified current members only. Readable export/live-bot records; Unknown attendance stays Unknown."]
     return "\n".join(lines)
 
 
@@ -485,7 +567,7 @@ def _rosters(teams: set[int], day: dt.date, now: dt.datetime | None = None) -> d
         if users is None:
             result[chat] = None
             continue
-        current, coverage = member_presence.filter_current(chat, users, now, budget=budget)
+        current, coverage = member_presence.filter_current(chat, users, now, budget=budget, humans_only=True)
         result[chat] = VerifiedRoster(current, coverage["unverified"])
     return result
 
@@ -495,7 +577,9 @@ def forecast(roster: list[dict] | None, members: list[dict], default: dict | Non
         return {"active": None, "rated": 0, "provisional": 0, "unknown": None,
             "average": None, "total": None, "conservative": None}
     lookup = {int(m["user_id"]): m for m in members if m.get("user_id") is not None}
-    unique = {int(user["user_id"]) for user in roster}
+    recorded = {int(user["user_id"]) for user in roster}
+    unique = {uid for uid in recorded if not (default and default.get("business") == "veo"
+              and uid in veo_forecast.EXCLUDED_USER_IDS)}
     people = [lookup.get(uid) or {"user_id": uid, "planning": {}} for uid in unique]
     if default is not None:
         people = [capacity_defaults.apply(m, default) for m in people]
@@ -504,7 +588,8 @@ def forecast(roster: list[dict] | None, members: list[dict], default: dict | Non
     has_total = bool(rated) or not unique
     total = sum(p["planning_average_per_day"] for p in rated) if has_total else None
     provisional = sum(bool(p.get("provisional")) for p in rated)
-    return {"active": len(unique), "rated": len(rated) - provisional, "provisional": provisional,
+    return {"active": len(unique), "excluded": len(recorded) - len(unique),
+        "recorded_active": len(recorded), "rated": len(rated) - provisional, "provisional": provisional,
         "unknown": len(unique) - len(rated),
         "average": total / len(rated) if rated else None, "total": total,
         "conservative": sum(p["safe_plan_per_day"] for p in rated)
@@ -562,7 +647,8 @@ def queue_automation(now: dt.datetime, approved: set[int]) -> int:
         local = now.astimezone(MANILA)
         # Prewarm history and bounded membership checks without publishing.
         if local.hour == 23 and local.minute >= 45:
-            current_capacities(load_capacity(local.date() - dt.timedelta(days=1), now, approved), sources(approved), now)
+            current_capacities(load_capacity(local.date() - dt.timedelta(days=1), now, approved), sources(approved), now,
+                               forecast_date=local.date() + dt.timedelta(days=1))
         return 0
     return _queue_reports(now, approved, report_day=day, nightly=True)
 
@@ -581,14 +667,15 @@ def _queue_reports(now: dt.datetime, approved: set[int], *, report_day: dt.date 
     if nightly and _read(f"nightly-report-complete:{day}:{_scope(teams)}") is not None:
         return 0
     history_day = day - dt.timedelta(days=1) if nightly else day
-    capacities = current_capacities(load_capacity(history_day, now, approved), teams, now)
+    capacities = current_capacities(load_capacity(history_day, now, approved), teams, now,
+                                    forecast_date=local.date() + dt.timedelta(days=1))
     # Finish the bounded membership sweep before publishing a partial roster.
     # Fresh API failures remain unknown and are omitted rather than guessed.
     if any(c.get("pending_verification") for c in capacities.get("membership", {}).values()):
         return 0
     replacement = {} if nightly else replacement_request(day)
     revision = str(replacement.get("request_id") or "")
-    membership_scope = "nightly2359" if nightly else hashlib.sha256(str((capacity_defaults.POLICY,
+    membership_scope = "nightly2359" if nightly else hashlib.sha256(str((capacity_defaults.POLICY, veo_forecast.POLICY,
         sorted((chat, sorted(m["user_id"] for m in capacities["members"].get(str(chat), [])))
         for chat in teams))).encode()).hexdigest()[:10]
     suffix = f":refresh:{revision}" if revision else ""
@@ -633,7 +720,9 @@ def _queue_reports(now: dt.datetime, approved: set[int], *, report_day: dt.date 
             snapshot["summary"] += cutoff
             _save(f"nightly-personal-capacity:{day}:{_scope(teams)}", {"businesses": {
                 business: [{"user_id": m["user_id"], "planning": {
-                    "estimated_capacity_per_day": m["planning"].get("estimated_capacity_per_day")}} for m in people]
+                    key: m["planning"].get(key) for key in (
+                        "estimated_capacity_per_day", "policy", "calibration_factor", "uncalibrated_forecast_per_day")}}
+                    for m in people]
                 for business, people in capacities["businesses"].items()}}, now)
         saved = _save(key + ":snapshot", snapshot, now)
     def enqueue(**action):
@@ -728,7 +817,7 @@ def staffing_context(now: dt.datetime, teams: set[int], cache: dict) -> tuple:
         raw = _read(capacity_key(today - dt.timedelta(days=1), teams))
         if raw is None:
             raise RuntimeError("Staffing capacity snapshot is not available yet")
-        capacities = current_capacities(raw, teams, now)
+        capacities = current_capacities(raw, teams, now, forecast_date=today + dt.timedelta(days=1))
         capacities["replacement_id"] = replacement_request(today - dt.timedelta(days=1)).get("request_id")
         capacities["page_inputs"] = page_capacity.load(teams)
         cache[key] = capacities, _rosters(teams, today, now), _rosters(teams, today + dt.timedelta(days=1), now)

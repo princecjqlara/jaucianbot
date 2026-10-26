@@ -19,6 +19,85 @@ CHAT = ready.OLLIE
 PAGES = list(GROUPS[CHAT]["crm_pages"].items())
 
 
+class ExpandedVeoPageAccessTests(unittest.TestCase):
+    CHAT = -1003647732254
+    SAMA = "838ba6f7-7d6d-4f5e-a7cd-11374960d0b7"
+    AZSHINARI = "d3f40d05-aa54-498e-bff7-e9c4410b7471"
+
+    def legacy_version(self):
+        return access._catalog_version(self.CHAT, GROUPS[self.CHAT]["crm_pages"])
+
+    def answer(self, *, current=False, pages=None, answered=True):
+        return {"user_id": 11, "page_access_part": 0, "page_ids": pages or [],
+            "answered": answered, "update_id": 100,
+            "page_access_version": access.version(self.CHAT) if current else self.legacy_version()}
+
+    def test_expanded_survey_keeps_assignments_sama_only(self):
+        with patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"}), \
+                patch.object(access, "enqueue_scheduled_action", return_value=True) as queue:
+            self.assertEqual(access.queue_poll(self.CHAT, NOW), 1)
+        p = queue.call_args.kwargs["payload"]
+        self.assertEqual(p["options"], ["Sama Ka Na Media", "Azshinari", "No access"])
+        self.assertEqual(p["page_access_ids"], [self.SAMA, self.AZSHINARI])
+        self.assertNotEqual(p["page_access_version"], self.legacy_version())
+        self.assertEqual(GROUPS[self.CHAT]["crm_pages"], {"Sama Ka Na Media": self.SAMA})
+
+    def test_earlier_answers_cover_sama_only_and_do_not_suppress_new_survey_reminder(self):
+        for pages in ([self.SAMA], []):
+            with self.subTest(pages=pages), patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"}), \
+                    patch.object(access, "request", return_value=[{"payload": self.answer(pages=pages)}]) as read:
+                answers = access.answer_records(self.CHAT)
+                self.assertEqual(answers[0]["page_ids"], pages)
+                self.assertEqual(answers[0]["answered_page_ids"], [self.SAMA])
+                filters = parse_qs(urlsplit(read.call_args.args[0]).query)
+                self.assertIn(self.legacy_version(), filters["payload->>page_access_version"][0])
+                self.assertEqual(access.members(self.CHAT)[11], set(pages))
+                self.assertEqual(access.answered_members(self.CHAT), set())
+
+    def test_current_no_access_stops_reminders_and_covers_both_pages(self):
+        with patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"}), \
+                patch.object(access, "request", return_value=[{"payload": self.answer(current=True)}]):
+            self.assertEqual(access.answer_records(self.CHAT)[0]["answered_page_ids"], [self.SAMA, self.AZSHINARI])
+            self.assertEqual(access.answered_members(self.CHAT), {11})
+            self.assertEqual(access.members(self.CHAT)[11], set())
+
+    def test_legacy_poll_can_update_sama_without_inventing_azshinari_access(self):
+        poll = {"chat_id": self.CHAT, "payload": {
+            "page_access_version": self.legacy_version(), "page_ids": [self.SAMA]}}
+        update = {"update_id": 200, "poll_answer": {"poll_id": "old", "option_ids": [0],
+            "user": {"id": 11, "first_name": "Alex"}}}
+        with patch.object(access, "context", return_value=poll), \
+                patch.object(access, "request", return_value=[{"id": 1}]) as save:
+            self.assertTrue(access.save_answer(update, {self.CHAT}))
+        p = save.call_args.args[1]["payload"]
+        self.assertEqual(p["page_ids"], [self.SAMA])
+        self.assertEqual(p["page_access_version"], self.legacy_version())
+
+    def test_legacy_poll_cannot_replace_new_survey_answer_or_withdrawal(self):
+        poll = {"chat_id": self.CHAT, "payload": {
+            "page_access_version": self.legacy_version(), "page_ids": [self.SAMA]}}
+        update = {"update_id": 200, "poll_answer": {"poll_id": "old", "option_ids": [0],
+            "user": {"id": 11, "first_name": "Alex"}}}
+        for answered in (True, False):
+            row = {"id": 1, "payload": self.answer(current=True, pages=[self.AZSHINARI], answered=answered)}
+            with self.subTest(answered=answered), patch.object(access, "context", return_value=poll), \
+                    patch.object(access, "request", side_effect=[[], [row]]) as save:
+                self.assertTrue(access.save_answer(update, {self.CHAT}))
+            self.assertEqual(save.call_count, 2)
+
+    def test_expanded_poll_replaces_legacy_answer_and_tracks_both_choices(self):
+        poll = {"chat_id": self.CHAT, "payload": {
+            "page_access_version": access.version(self.CHAT), "page_ids": [self.SAMA, self.AZSHINARI]}}
+        row = {"id": 1, "updated_at": NOW.isoformat(), "payload": self.answer(pages=[self.SAMA])}
+        update = {"update_id": 200, "poll_answer": {"poll_id": "new", "option_ids": [0, 1],
+            "user": {"id": 11, "first_name": "Alex"}}}
+        with patch.object(access, "context", return_value=poll), \
+                patch.object(access, "request", side_effect=[[], [row], [{"id": 1}]]) as save:
+            self.assertTrue(access.save_answer(update, {self.CHAT}))
+        self.assertEqual(save.call_args.args[1]["payload"]["page_ids"], [self.SAMA, self.AZSHINARI])
+        self.assertEqual(save.call_args.kwargs["method"], "PATCH")
+
+
 class PageAccessTests(unittest.TestCase):
     def setUp(self):
         env = patch.dict("os.environ", {"NEW_CLIENT_READY_ENABLED": "true"})
@@ -38,7 +117,7 @@ class PageAccessTests(unittest.TestCase):
             with patch.object(access, "enqueue_scheduled_action", return_value=True) as queue:
                 self.assertEqual(access.queue_poll(chat, NOW), 1)
             p = queue.call_args.kwargs["payload"]
-            self.assertEqual(p["options"], list(config["crm_pages"]) + ["No access"])
+            self.assertEqual(p["options"], list(config.get("page_access_pages", config["crm_pages"])) + ["No access"])
             self.assertEqual(p["message_thread_id"], config["contact_thread"])
             self.assertTrue(p["allows_multiple_answers"])
             self.assertFalse(p["is_anonymous"])

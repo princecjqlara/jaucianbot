@@ -50,8 +50,15 @@ def changes(current: dict, previous: dict | None) -> dict[tuple[str, int], dict]
             plan, before = member.get("planning") or {}, old.get((business, uid), {})
             value = plan.get("estimated_capacity_per_day")
             prior = before.get("estimated_capacity_per_day")
-            if value is None:
+            import veo_forecast
+            if plan.get("forecast_excluded"):
+                text = "Excluded from forecast by manager request."
+            elif value is None and business == "veo" and plan.get("policy") == veo_forecast.POLICY:
+                text = "Provisional; personal history still below 3 Active dates."
+            elif value is None:
                 text = "Provisional; personal history still below 3 output dates."
+            elif business == "veo" and plan.get("policy") == veo_forecast.POLICY and previous and before.get("policy") != plan["policy"]:
+                text = f"Forecast policy baseline: {value:.2f}/day; earlier policies are not comparable."
             elif not previous:
                 text = f"Nightly baseline: {value:.2f}/day; comparison starts with the next report."
             elif prior is None:

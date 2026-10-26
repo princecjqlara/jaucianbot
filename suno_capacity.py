@@ -142,9 +142,10 @@ def summarize(rows: list[dict], answers: list[dict], jobs: list[dict] | None, st
         repeated_receipts = sorted(recent_receipts, reverse=True)
         total = sum(p["receipts"].values())
         deliveries = sum(p["delivered"].values())
-        plan = {**member_capacity.reviewed_planning({"daily": daily}, end),
-            "basis": "receipt_posts", "unit": "receipt posts/day"}
         import report_topics
+        personal_plan = (recent_capacity.planning({"daily": daily}, end) if report_topics.enabled()
+                         else member_capacity.reviewed_planning({"daily": daily}, end))
+        plan = {**personal_plan, "basis": "receipt_posts", "unit": "receipt posts/day"}
         if not report_topics.enabled():
             plan["policy"] = "suno-receipts-v2"
         ordered.append({"user_id": p["user_id"], "name": p["name"],

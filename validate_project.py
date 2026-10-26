@@ -33,6 +33,14 @@ REQUIRED_TEST_FILES = (
     "test_availability_reminders.py",
     "test_suno_reference_defaults.py",
     "test_report_replacement.py",
+    "test_veo_forecast.py",
+    "test_veo_person_choice.py",
+    "test_veo_hurdle.py",
+    "test_veo_advanced.py",
+    "test_veo_day.py",
+    "test_veo_offers.py",
+    "test_veo_forecast_evaluate.py",
+    "test_staffing_update.py",
 )
 
 

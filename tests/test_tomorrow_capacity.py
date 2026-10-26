@@ -16,8 +16,9 @@ END = dt.date(2026, 10, 20)
 
 
 def member(uid, mean=0.9):
-    return {"user_id": uid, "name": str(uid), "planning": {"policy": "veo-reviewed-v1",
-        "planning_average_per_day": mean, "safe_plan_per_day": 0.8 * mean}}
+    return {"user_id": uid, "name": str(uid), "daily": [
+        {"date": str(END - dt.timedelta(days=i)), "attendance": "Active", "done_deals": mean}
+        for i in (3, 2, 1)]}
 
 
 def voter(uid):
@@ -72,15 +73,16 @@ class TomorrowCapacityTests(unittest.TestCase):
         self.assertEqual(t["whole_conservative_total"], 2)
         self.assertAlmostEqual(t["average_per_all_active"], 0.9)
 
-    def test_unknown_active_members_are_excluded_with_coverage_never_assumed_zero(self):
+    def test_no_history_active_members_get_labelled_trial_without_invented_personal_history(self):
         p = tomorrow.build(END, [member(1)], {CHAT: [voter(1), voter(2)]})
         t = p["overall"]
         self.assertEqual(t["active_members"], 2)
-        self.assertEqual(t["unknown_members"], 1)
-        self.assertEqual(t["rated_members"], 1)
-        self.assertEqual(t["average_per_rated_member"], 0.9)
-        self.assertIsNone(t["average_per_all_active"])
-        self.assertIn("Rated history: 1/2", tomorrow.render(p))
+        self.assertEqual(t["unknown_members"], 0)
+        self.assertEqual(t["rated_members"], 2)
+        self.assertEqual(t["personal_members"], 1)
+        self.assertEqual(t["provisional_members"], 1)
+        self.assertAlmostEqual(t["average_per_all_active"], 0.55)
+        self.assertIn("Personal: 1 · Trial default: 1", tomorrow.render(p))
         self.assertIn("rated voters only", tomorrow.render(p))
 
     def test_member_active_in_two_teams_counts_once_overall(self):
@@ -104,7 +106,8 @@ class TomorrowCapacityTests(unittest.TestCase):
         m = member(None)
         m["name"] = "1"
         p = tomorrow.build(END, [m], {CHAT: [voter(1)]})
-        self.assertEqual(p["overall"]["rated_members"], 0)
+        self.assertEqual(p["overall"]["personal_members"], 0)
+        self.assertEqual(p["overall"]["provisional_members"], 1)
 
     def test_snapshot_uses_actual_tomorrow_votes_and_cached_member_history(self):
         with patch.object(tomorrow, "daily_poll_counts", return_value={CHAT: {"poll_id": "poll", "active_workers": 99}}) as counts, \

@@ -36,11 +36,21 @@ means Unknown. The provisional plan changes to a personal estimate after three
 personal output dates; its safe target stays Unknown. Makata can use shared Suno
 peer history without treating another team's votes as Makata attendance.
 
-VEO retains its existing median Active-day planning default after five peers
-with three Active and three output dates, with a reviewed 0.50 fallback.
-Its provisional blending and 80% safe-target policy are unchanged. Existing
-personal top-three estimates retain their own planning policy. These describe
-recorded output and can be limited by demand; they do not verify production limits.
+As of October 24, VEO organized reports and tomorrow previews use the guarded
+v7 personal forecast, with v6 fallback when delivered-offer evidence is unavailable.
+Each person keeps the earlier model unless the newer model passes their prior
+error checks. Zero-output Active dates count; Unknown attendance stays Unknown.
+The raw cache retains 192 completed dates and saves the dated/cohort forecast so
+five-minute staffing refreshes do not refit it. Melo is included again in new
+forecasts and calibration. Verified bots, including Jaucianbot, are not workers.
+During membership rechecks, the same-date saved plans remain available for
+verified humans with partial coverage flagged; a cold start waits for a complete
+cohort before fitting the guarded model.
+Best-three output is a stretch reference. These models remain trials; prior
+backtests do not establish future accuracy, especially after a cohort change.
+See [FORECASTING.md](FORECASTING.md) for the formula, offline preview, saved
+forecast scoring, and the retrospective validation limits. No forecast is a
+verified production capacity or quota.
 
 The daily sales/salary summary and staffing boards show tomorrow's Active total,
 capacity totals and averages separately for VEO and Suno. Both show personal,
@@ -50,6 +60,21 @@ business; mixed business units are never added. Suno personal history combines
 receipt counts by date across Suno teams before calculating a member estimate.
 The summary silently refreshes the same post every five minutes as votes change.
 Unverified membership and missing polls are shown as partial coverage.
+
+PepFactory/PepeFactory is hidden from the page-capacity report list; its source
+pages, sales and existing access answers remain intact. Missing page access for
+an Active member displays pending/Unknown capacity. Active tomorrow and Ready
+to receive clients now are separate signals. Veo's page-access survey and staffing
+reports include both Sama Ka Na Media and Azshinari; client assignments remain
+scoped to Sama Ka Na Media. Earlier Sama-only access answers retain their original
+coverage. Azshinari access stays pending until the expanded survey is answered;
+an older poll cannot overwrite an answer in the expanded survey. Historical
+Azshinari sales keep their original attribution.
+
+An explicitly requested team survey reminder can be queued with
+`./remote_windows.ps1 refresh-surveys --group=-1004498344479 --date 2026-10-25`.
+It links the existing tracked access and tomorrow polls, preserves answers and
+uses normal scheduled delivery. The date must be tomorrow in PHT.
 Makata's authorized private daily report uses the same shared Suno default.
 The correction edits its existing daily report where
 available and retires any old extra parts, rather than duplicating the report.
@@ -98,15 +123,17 @@ the quota-based applied amount or a pending label. The combined member list
 and sales/salary summary show both scenarios too; Suno written earnings stay
 fixed. Team scenarios sum each member's rounded earnings.
 
-VEO organized reports use the same 14-day top-three planning policy, with
-Done Deals as the output unit. Output-day average, daily peak, top-three mean
-and whole-number 80% safe target remain distinct. Explicit Inactive/output
-conflicts are flagged and excluded from the plan. A positive output date can
-support an observed estimate without inventing confirmed attendance. Known
-Active dates with zero output remain in the separate Active-day average.
-Availability votes do not verify full shifts or production maximums. The
-earlier 30-day reviewed policy remains available only when organized reports
-are disabled; its results must not be mixed into the current staffing board.
+VEO organized reports and tomorrow previews use the same Active-day forecast.
+They retain 35 completed dates to compare personal errors in the preceding 14
+dates, including enough earlier history for both components' own corrections.
+Each component corrects optimism from earlier matched Active dates after at least
+three scored dates and 20 person-days; there is no single final multiplier shared
+by all people. Without comparable personal errors, the reference is retained.
+Missing votes do not become zeros. Member forecasts keep decimals; the optional 80% planning buffer
+is not a confidence bound or guarantee. Policy changes start a new nightly
+comparison baseline. Suno keeps its existing receipt-based top-three policy.
+The earlier 30-day VEO reference remains available when organized reports are
+disabled; it must not be mixed with the current forecasting policy.
 
 DAILY REPORTS also gets a dated tomorrow-capacity board. It uses actual Active
 voter IDs, shows rated-history coverage, average per rated member, summed
@@ -928,18 +955,15 @@ Existing private Makata reports to Maddie continue separately.
 `./remote_windows.ps1 report-topics` reads the captured topic names/IDs without
 sending messages or consuming Telegram's update stream.
 
-Capacity reports now use the last 14 completed Philippine dates. Estimated
-planning capacity is the average of the top three positive daily outputs on
-distinct dates, excluding explicit Inactive/output conflicts. The safe target
-is floor(estimate × 80%). Output-day average and recorded daily peak remain
-visible. Fewer than three eligible output dates leaves the estimate pending;
-unknown attendance is never changed to Inactive. Best-day estimates do not
-establish verified full shifts or production maximums, and no utilization
-uplift is applied. Suno output remains receipt posts, including outside-bot
-clients; VEO output remains readable Done Deals. Active-day averages separately
-include declared Active dates with zero output. Staffing summaries use these
-same estimates for tomorrow's actual voters. Corrections reuse existing report
-and staffing messages where available.
+Capacity reports use the guarded VEO recorded-DD forecast described above and
+the separate Suno receipt policy. Best-three daily output and recorded peak
+remain descriptive references. Unknown attendance is never changed to Inactive.
+Suno receipts include outside-bot clients; VEO output remains readable Done
+Deals. Declared Active dates with zero output count. Staffing uses actual
+tomorrow voters, with pending membership/access coverage shown explicitly.
+Corrections reuse existing report/staffing messages where available. Frozen
+nightly reports retain their historical date and policy; the updated forecast
+applies to subsequent scheduled reports and current read-only previews.
 
 With `AVAILABILITY_REMINDERS_ENABLED=true`, tomorrow-availability reminders tag known current human members who have not
 answered the team's poll at 08:00, 11:00, 14:00, 17:00, 20:00 and 22:00 PHT.

@@ -108,6 +108,8 @@ class SunoTeamPolicyTests(unittest.TestCase):
         rows = [{"payload": {"user_id": 11, "page_ids": []}},
                 {"payload": {"user_id": 11, "page_ids": [pages["Page 9"]], "page_access_part": 1}}]
         with patch.object(access, "page_map", return_value=pages), patch.object(access, "request", return_value=rows):
+            for row in rows:
+                row["payload"]["page_access_version"] = access.version(CHAT)
             self.assertEqual(access.members(CHAT), {11: {pages["Page 9"]}})
         meta = {"chat_id": CHAT, "payload": {"page_access_version": "v", "page_ids": [pages["Page 9"]], "page_access_part": 1}}
         update = {"update_id": 7, "poll_answer": {"poll_id": "p2", "option_ids": [], "user": {"id": 11}}}

@@ -67,9 +67,10 @@ def filter_current(chat: int, users: list[dict], now: dt.datetime, *, refresh: b
         return [], {"verified_current": 0, "unverified": 0, "former": 0, "pending_verification": 0}
     cached = records(chat)
     ids = {int(u["user_id"]) for u in users if u.get("user_id") is not None}
-    expired = [uid for uid in ids if uid not in cached or
-        dt.datetime.fromisoformat(cached[uid]["expires_at"]) <= now or
-        (humans_only and "is_bot" not in cached[uid])]
+    def pending(uid):
+        return uid not in cached or dt.datetime.fromisoformat(cached[uid]["expires_at"]) <= now or (
+            humans_only and "is_bot" not in cached[uid])
+    expired = [uid for uid in ids if pending(uid)]
     budget = budget if budget is not None else {"remaining": 4}
     expired = sorted(expired)[:max(0, budget["remaining"])]
     budget["remaining"] -= len(expired)
@@ -80,9 +81,9 @@ def filter_current(chat: int, users: list[dict], now: dt.datetime, *, refresh: b
     current = [u for u in users if u.get("user_id") is not None and confirmed(cached.get(int(u["user_id"]), {}), now)
                and (not humans_only or cached[int(u["user_id"])].get("is_bot") is False)]
     return current, {"verified_current": len(current),
-        "pending_verification": sum(uid not in cached or dt.datetime.fromisoformat(cached[uid]["expires_at"]) <= now for uid in ids),
+        "pending_verification": sum(pending(uid) for uid in ids),
         "unverified": sum(u.get("user_id") is None or cached.get(int(u["user_id"]), {}).get("status", "unknown") == "unknown"
-            or dt.datetime.fromisoformat(cached[int(u["user_id"])]["expires_at"]) <= now for u in users),
+            or pending(int(u["user_id"])) for u in users),
         "former": sum(cached.get(uid, {}).get("status") in {"left", "kicked"} for uid in ids)}
 
 

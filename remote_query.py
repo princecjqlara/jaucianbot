@@ -18,6 +18,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    commands.add_parser("health", help="Read-only public automation health check")
     commands.add_parser("groups")
     commands.add_parser("freebies")
     commands.add_parser("new-clients")
@@ -31,6 +32,9 @@ def main() -> None:
     commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
     commands.add_parser("report-topics", help="Read named topics in DAILY REPORTS")
     commands.add_parser("report-members", help="Read cached Telegram membership verification for capacity reports")
+    surveys = commands.add_parser("refresh-surveys", help="Queue manager-requested links to tracked page-access and tomorrow polls")
+    surveys.add_argument("--group", type=int, action="append", required=True)
+    surveys.add_argument("--date", required=True, help="Tomorrow's PHT date, YYYY-MM-DD")
     commands.add_parser("tomorrow-capacity", help="Read-only VEO average output estimates for tomorrow's actual Active voters")
     commands.add_parser("makata-status", help="Read Makata setup, topic IDs and report subscription status")
     commands.add_parser("makata-connect", help="Connect the fixed Makata report recipient using verified Telegram identity")
@@ -92,6 +96,12 @@ def main() -> None:
     body = None
     if args.command == "groups":
         path = "/api/groups"
+    elif args.command == "health":
+        path = "/api/health"
+    elif args.command == "refresh-surveys":
+        path = "/api/reports/surveys"
+        method = "POST"
+        body = json.dumps({"groups": args.group, "work_date": args.date, "request_id": uuid.uuid4().hex}).encode("utf-8")
     elif args.command == "freebies":
         path = "/api/freebies/status"
     elif args.command == "new-clients":
@@ -193,7 +203,9 @@ def main() -> None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(base + path, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        # A cold guarded forecast can take about a minute; cached reads are fast.
+        timeout = 240 if args.command in {"tomorrow-capacity", "daily-plan"} else 30
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             print(json.dumps(json.load(response), ensure_ascii=False, indent=2))
     except urllib.error.HTTPError as error:
         with error:

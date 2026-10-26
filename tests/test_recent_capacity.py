@@ -7,6 +7,7 @@ from unittest.mock import patch
 import member_capacity
 import organized_reports as reports
 import recent_capacity
+import veo_forecast
 from daily_automation import DAILY_REPORTS_CHAT_ID as TARGET, GROUPS
 
 CHAT = -1003647732254
@@ -63,11 +64,11 @@ class RecentCapacityTests(unittest.TestCase):
         self.assertEqual(p["top_three_daily_outputs"], [5, 4, 4])
         self.assertEqual(p["window_start"], str(DAY - dt.timedelta(days=13)))
 
-    def test_production_policy_switch_preserves_other_workflows_and_safe_floor(self):
+    def test_veo_forecast_switch_preserves_suno_top_three_and_fractional_buffer(self):
         with patch.dict(os.environ, {"ORGANIZED_REPORTS_ENABLED": "true"}):
-            p = member_capacity.reviewed_planning(series([5, 4, 4]), DAY)
-        self.assertEqual(p["policy"], recent_capacity.POLICY)
-        self.assertEqual(p["safe_plan_per_day"], 3)
+            p = member_capacity.reviewed_planning(series([5, 4, 4], "Active"), DAY)
+        self.assertEqual(p["policy"], veo_forecast.POLICY)
+        self.assertAlmostEqual(p["safe_plan_per_day"], 13 / 3 * .8)
         self.assertEqual(recent_capacity.planning(series([1, 1, 1]), DAY)["safe_plan_per_day"], 0)
 
 

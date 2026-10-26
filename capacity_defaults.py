@@ -4,13 +4,12 @@ from __future__ import annotations
 import datetime as dt
 import statistics
 from collections import defaultdict
-from fractions import Fraction
 
 import recent_capacity
+import veo_forecast
 
 POLICY = "suno-established-active-default-v6"
-# VEO retains its existing reviewed planning default.
-SEEDS = {"veo": 0.5}
+SEEDS = {"veo": veo_forecast.TRIAL_DEFAULT}
 MIN_PEERS = 5
 MIN_ACTIVE_DAYS = 3
 MIN_OUTPUT_DAYS = 3
@@ -41,6 +40,8 @@ def unique_members(members: list[dict], end: dt.date, *, combine_days: bool = Fa
 
 
 def baseline(business: str, members: list[dict]) -> dict:
+    if business == "veo":
+        return veo_forecast.baseline(members)
     if business == "suno":
         # Established peers' actual Active-day rates include recorded zeros.
         # This supplies a provisional starting plan, not a personal limit.
@@ -59,24 +60,12 @@ def baseline(business: str, members: list[dict]) -> dict:
             "reference_peer_members": len(observed), "peer_members": len(values),
             "minimum_active_days": MIN_ACTIVE_DAYS, "minimum_output_days": MIN_OUTPUT_DAYS,
             "source": "established_peer_active_day_median", "unit": "receipt posts/day"}
-    # Best output dates omit zero-output Active days and overstate a starting plan.
-    # Use typical recorded output on declared Active dates from established peers.
-    plans = [m.get("planning") or {} for m in members]
-    values = [p["active_day_average"] for p in plans
-        if p.get("estimated_capacity_per_day") is not None
-        and p.get("known_active_days", 0) >= MIN_ACTIVE_DAYS
-        and p.get("eligible_output_days", 0) >= MIN_OUTPUT_DAYS
-        and p.get("active_day_average") is not None]
-    enough = len(values) >= MIN_PEERS
-    rate = statistics.median(values) if enough else SEEDS[business]
-    return {"policy": POLICY, "business": business, "capacity_per_day": rate,
-        "peer_members": len(values), "source": "current_peer_active_day_median" if enough else "reviewed_peer_fallback",
-        "minimum_active_days": MIN_ACTIVE_DAYS, "minimum_output_days": MIN_OUTPUT_DAYS,
-        "minimum_peers": MIN_PEERS, "reviewed_fallback": SEED_REVIEW,
-        "unit": "Done Deals/day" if business == "veo" else "receipt posts/day"}
+    raise ValueError(f"Unknown capacity business: {business}")
 
 
 def peer_label(default: dict) -> str:
+    if default.get("source") == "provisional_trial_default":
+        return "0.20 trial default; peer median is descriptive only"
     if default.get("source") == "reviewed_peer_fallback":
         review = default.get("reviewed_fallback", SEED_REVIEW)
         return f"{review['peer_members'][default['business']]} reviewed peers"
@@ -84,6 +73,13 @@ def peer_label(default: dict) -> str:
 
 
 def apply(member: dict, default: dict) -> dict:
+    if default.get("business") == "veo":
+        if default.get("live_forecast"):
+            import veo_forecast_offers
+            import veo_forecast_day
+            engine = veo_forecast_offers if default["policy"] == veo_forecast_offers.POLICY else veo_forecast_day
+            return engine.apply(member, default)
+        return veo_forecast.apply(member, default)
     plan = dict(member.get("planning") or {})
     if plan.get("estimated_capacity_per_day") is not None or (
             "estimated_capacity_per_day" not in plan and plan.get("planning_average_per_day") is not None
@@ -99,14 +95,7 @@ def apply(member: dict, default: dict) -> dict:
             default_peer_members=default["peer_members"], personal_output_dates=len(top),
             estimate_origin="historical_peer_default" if value is not None else "insufficient_personal_history")
         return {**member, "planning": plan}
-    prior = Fraction(default["capacity_per_day"]).limit_denominator(1_000_000)
-    blend = (sum(top) + (3 - len(top)) * prior) / 3
-    value = min(prior, blend)  # One unusually high date cannot raise a new member above the default.
-    plan.update(planning_average_per_day=float(value), safe_plan_per_day=float(value * 4 / 5),
-        provisional=True, default_policy=POLICY, default_capacity_per_day=float(prior),
-        default_peer_members=default["peer_members"], personal_output_dates=len(top),
-        estimate_origin="blended_default" if top else "business_default")
-    return {**member, "planning": plan}
+    raise ValueError(f"Unknown capacity business: {default.get('business')}")
 
 
 def enrich(capacities: dict, teams: set[int]) -> dict:
@@ -116,7 +105,7 @@ def enrich(capacities: dict, teams: set[int]) -> dict:
     for business, ids in (("veo", set(GROUPS)), ("suno", set(SUNO_GROUPS))):
         members = [m for chat in sorted(teams.intersection(ids)) for m in capacities["members"].get(str(chat), [])]
         people = unique_members(members, end, combine_days=business == "suno")
-        default = baseline(business, people)
+        default = veo_forecast.baseline(people, end) if business == "veo" else baseline(business, people)
         defaults[business] = default
         businesses[business] = [apply(m, default) for m in people]
     result = {**capacities, "defaults": defaults, "businesses": businesses, "members": {},

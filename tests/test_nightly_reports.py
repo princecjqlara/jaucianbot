@@ -12,6 +12,7 @@ import makata_automation as makata
 import nightly_reports as nightly
 import organized_reports as reports
 import recent_capacity
+import veo_forecast
 from test_page_capacity_reports import fixture_inputs
 
 VEO = -1003647732254
@@ -22,6 +23,8 @@ NIGHT = dt.datetime(2026, 10, 22, 15, 59, tzinfo=dt.timezone.utc)
 
 def person(uid, rate):
     return {"user_id": uid, "name": f"Member {uid}", "planning": {
+        "policy": veo_forecast.POLICY, "known_active_days": 3 if rate is not None else 0,
+        "uncalibrated_forecast_per_day": rate,
         "estimated_capacity_per_day": rate, "planning_average_per_day": rate,
         "safe_plan_per_day": 1 if rate is not None else None,
         "top_three_daily_outputs": [2, 2, 2] if rate is not None else [],
@@ -182,7 +185,7 @@ class NightlyQueueTests(unittest.TestCase):
             saved[f"nightly-personal-capacity:{DAY - dt.timedelta(days=1)}:{reports._scope({VEO})}"] = previous
             reports.queue_automation(NIGHT, {VEO, TARGET})
         detail = next(a["payload"]["text"] for a in actions.values() if a["payload"].get("report_category") == "capacity")
-        self.assertIn("Change: Increased: 1.00 → 2.00/day", detail)
+        self.assertIn("Forecast change: Increased: 1.00 → 2.00/day", detail)
         self.assertIn("nightly-personal-capacity", str(saved))
 
 
