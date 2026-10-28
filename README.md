@@ -1,5 +1,14 @@
 # Telegram group insights
 
+VEO reports now separate recent-demand sales forecasts from staff output evidence.
+The selling-day reference uses the median of at least three positive Active
+dates in the last 56 completed dates. It remains conditional, not a daily sales
+prediction or verified maximum. Supplied-work output requires three member-specific
+confirmed sufficient-work Active dates, including any zero sales. Paused ads,
+limited work, and unknown client supply do not by themselves lower this measure.
+Record or read dated ads/workload context with `remote_windows.ps1 workload`;
+these records never send Telegram messages. See [FORECASTING.md](FORECASTING.md).
+
 VEO automation is enabled across all six VEO teams. With
 `VEO_NEW_CLIENTS_ENABLED=false`, availability and reports stay on while
 new-client offers, Ready controls, acceptance and client lists stay off for VEO.

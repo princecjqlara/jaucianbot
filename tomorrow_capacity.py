@@ -11,6 +11,7 @@ import member_capacity
 import member_capacity_reports as reports
 import veo_forecast
 import capacity_defaults
+import staff_capacity
 from automation_controls import chat_enabled
 from cloud_store import daily_poll_counts, daily_poll_active_users, enqueue_scheduled_action, request, allowed_chat_ids
 from daily_automation import GROUPS, DAILY_REPORTS_CHAT_ID, MANILA
@@ -48,8 +49,8 @@ def build(work_date: dt.date, historical: list[dict], rosters: dict[int, list[di
           *, history_end: dt.date | None = None, default_override: dict | None = None) -> dict:
     history_end = min(history_end or work_date - dt.timedelta(days=1), work_date - dt.timedelta(days=1))
     default = default_override or veo_forecast.baseline(historical, history_end)
-    lookup = {int(m["user_id"]): capacity_defaults.apply(m, default)
-              for m in historical if m.get("user_id") is not None}
+    lookup = {int(m["user_id"]): capacity_defaults.apply({**m, "workload_capacity": m.get("workload_capacity")
+        or staff_capacity.measure(m, history_end)}, default) for m in historical if m.get("user_id") is not None}
     groups, unique, membership = [], {}, {}
 
     def totals(members):
@@ -62,7 +63,8 @@ def build(work_date: dt.date, historical: list[dict], rosters: dict[int, list[di
             "average_per_rated_member": expected / len(rated) if rated else None,
             "average_per_all_active": expected / len(members) if members and len(rated) == len(members) else None,
             "recorded_output_total": expected, "conservative_total": conservative,
-            "whole_conservative_total": math.floor(conservative) if conservative is not None else None}
+            "whole_conservative_total": math.floor(conservative) if conservative is not None else None,
+            "workload_capacity": staff_capacity.aggregate(members)}
 
     for chat, roster in sorted(rosters.items()):
         members, seen = [], set()
@@ -78,7 +80,8 @@ def build(work_date: dt.date, historical: list[dict], rosters: dict[int, list[di
             rate = plan.get("planning_average_per_day") if plan.get("policy") == default["policy"] else None
             m = {"user_id": uid, "name": user.get("user_name") or (old or {}).get("name") or str(uid),
                  "average": rate, "conservative": plan.get("safe_plan_per_day") if rate is not None else None,
-                 "provisional": plan.get("provisional", False), "basis": plan.get("estimate_origin")}
+                 "provisional": plan.get("provisional", False), "basis": plan.get("estimate_origin"),
+                 "workload_capacity": old.get("workload_capacity", {})}
             members.append(m)
             unique[uid] = m
             membership.setdefault(uid, set()).add(chat)
@@ -87,6 +90,8 @@ def build(work_date: dt.date, historical: list[dict], rosters: dict[int, list[di
                        "forecast_scope": "combined_person_dd", "team_sales_forecast": None,
                        "excluded_members": len(seen.intersection(veo_forecast.EXCLUDED_USER_IDS)),
                        "members": members, **totals(members)})
+        if roster is None:
+            groups[-1]["workload_capacity"] = staff_capacity.aggregate([], tracked=False)
     overall = totals(list(unique.values()))
     overall.update(pending_teams=sum(r is None for r in rosters.values()),
                    shared_members=sum(len(chats) > 1 for chats in membership.values()),
@@ -98,6 +103,7 @@ def build(work_date: dt.date, historical: list[dict], rosters: dict[int, list[di
         overall["average_per_all_active"] = None
     if not any(roster is not None for roster in rosters.values()):
         overall.update(recorded_output_total=None, conservative_total=None, whole_conservative_total=None)
+        overall["workload_capacity"] = staff_capacity.aggregate([], tracked=False)
     return {"ok": True, "read_only": True, "work_date": work_date.isoformat(), "metric": "recorded Done Deals/day",
             "planning_policy": default["policy"], "history_through": history_end.isoformat(),
             "default": default, "groups": groups, "overall": overall, "assumptions": definition(default)}
@@ -134,7 +140,7 @@ def snapshot(now: dt.datetime, approved: set[int]) -> dict:
 
 
 def render(data: dict) -> str:
-    lines = ["<b>TOMORROW — VEO CAPACITY</b>", f"{data['work_date']} (PHT)", "Recorded Done Deals/day estimates"]
+    lines = ["<b>TOMORROW — VEO STAFF OUTPUT & SALES</b>", f"{data['work_date']} (PHT)", "Capacity evidence and recent-demand sales are separate"]
     def describe(t):
         n, rated = t["active_members"], t["rated_members"]
         if not n:
@@ -142,9 +148,10 @@ def render(data: dict) -> str:
         if not rated:
             return [f"Active: {n} · Rated history: 0/{n}", "Average and total: pending history."]
         return [f"Active: {n} · Forecast coverage: {rated}/{n}",
+                *staff_capacity.render(t["workload_capacity"]),
                 f"Personal: {t['personal_members']} · Trial default: {t['provisional_members']}",
                 f"Average per rated member: {t['average_per_rated_member']:.2f}",
-                f"Forecast total: {t['recorded_output_total']:.2f} · 80% planning buffer: {t['conservative_total']:.2f}"]
+                f"Recent-demand sales total: {t['recorded_output_total']:.2f} · Sales buffer (80%): {t['conservative_total']:.2f}"]
     for group in data["groups"]:
         lines += ["", f"<b>{html.escape(group['team'])}</b>"]
         lines += describe(group) if group["poll_recorded"] else ["Pending — tomorrow's availability poll is not tracked yet."]
@@ -158,6 +165,8 @@ def render(data: dict) -> str:
         "Choose per person between the 14-day reference and smoothed 7-day rate, using earlier personal errors only.",
         "The recent rate blends a weak 0.20 prior with personal evidence. Under 3 Active dates is provisional."]
     lines += ["", "Unrated members stay unknown; totals cover rated voters only. Shared members make team totals overlap.",
+              "Selling-day references condition on positive-output dates, not every Active day. They do not predict sales or verify maximum production.",
+              "Confirmed no-work/limited-work dates do not lower supplied-work capacity; ads off does not prove no organic or backlog work.",
               *description,
               "Correction uses earlier matched Active dates only. All forecasts are trials pending future validation.",
               "Figures cover each person's combined VEO DD; team-only sales remain a separate forecast scope.",

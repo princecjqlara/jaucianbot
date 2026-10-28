@@ -51,6 +51,7 @@ import member_presence
 import availability_reminders
 import page_access_reminders
 import team_surveys
+import workload_context
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -70,7 +71,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-26.1"
+AUTOMATION_VERSION = "2026-10-29.2"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -476,6 +477,28 @@ def report_surveys_route(environ, start_response):
     except Exception as error:
         print(f"Staffing survey request failed: {type(error).__name__}")
         return response(start_response, 503, {"ok": False, "error": "survey_request_unavailable"})
+
+
+def workload_route(environ, start_response, method):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        approved = allowed_chat_ids()
+        now = dt.datetime.now(dt.timezone.utc)
+        if method == "POST":
+            return response(start_response, 200, workload_context.save(read_json_body(environ), approved, now))
+        args = parse_qs(environ.get("QUERY_STRING", ""))
+        chat = int(args["group"][0])
+        if chat not in approved.intersection(GROUPS):
+            return response(start_response, 403, {"ok": False})
+        day = dt.date.fromisoformat(args["date"][0])
+        return response(start_response, 200, {"ok": True, "read_only": True,
+            "records": workload_context.read({chat}, day, day)})
+    except (ValueError, KeyError, TypeError, IndexError):
+        return response(start_response, 400, {"ok": False, "error": "invalid_workload_record"})
+    except Exception as error:
+        print(f"Workload context failed: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "workload_context_unavailable"})
 
 
 def messages_route(environ, start_response):
@@ -1222,6 +1245,10 @@ def app(environ, start_response):
         if method != "POST":
             return response(start_response, 405, {"ok": False})
         return report_surveys_route(environ, start_response)
+    if path == "/api/reports/workload":
+        if method not in {"GET", "POST"}:
+            return response(start_response, 405, {"ok": False})
+        return workload_route(environ, start_response, method)
     if path == "/api/suno/makata" and method in {"GET", "POST"}:
         return makata_status_route(environ, start_response)
     if path == "/api/schedules" and method in {"GET", "POST", "DELETE"}:

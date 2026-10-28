@@ -22,13 +22,15 @@ import capacity_defaults
 import veo_forecast
 import page_capacity
 import nightly_reports
+import staff_capacity
+import workload_context
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, receipt_messages, request, poll_answers_for_range)
 from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS, MANILA,
     SUNO_GROUPS, messages_for_day, money, split_message, quota_for)
 from trabawho_receipts import receipt_report
 
-VERSION = 8
+VERSION = 9
 CAPACITY_CACHE_VERSION = 11
 
 
@@ -183,6 +185,16 @@ def current_capacities(capacities: dict, teams: set[int], now: dt.datetime, *, f
             if int(chat) in GROUPS)
         result = live_forecast.enrich(result, teams, dt.date.fromisoformat(result["date"]), forecast_date, now,
             scope_people=list(scope_people.values()), complete=complete)
+    if result.get("date") and result.get("businesses", {}).get("veo"):
+        end = dt.date.fromisoformat(result["date"])
+        try:
+            context = workload_context.read(teams.intersection(GROUPS),
+                end - dt.timedelta(days=staff_capacity.WINDOW_DAYS - 1), end)
+            status = "available"
+        except Exception as error:
+            print(f"Workload context unavailable: {type(error).__name__}")
+            context, status = [], "unavailable"
+        result = staff_capacity.enrich(result, end, context, status)
     return result
 
 
@@ -346,7 +358,7 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     day = max((dt.date.fromisoformat(m["planning"]["window_end"]) for m in members
         if (m.get("planning") or {}).get("window_end")), default=day)
     start = day - dt.timedelta(days=veo_forecast.WINDOW_DAYS - 1)
-    lines = ["RECORDED DD FORECAST", AVAILABILITY_GROUPS[chat]["name"],
+    lines = ["STAFF OUTPUT & SALES OUTLOOK", AVAILABILITY_GROUPS[chat]["name"],
         f"{start} to {day} (PHT) · Done Deals/day"]
     work_dates = {(m.get("planning") or {}).get("work_date") for m in members}
     work_dates.discard(None)
@@ -355,13 +367,22 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     for member in sorted(members, key=lambda m: m["name"].casefold()):
         p = member.get("planning") or {}
         lines += ["", " ".join(member["name"].split())]
+        reference = member.get("workload_capacity")
+        if reference is not None:
+            value = reference.get("supplied_work_output_per_day")
+            lines.append(f"Output with confirmed sufficient work: {value:.2f}/day ({reference['supplied_work_days']} dates)."
+                if value is not None else "Capacity with sufficient work: unmeasured.")
+            selling = reference.get("selling_day_median")
+            lines.append(f"Typical on selling days: {selling:.2f}/day ({reference['selling_days']} positive Active dates)."
+                if selling is not None else f"Selling-day reference: pending ({reference['selling_days']}/3 dates).")
+            lines.append(f"No-work dates: {reference['no_work_days']} · Limited-work dates: {reference['limited_work_days']} · Zero-sales dates with unknown work: {reference['unknown_work_zero_days']}.")
         if p.get("forecast_excluded"):
             lines.append("Excluded from forecast by manager request; recorded history retained.")
         elif p.get("planning_average_per_day") is not None:
             label = ("Sparse-history trial forecast" if p.get("known_active_days", 0) else "Trial default forecast") if p.get("provisional") else "Personal forecast"
-            lines.append(f"{label}: {p['planning_average_per_day']:.2f}/day")
+            lines.append(f"Recent-demand sales — {label}: {p['planning_average_per_day']:.2f}/day")
             if p.get("safe_plan_per_day") is not None:
-                lines.append(f"80% planning buffer: {p['safe_plan_per_day']:.2f}/day")
+                lines.append(f"Sales planning buffer (80%): {p['safe_plan_per_day']:.2f}/day")
             if p.get("provisional"):
                 lines.append(f"Personal history: {p.get('known_active_days', 0)}/3 Active dates; weak starting prior 0.20/day.")
             if p.get("calibration_available"):
@@ -392,6 +413,9 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines.append(f"Forecast change: {p['daily_capacity_change']}")
     if not members:
         lines += ["", "No verified current members with readable recent history."]
+    lines += ["", "Selling-day references describe positive-output Active dates in the last 56 completed dates; they are conditional, not expected daily sales.",
+        "Only member-specific sufficient-work records measure supplied-work output, including zero sales. Ads off or low sales alone cannot establish ability.",
+        "Ads/workload unknown is kept unknown. Paid sales are not completed production or a verified maximum."]
     if work_dates:
         lines += ["", "Personal forecasts use prior Active-date output, including zero-output Active dates.",
             "Dated offer evidence is used only when supported by earlier personal and recent comparisons.",
@@ -593,7 +617,8 @@ def forecast(roster: list[dict] | None, members: list[dict], default: dict | Non
         "unknown": len(unique) - len(rated),
         "average": total / len(rated) if rated else None, "total": total,
         "conservative": sum(p["safe_plan_per_day"] for p in rated)
-            if has_total and all(p.get("safe_plan_per_day") is not None for p in rated) else None}
+            if has_total and all(p.get("safe_plan_per_day") is not None for p in rated) else None,
+        "workload_capacity": staff_capacity.aggregate(people)}
 
 
 def suno_reference_text(reference: dict, unit: str) -> list[str]:
@@ -613,6 +638,16 @@ def staffing_text(chat: int, today: dt.date, now_roster: list[dict] | None, next
     business = "veo" if chat in GROUPS else "suno"
     capacities = {"members": {str(chat): members}, "businesses": {business: members},
         "defaults": {business: default} if default is not None else {}}
+    if business == "veo":
+        team = forecast(next_roster, members, default)
+        lines = lines[:-1] + ["TEAM OUTLOOK — all confirmed Active voters"]
+        if next_roster is not None:
+            lines += staff_capacity.render(team["workload_capacity"])
+            sales = f"{team['total']:.2f}" if team["total"] is not None else "Unknown"
+            lines.append(f"Recent-demand sales forecast: {sales} DD/day (covers {team['rated'] + team['provisional']}/{team['active']} members).")
+        else:
+            lines.append("Availability poll not tracked; team totals pending.")
+        lines += ["", "TOMORROW CAPACITY BY PAGE"]
     inputs = page_inputs if page_inputs is not None else page_capacity.load({chat})
     page_ids = set(inputs.get(chat, {}).get("pages", {}).values())
     rosters = page_rosters if page_rosters is not None else {chat: next_roster}

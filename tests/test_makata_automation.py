@@ -38,6 +38,28 @@ class MakataAutomationTests(unittest.TestCase):
         self.assertEqual({k:self.config[k] for k in ("general","announcements","receipts","contact_thread")},
                          {"general":1,"announcements":4,"receipts":8,"contact_thread":13})
 
+    def test_private_capacity_waits_for_suno_peers_without_blocking_on_unrelated_veo(self):
+        import organized_reports as reports
+        import report_topics
+        veo = next(iter(daily.GROUPS))
+        for waiting_chat in (veo, OLD):
+            current = {"members": {str(CHAT): []}, "defaults": {"suno": {
+                "capacity_per_day": None, "peer_members": 0}},
+                "membership": {str(CHAT): {"pending_verification": 0},
+                    str(waiting_chat): {"pending_verification": 1}}}
+            with self.subTest(waiting_chat=waiting_chat), patch.object(makata, "receipt_messages", return_value=[]), \
+                    patch.object(makata, "daily_poll_counts", return_value={}), \
+                    patch.object(songs, "song_report_lines", return_value=[]), \
+                    patch.object(suno_capacity, "report", return_value={"members": []}), \
+                    patch.object(report_topics, "enabled", return_value=True), \
+                    patch.object(reports, "load_capacity", return_value={}), \
+                    patch.object(reports, "current_capacities", return_value=current):
+                if waiting_chat == OLD:
+                    with self.assertRaisesRegex(RuntimeError, "membership verification pending"):
+                        makata.build_report(NOW.date(), NOW)
+                else:
+                    self.assertIn("SUNO MAKATA", makata.build_report(NOW.date(), NOW))
+
     def test_makata_aliases_only_route_to_new_group_and_other_pages_stay_in_trabawho(self):
         for page in ("Makata Studio", "Makata Studios", "MAKATA STUDIOS"):
             self.assertTrue(suno_store.page_belongs_to_team(CHAT,page))

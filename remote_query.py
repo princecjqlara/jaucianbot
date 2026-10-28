@@ -35,6 +35,15 @@ def main() -> None:
     surveys = commands.add_parser("refresh-surveys", help="Queue manager-requested links to tracked page-access and tomorrow polls")
     surveys.add_argument("--group", type=int, action="append", required=True)
     surveys.add_argument("--date", required=True, help="Tomorrow's PHT date, YYYY-MM-DD")
+    workload = commands.add_parser("workload", help="Read or record dated ads/work supply without sending messages")
+    workload.add_argument("--group", type=int, required=True)
+    workload.add_argument("--date", required=True, help="PHT work date, YYYY-MM-DD")
+    workload.add_argument("--save", action="store_true", help="Save manager-confirmed context; otherwise read only")
+    workload.add_argument("--member", type=int, help="Member who actually received work; required for sufficient workload")
+    workload.add_argument("--ads", choices=["running", "paused", "unknown"], default="unknown")
+    workload.add_argument("--workload", choices=["sufficient", "limited", "none", "unknown"], default="unknown")
+    workload.add_argument("--note", help="Required evidence note when saving")
+    workload.add_argument("--source-message", type=int, help="Source message ID in this same group")
     commands.add_parser("tomorrow-capacity", help="Read-only VEO average output estimates for tomorrow's actual Active voters")
     commands.add_parser("makata-status", help="Read Makata setup, topic IDs and report subscription status")
     commands.add_parser("makata-connect", help="Connect the fixed Makata report recipient using verified Telegram identity")
@@ -102,6 +111,17 @@ def main() -> None:
         path = "/api/reports/surveys"
         method = "POST"
         body = json.dumps({"groups": args.group, "work_date": args.date, "request_id": uuid.uuid4().hex}).encode("utf-8")
+    elif args.command == "workload":
+        path = "/api/reports/workload"
+        if args.save:
+            if not args.note or (args.workload == "sufficient" and args.member is None):
+                parser.error("Saving needs --note; sufficient workload also needs --member")
+            method = "POST"
+            body = json.dumps({"chat_id": args.group, "work_date": args.date, "user_id": args.member,
+                "ads": args.ads, "workload": args.workload, "note": args.note,
+                "source_message_id": args.source_message}).encode("utf-8")
+        else:
+            path += "?" + urllib.parse.urlencode({"group": args.group, "date": args.date})
     elif args.command == "freebies":
         path = "/api/freebies/status"
     elif args.command == "new-clients":

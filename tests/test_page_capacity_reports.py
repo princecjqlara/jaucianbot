@@ -226,7 +226,8 @@ class PageReportDeliveryTests(unittest.TestCase):
                 patch.object(reports, "allowed_chat_ids", return_value={VEO, OTHER, daily.DAILY_REPORTS_CHAT_ID}), \
                 patch.object(reports, "staffing_context", return_value=(caps, rosters, rosters)):
             self.assertTrue(reports.prepare_delivery(item, NOW))
-        self.assertIn("Shared page: 2 active · Avg 2.00", item["payload"]["text"])
+        self.assertIn("Shared page: 2 active", item["payload"]["text"])
+        self.assertIn("Recent-demand sales forecast: Avg 2.00", item["payload"]["text"])
         self.assertNotIn("Avg 3.00", item["payload"]["text"])
 
     def test_existing_daily_report_posts_edit_when_page_access_changes(self):
@@ -245,7 +246,8 @@ class PageReportDeliveryTests(unittest.TestCase):
             self.assertTrue(reports.prepare_delivery(item, NOW))
         self.assertEqual(item["payload"]["edit_message_id"], 252)
         self.assertIn("A: 0 active", item["payload"]["text"])
-        self.assertIn("B: 1 active · Avg 3.00", item["payload"]["text"])
+        self.assertIn("B: 1 active", item["payload"]["text"])
+        self.assertIn("Sales forecast Avg 3.00", item["payload"]["text"])
         self.assertNotIn("BY TEAM", item["payload"]["text"])
 
     def test_financial_summary_keeps_sales_and_appends_page_averages(self):
@@ -259,7 +261,8 @@ class PageReportDeliveryTests(unittest.TestCase):
                 patch.object(reports, "staffing_context", return_value=(caps, rosters, rosters)):
             self.assertTrue(reports.prepare_delivery(item, NOW))
         self.assertTrue(item["payload"]["text"].startswith("Existing sales and salary"))
-        self.assertIn("Sama Ka Na Media: 1 active · Avg 3.00", item["payload"]["text"])
+        self.assertIn("Sama Ka Na Media: 1 active", item["payload"]["text"])
+        self.assertIn("Sales forecast Avg 3.00", item["payload"]["text"])
         self.assertEqual(item["payload"]["edit_message_id"], 308)
 
 

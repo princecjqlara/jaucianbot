@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import capacity_defaults
 import page_access
 import veo_forecast
+import staff_capacity
 from daily_automation import GROUPS, SUNO_GROUPS
 
 
@@ -121,12 +122,27 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
             if page["active"] == 0 and page["missing_access"]:
                 lines.append(f"{page['name']}: page access pending for {page['missing_access']} Active member(s).")
             else:
-                lines.append(f"{page['name']}: {page['active']} active · Avg {average}{suffix}{partial}")
+                lines.append(f"{page['name']}: {page['active']} active{partial}" if business["business"] == "veo"
+                    else f"{page['name']}: {page['active']} active · Avg {average}{suffix}{partial}")
+            if business["business"] == "veo":
+                summary = page.get("workload_capacity") or staff_capacity.aggregate([], tracked=False)
+                if detailed:
+                    lines += staff_capacity.render(summary)
+                    lines.append(f"Recent-demand sales forecast: Avg {average}{suffix} DD/day per member.")
+                else:
+                    reference = summary["selling_day"]
+                    value = (f"{reference['known_total']:.2f} ({reference['known_members']}/{summary['active_members']} members)"
+                        if reference["known_members"] else "n/a" if summary["active_members"] == 0 else "pending")
+                    lines[-1] += f" · Selling-day ref {value} · Sales forecast Avg {average}{suffix}"
+                    supplied = summary["supplied_work"]
+                    if supplied["known_members"]:
+                        lines.append(f"With sufficient work: {supplied['known_total']:.2f} ({supplied['known_members']}/{summary['active_members']} members).")
             if detailed:
                 total = f"{page['total']:.2f}" if page["total"] is not None else "Unknown"
                 safe = f"{page['conservative']:.2f}" if page["conservative"] is not None else "Unknown"
-                buffer_label = "80% planning buffer" if business["business"] == "veo" else "Safe target"
-                lines += [f"Estimated total: {total} · {buffer_label}: {safe}",
+                buffer_label = "Sales buffer (80%)" if business["business"] == "veo" else "Safe target"
+                total_label = "Recent-demand sales total" if business["business"] == "veo" else "Estimated total"
+                lines += [f"{total_label}: {total} · {buffer_label}: {safe}",
                     f"Personal history: {page['rated']} · Provisional: {page['provisional']} · Unknown: {page['unknown']}"]
         if business["missing_access"]:
             lines.append(f"Page-access votes pending: {business['missing_access']} active member(s).")
@@ -149,6 +165,9 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
             else:
                 lines.append("Recent forecast correction: insufficient history; uncalibrated trial.")
             lines.append("VEO figures describe those people's combined VEO DD, not exclusive page sales. All current human members are eligible.")
+            lines.append("Selling-day references are conditional on positive output; they are not expected sales or verified maximum capacity. Ads/workload missing stays unknown.")
+            if not detailed:
+                lines.append("Capacity needs 3 member-specific sufficient-work Active dates; selling-day references use at least 3 positive Active dates.")
     lines += ["", "Avg = estimated output per active member per day, with confirmed page access.",
         "Shared members count once per page; page totals overlap. Planning estimates, not guarantees."]
     return lines

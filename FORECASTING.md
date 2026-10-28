@@ -1,5 +1,54 @@
 # VEO recorded-DD forecasting
 
+## Workload-aware output update — October 29, 2026
+
+Reports separate the historical-demand sales forecast from evidence about staff
+output when client work is available. Low sales, paused advertising, and limited
+client supply do not prove a low production limit. No advertising activity is
+inferred from a zero sale or an undelivered bot offer.
+
+The selling-day reference is the median recorded DD on positive-output, declared
+Active dates over the last 56 completed dates, requiring three distinct dates.
+It is deliberately conditional on sales occurring: it is neither expected daily
+sales nor an estimate of maximum capacity. Extra zero-sales dates do not lower
+this reference, and an isolated high day cannot set it. No personal evidence
+means Unknown, never a capacity inferred from the 0.20 sales starting rate.
+
+Supplied-work output uses the arithmetic mean over at least three Active dates
+with a manager-confirmed, member-specific record of sufficient work, including
+zero sales on those dates. Limited/no-work dates and unknown workload are excluded
+from this measure, without rewriting recorded output or the sales forecast.
+Team-level ads running does not imply sufficient work for each person; ads paused
+does not imply no organic, repeat, or backlog clients. For combined VEO history,
+sufficient personal work in any source team counts; no-work/limited-work needs
+coverage for every source team. The records describe supplied work, not verified
+full shifts. Paid-sale counts still do not measure completed videos or a maximum.
+
+Read and record context through the authenticated wrapper; these commands never
+queue or send Telegram messages:
+
+```powershell
+.\remote_windows.ps1 workload --group=-1003647732254 --date 2026-10-28
+.\remote_windows.ps1 workload --group=-1003647732254 --date 2026-10-28 --save --ads paused --workload unknown --note 'Ads paused; organic/backlog work not established'
+.\remote_windows.ps1 workload --group=-1003647732254 --date 2026-10-28 --member 123456789 --save --ads running --workload sufficient --note 'Confirmed enough client briefs supplied for the shift'
+```
+
+Use actual member IDs and verified records. An optional `--source-message` links
+the evidence to that group's message ID. Saving replaces that date/group/member
+record; omitted status fields become Unknown. Future dates are plans (`actual=false`)
+and must be confirmed again on/after the work date before informing a measure.
+No historical ad/workload status has been guessed or backfilled automatically.
+
+Team/page references count shared people once, report evidence coverage, and keep
+unknown people out of supported subtotals; incomplete totals remain Unknown.
+Page-access/poll gaps are still explicit. Page references describe people's
+combined DD and must not be added as exclusive page sales. The original sales
+forecast and its 80% *sales* buffer remain separate. The change does not claim a
+sales-forecast accuracy improvement: future demand and completed-work data are
+needed to validate that. Frozen nightly reports/forecasts remain unchanged.
+Makata's private receipt report waits for membership checks in its own shared
+Suno cohort; an unrelated VEO membership retry cannot block that report.
+
 The forecast estimates paid-sale records for people who declare themselves
 Active. It does not measure completed videos, available client demand, work
 hours, or maximum production capacity. The policy is a trial pending future

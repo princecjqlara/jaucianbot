@@ -239,7 +239,9 @@ def build_report(day: dt.date, now: dt.datetime) -> str:
             day, now.astimezone(MANILA).date() - dt.timedelta(days=1))
         current = organized_reports.current_capacities(organized_reports.load_capacity(history_day, now, approved),
             organized_reports.sources(approved), now)
-        if any(c.get("pending_verification") for c in current.get("membership", {}).values()):
+        from daily_automation import SUNO_GROUPS
+        if any(c.get("pending_verification") for chat, c in current.get("membership", {}).items()
+               if int(chat) in SUNO_GROUPS):
             raise RuntimeError("Capacity membership verification pending")
         capacity["members"] = current["members"].get(str(MAKATA_CHAT_ID), [])
         reference = current.get("defaults", {}).get("suno")

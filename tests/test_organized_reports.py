@@ -128,7 +128,8 @@ class OrganizedReportsTests(unittest.TestCase):
             action["payload"]["_organized_fingerprint"] = "old"
             self.assertTrue(reports.prepare_delivery(action, NOW))
         self.assertEqual(action["payload"]["edit_message_id"], 500)
-        self.assertIn("Sama Ka Na Media: 1 active · Avg 1.50", action["payload"]["text"])
+        self.assertIn("Sama Ka Na Media: 1 active", action["payload"]["text"])
+        self.assertIn("Recent-demand sales forecast: Avg 1.50", action["payload"]["text"])
         self.assertIn("2026-10-23", action["payload"]["text"])
 
     def test_expired_staffing_board_stops_recurring(self):

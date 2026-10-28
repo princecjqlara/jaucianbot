@@ -152,14 +152,14 @@ class BusinessDefaultTests(unittest.TestCase):
         person = defaults.apply(member(1, []), defaults.baseline("veo", []))
         text = reports.capacity_text(VEO, END, [person])
         self.assertIn("Trial default forecast: 0.20/day", text)
-        self.assertIn("80% planning buffer: 0.16/day", text)
+        self.assertIn("Sales planning buffer (80%): 0.16/day", text)
         self.assertIn("0/3 Active dates", text)
         self.assertIn("Output average / peak: unknown", text)
 
     def test_staffing_report_keeps_sub_one_safe_team_total(self):
         default = defaults.baseline("veo", [])
         text = reports.staffing_text(VEO, TODAY, [], [{"user_id": 7}], [], default)
-        self.assertIn("Estimated total: 0.20 · 80% planning buffer: 0.16", text)
+        self.assertIn("Recent-demand sales total: 0.20 · Sales buffer (80%): 0.16", text)
         self.assertIn("Starting default: 0.20", text)
 
     def test_former_members_are_filtered_before_business_default_is_computed(self):
@@ -183,8 +183,10 @@ class TomorrowSummaryTests(unittest.TestCase):
     def test_summary_deduplicates_within_business_and_keeps_units_and_totals_separate(self):
         rosters = {VEO: [{"user_id": 1}, {"user_id": 2}], OTHER: [{"user_id": 1}], SUNO: [{"user_id": 1}]}
         text = reports.tomorrow_summary(TODAY, set(rosters), rosters, self.capacities())
-        self.assertIn("Sama Ka Na Media: 2 active · Avg 1.60 · 1 provisional", text)
-        self.assertIn("Vista Media Agency: 1 active · Avg 3.00", text)
+        self.assertIn("Sama Ka Na Media: 2 active", text)
+        self.assertIn("Sales forecast Avg 1.60 · 1 provisional", text)
+        self.assertIn("Vista Media Agency: 1 active", text)
+        self.assertIn("Sales forecast Avg 3.00", text)
         self.assertIn("Hiraya Studio: 1 active · Avg 2.00", text)
         self.assertIn("SUNO · receipts/day", text)
         self.assertIn("page totals overlap", text)
@@ -199,7 +201,8 @@ class TomorrowSummaryTests(unittest.TestCase):
                 patch.object(reports, "allowed_chat_ids", return_value={VEO, daily.DAILY_REPORTS_CHAT_ID}), \
                 patch.object(reports, "staffing_context", return_value=(caps, roster, roster)):
             self.assertTrue(reports.prepare_delivery(action, NOW))
-        self.assertIn("Sama Ka Na Media: 1 active · Avg 3.00", action["payload"]["text"])
+        self.assertIn("Sama Ka Na Media: 1 active", action["payload"]["text"])
+        self.assertIn("Recent-demand sales forecast: Avg 3.00", action["payload"]["text"])
         self.assertIn("Personal history: 1 · Provisional: 0", action["payload"]["text"])
 
     def test_missing_poll_is_reported_as_partial_and_not_inactive(self):
