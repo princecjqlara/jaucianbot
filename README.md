@@ -1,9 +1,12 @@
 # Telegram group insights
 
 VEO reports now separate recent-demand sales forecasts from staff output evidence.
-The selling-day reference uses the median of at least three positive Active
-dates in the last 56 completed dates. It remains conditional, not a daily sales
-prediction or verified maximum. Supplied-work output requires three member-specific
+The personal capacity reference is the highest recorded DD level reached on
+at least three separate Active dates in the last 56 completed dates. Supporting
+dates and older evidence are shown. Recent selling-day averages use the shortest
+14/28/56-day personal window with at least three positive Active dates. These are
+output references, not daily sales predictions or verified maximums.
+Supplied-work output requires three member-specific
 confirmed sufficient-work Active dates, including any zero sales. Paused ads,
 limited work, and unknown client supply do not by themselves lower this measure.
 Record or read dated ads/workload context with `remote_windows.ps1 workload`;

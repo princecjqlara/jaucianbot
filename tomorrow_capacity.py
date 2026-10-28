@@ -165,7 +165,7 @@ def render(data: dict) -> str:
         "Choose per person between the 14-day reference and smoothed 7-day rate, using earlier personal errors only.",
         "The recent rate blends a weak 0.20 prior with personal evidence. Under 3 Active dates is provisional."]
     lines += ["", "Unrated members stay unknown; totals cover rated voters only. Shared members make team totals overlap.",
-              "Selling-day references condition on positive-output dates, not every Active day. They do not predict sales or verify maximum production.",
+              "Repeatable output was recorded on 3+ separate Active dates per person; it does not predict daily sales or verify maximum production.",
               "Confirmed no-work/limited-work dates do not lower supplied-work capacity; ads off does not prove no organic or backlog work.",
               *description,
               "Correction uses earlier matched Active dates only. All forecasts are trials pending future validation.",

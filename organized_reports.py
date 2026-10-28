@@ -30,7 +30,7 @@ from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS
     SUNO_GROUPS, messages_for_day, money, split_message, quota_for)
 from trabawho_receipts import receipt_report
 
-VERSION = 9
+VERSION = 10
 CAPACITY_CACHE_VERSION = 11
 
 
@@ -369,12 +369,18 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
         lines += ["", " ".join(member["name"].split())]
         reference = member.get("workload_capacity")
         if reference is not None:
+            repeated = reference.get("repeatable_output_per_day")
+            if repeated is not None:
+                lines.append(f"Demonstrated repeatable output: {repeated:.2f} DD/day — achieved on {reference['repeatable_support_days']} dates; latest {reference['repeatable_last_met_date']}.")
+                lines.append(f"Evidence: {reference['reference_status']} ({reference['selling_days']} selling dates in {staff_capacity.WINDOW_DAYS} completed dates).")
+            else:
+                lines.append("Repeatable output: pending 3 positive Active dates.")
+            recent = reference.get("recent_selling_day_average")
+            if recent is not None:
+                lines.append(f"Recent selling-day average: {recent:.2f}/day ({reference['recent_selling_days']} positive Active dates in {reference['recent_selling_window_days']} days).")
             value = reference.get("supplied_work_output_per_day")
             lines.append(f"Output with confirmed sufficient work: {value:.2f}/day ({reference['supplied_work_days']} dates)."
                 if value is not None else "Capacity with sufficient work: unmeasured.")
-            selling = reference.get("selling_day_median")
-            lines.append(f"Typical on selling days: {selling:.2f}/day ({reference['selling_days']} positive Active dates)."
-                if selling is not None else f"Selling-day reference: pending ({reference['selling_days']}/3 dates).")
             lines.append(f"No-work dates: {reference['no_work_days']} · Limited-work dates: {reference['limited_work_days']} · Zero-sales dates with unknown work: {reference['unknown_work_zero_days']}.")
         if p.get("forecast_excluded"):
             lines.append("Excluded from forecast by manager request; recorded history retained.")
@@ -413,7 +419,8 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines.append(f"Forecast change: {p['daily_capacity_change']}")
     if not members:
         lines += ["", "No verified current members with readable recent history."]
-    lines += ["", "Selling-day references describe positive-output Active dates in the last 56 completed dates; they are conditional, not expected daily sales.",
+    lines += ["", "Repeatable output = highest recorded DD level achieved on at least 3 separate Active dates within 56 completed dates; it is not expected daily sales or a verified maximum.",
+        "Recent selling-day averages use the shortest 14/28/56-day window with at least 3 positive Active dates; quiet dates do not establish low ability.",
         "Only member-specific sufficient-work records measure supplied-work output, including zero sales. Ads off or low sales alone cannot establish ability.",
         "Ads/workload unknown is kept unknown. Paid sales are not completed production or a verified maximum."]
     if work_dates:

@@ -130,10 +130,10 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
                     lines += staff_capacity.render(summary)
                     lines.append(f"Recent-demand sales forecast: Avg {average}{suffix} DD/day per member.")
                 else:
-                    reference = summary["selling_day"]
+                    reference = summary["repeatable_output"]
                     value = (f"{reference['known_total']:.2f} ({reference['known_members']}/{summary['active_members']} members)"
                         if reference["known_members"] else "n/a" if summary["active_members"] == 0 else "pending")
-                    lines[-1] += f" · Selling-day ref {value} · Sales forecast Avg {average}{suffix}"
+                    lines[-1] += f" · Repeated output {value} · Sales forecast Avg {average}{suffix}"
                     supplied = summary["supplied_work"]
                     if supplied["known_members"]:
                         lines.append(f"With sufficient work: {supplied['known_total']:.2f} ({supplied['known_members']}/{summary['active_members']} members).")
@@ -165,9 +165,9 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
             else:
                 lines.append("Recent forecast correction: insufficient history; uncalibrated trial.")
             lines.append("VEO figures describe those people's combined VEO DD, not exclusive page sales. All current human members are eligible.")
-            lines.append("Selling-day references are conditional on positive output; they are not expected sales or verified maximum capacity. Ads/workload missing stays unknown.")
+            lines.append("Repeated output was recorded on 3+ separate Active dates per person; it is not expected daily sales or a verified maximum. Ads/workload missing stays unknown.")
             if not detailed:
-                lines.append("Capacity needs 3 member-specific sufficient-work Active dates; selling-day references use at least 3 positive Active dates.")
+                lines.append("Supplied-work capacity needs 3 member-specific confirmed sufficient-work Active dates. Shared output is counted once per page.")
     lines += ["", "Avg = estimated output per active member per day, with confirmed page access.",
         "Shared members count once per page; page totals overlap. Planning estimates, not guarantees."]
     return lines

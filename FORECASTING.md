@@ -7,12 +7,21 @@ output when client work is available. Low sales, paused advertising, and limited
 client supply do not prove a low production limit. No advertising activity is
 inferred from a zero sale or an undelivered bot offer.
 
-The selling-day reference is the median recorded DD on positive-output, declared
-Active dates over the last 56 completed dates, requiring three distinct dates.
-It is deliberately conditional on sales occurring: it is neither expected daily
-sales nor an estimate of maximum capacity. Extra zero-sales dates do not lower
-this reference, and an isolated high day cannot set it. No personal evidence
-means Unknown, never a capacity inferred from the 0.20 sales starting rate.
+The personal capacity reference now describes **demonstrated repeatable output**:
+the highest recorded DD level reached on at least three distinct declared-Active
+dates in the last 56 completed dates. Each person keeps their own support count,
+support dates and latest supporting date. A single peak cannot set the level.
+It is an observed level, not expected daily sales or a verified maximum. Fewer
+than three eligible personal dates means Unknown, never the 0.20 sales default.
+An unknown-work zero does not erase demonstrated output. Support last observed
+more than 14 days earlier is labelled older evidence.
+
+Alongside that level, the report shows a recent personal selling-day average,
+using the shortest of 14, 28 and 56 completed dates containing at least three
+positive Active dates. Its sample size and window are displayed. The former
+56-day selling-day median is retained as descriptive source data, not the main
+capacity reference. These statistics deliberately answer different questions;
+they must not be represented as predictions of everyday sales.
 
 Supplied-work output uses the arithmetic mean over at least three Active dates
 with a manager-confirmed, member-specific record of sufficient work, including

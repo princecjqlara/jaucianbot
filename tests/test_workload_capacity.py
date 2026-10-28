@@ -33,6 +33,66 @@ def record(day, work="unknown", *, chat=CHAT, uid=11, ads="unknown", actual=True
 
 
 class WorkloadMeasurementsTests(unittest.TestCase):
+    def test_repeated_output_can_exceed_the_median_without_using_an_isolated_peak(self):
+        p = person((1, 1, 1, 1, 1, 2, 2, 2, 20))
+        result = capacity.measure(p, END)
+        self.assertEqual(result["selling_day_median"], 1)
+        self.assertEqual(result["repeatable_output_per_day"], 2)
+        self.assertEqual(result["repeatable_support_days"], 4)
+        self.assertEqual(len(result["repeatable_output_evidence"]), 4)
+        self.assertTrue(all(d["recorded_output"] >= 2 for d in result["repeatable_output_evidence"]))
+        self.assertFalse(result["reference_is_sales_forecast"])
+        self.assertIsNone(result["maximum_capacity"])
+
+    def test_two_high_dates_are_not_enough_for_a_higher_repeated_level(self):
+        result = capacity.measure(person((1, 1, 1, 3, 3)), END)
+        self.assertEqual(result["repeatable_output_per_day"], 1)
+        result = capacity.measure(person((1, 1, 3, 3, 3)), END)
+        self.assertEqual(result["repeatable_output_per_day"], 3)
+        self.assertEqual(result["repeatable_support_days"], 3)
+
+    def test_recent_average_uses_the_shortest_supported_personal_window(self):
+        p = person((1, 1, 1) + (0,) * 14 + (2, 2, 2))
+        result = capacity.measure(p, END)
+        self.assertEqual(result["recent_selling_window_days"], 14)
+        self.assertEqual(result["recent_selling_day_average"], 2)
+        self.assertEqual(result["recent_selling_days"], 3)
+        p = person((1, 1, 1) + (0,) * 14 + (2, 2))
+        result = capacity.measure(p, END)
+        self.assertEqual(result["recent_selling_window_days"], 28)
+        self.assertAlmostEqual(result["recent_selling_day_average"], 1.4)
+
+    def test_scarce_personal_records_never_use_a_peer_capacity_or_sales_default(self):
+        result = capacity.measure(person((0, 1, 0, 2, 0)), END)
+        self.assertIsNone(result["repeatable_output_per_day"])
+        self.assertIsNone(result["recent_selling_day_average"])
+        self.assertEqual(result["reference_status"], "unknown")
+        self.assertEqual(result["repeatable_output_evidence"], [])
+
+    def test_future_output_and_duplicate_date_cannot_create_repeat_support(self):
+        p = person((2, 2))
+        p["daily"].append(dict(p["daily"][-1]))
+        p["daily"].append({"date": str(END + dt.timedelta(days=1)), "attendance": "Active", "done_deals": 100})
+        result = capacity.measure(p, END)
+        self.assertIsNone(result["repeatable_output_per_day"])
+        self.assertEqual(result["selling_days"], 2)
+
+    def test_inactive_unknown_and_expired_output_never_prove_current_capacity(self):
+        p = person((3, 3, 3))
+        p["daily"][0]["attendance"] = "Inactive"
+        p["daily"][1]["attendance"] = "Unknown"
+        p["daily"].append({"date": str(END - dt.timedelta(days=56)), "attendance": "Active", "done_deals": 100})
+        result = capacity.measure(p, END)
+        self.assertIsNone(result["repeatable_output_per_day"])
+        self.assertEqual(result["selling_days"], 1)
+
+    def test_older_repeatable_support_is_labelled_and_unknown_work_keeps_level(self):
+        result = capacity.measure(person((2, 2, 2) + (0,) * 20), END)
+        self.assertEqual(result["repeatable_output_per_day"], 2)
+        self.assertEqual(result["reference_status"], "older evidence")
+        self.assertEqual(result["repeatable_age_days"], 20)
+        self.assertEqual(result["unknown_work_zero_days"], 20)
+
     def test_zero_sales_without_work_are_not_evidence_of_low_capacity(self):
         original = person((1, 2, 1))
         before = capacity.measure(original, END)
@@ -100,6 +160,9 @@ class WorkloadMeasurementsTests(unittest.TestCase):
         self.assertEqual(summary["selling_day"]["known_total"], 1)
         self.assertIsNone(summary["selling_day"]["total"])
         self.assertEqual(summary["selling_day"]["known_members"], 1)
+        self.assertEqual(summary["repeatable_output"]["known_members"], 1)
+        self.assertIsNone(summary["repeatable_output"]["total"])
+        self.assertEqual(summary["repeatable_output"]["known_total"], 1)
         text = "\n".join(capacity.render(summary))
         self.assertIn("partial; supported members only", text)
         self.assertIn("unmeasured", text)
@@ -186,9 +249,15 @@ class WorkloadReportTests(unittest.TestCase):
         text = organized_reports.staffing_text(CHAT, END, [], [{"user_id": 11}, {"user_id": 22}],
             [a, b], page_inputs=survey)
         self.assertIn("TEAM OUTLOOK", text)
-        self.assertIn("Selling-day reference: 2.00 DD/day", text)
+        self.assertIn("Demonstrated repeatable output: 2.00 DD/day", text)
         self.assertIn("Azshinari: 1 active", text)
         self.assertIn("Page-access votes pending: 1", text)
+        personal = organized_reports.veo_capacity_text(CHAT, END, [a])
+        self.assertIn("Demonstrated repeatable output: 1.00 DD/day", personal)
+        self.assertIn("achieved on 3 dates; latest 2026-10-26", personal)
+        self.assertIn("Recent selling-day average: 1.33/day (3 positive Active dates in 14 days)", personal)
+        self.assertIn("Recent-demand sales", personal)
+        self.assertIn("Capacity with sufficient work: unmeasured", personal)
 
     def test_workload_source_failure_keeps_capacity_unknown_and_sales_available(self):
         p = person()
@@ -214,7 +283,8 @@ class WorkloadReportTests(unittest.TestCase):
             member["planning"] = {"planning_average_per_day": .2, "safe_plan_per_day": .16}
             pages = page_capacity.build(END, {CHAT}, {CHAT: [{"user_id": 11}]}, enriched, survey)
         text = "\n".join(page_capacity.render(pages, detailed=True))
-        self.assertIn("Selling-day reference: 1.00 DD/day", text)
+        self.assertIn("Demonstrated repeatable output: 1.00 DD/day", text)
+        self.assertIn("Recent selling-day average: 1.33 DD/day", text)
         self.assertIn("Recent-demand sales forecast: Avg 0.20", text)
         self.assertIn("Capacity with sufficient work: unmeasured", text)
         self.assertEqual(pages["businesses"][0]["pages"][0]["workload_capacity"]["selling_day"]["total"], 1)
@@ -223,6 +293,7 @@ class WorkloadReportTests(unittest.TestCase):
             {CHAT: [{"user_id": 11}], OTHER: [{"user_id": 11}]}, history_end=END)
         self.assertEqual(result["overall"]["workload_capacity"]["active_members"], 1)
         self.assertEqual(result["overall"]["workload_capacity"]["selling_day"]["total"], 1)
+        self.assertEqual(result["overall"]["workload_capacity"]["repeatable_output"]["total"], 1)
 
     def test_untracked_rosters_and_unknown_members_cannot_invent_capacity(self):
         result = tomorrow_capacity.build(END + dt.timedelta(days=1), [], {CHAT: None}, history_end=END)
