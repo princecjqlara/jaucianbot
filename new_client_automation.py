@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import done_deal_tracking
+import veo_standby
 
 import datetime as dt
 import html
@@ -749,6 +750,9 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     from daily_automation import SUNO_GROUPS
     from cloud_store import allowed_chat_ids
     history_chats = eligible | (allowed_chat_ids().intersection(SUNO_GROUPS) if eligible.intersection(SUNO_GROUPS) else set())
+    if veo_standby.enabled():
+        from daily_automation import GROUPS as VEO_GROUPS
+        history_chats |= allowed_chat_ids().intersection(VEO_GROUPS)
     shared_history = [row for row in new_client_actions(history_chats) if new_client_action_matches_source(row)]
     history = [row for row in shared_history if int(row["chat_id"]) in eligible]
     _enrich_history_contact_identities(history)
@@ -778,12 +782,14 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
     group_members = {chat_id: [] if page_mapping_pending(GROUPS[chat_id]) else ready.available(chat_id, now, history, recover=True) if ready.enabled(chat_id)
                      else current_members(_active_members(chat_id, work_date), now) for chat_id in sorted(eligible)}
     groups_with_members = [chat_id for chat_id in sorted(eligible) if group_members[chat_id]]
-    if not groups_with_members:
+    standby_groups = {c for c in eligible if ready.veo_queue(c)} if veo_standby.enabled() else set()
+    source_groups = set(groups_with_members) | standby_groups
+    if not source_groups:
         return queued
     # Fetch independent team pages together so a slow CRM read for one page does
     # not add its entire latency to every other team's assignment check.
-    with ThreadPoolExecutor(max_workers=len(groups_with_members)) as pool:
-        reads = {chat_id: pool.submit(_page_contacts, GROUPS[chat_id]) for chat_id in groups_with_members}
+    with ThreadPoolExecutor(max_workers=len(source_groups)) as pool:
+        reads = {chat_id: pool.submit(_page_contacts, GROUPS[chat_id]) for chat_id in source_groups}
         page_contacts = {}
         read_failures = []
         for chat_id, read in reads.items():
@@ -889,7 +895,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
         if ready_rotation:
             # Rescue timed-out contacts first, even if newer fresh leads are waiting.
             candidates.sort(key=lambda item: max((contact_attempts[key] for key in item[2]), default=0) == 0)
-        if ready.renewal_required(chat_id) and ready.enabled(chat_id) and any(
+        if not ready.veo_queue(chat_id) and ready.renewal_required(chat_id) and ready.enabled(chat_id) and any(
                 max((contact_attempts[key] for key in keys), default=0) > 0 for _, _, keys in candidates):
             members.sort(key=lambda user: ready_order(int(user["user_id"])))
         for user in members:
@@ -916,7 +922,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                                 *(prior_assignees.get(key, set()) for key in keys)
                             )
                         ),
-                        key=ready_order if ready.renewal_required(chat_id) and ready.enabled(chat_id) else rotation_order,
+                        key=ready_order if not ready.veo_queue(chat_id) and ready.renewal_required(chat_id) and ready.enabled(chat_id) else rotation_order,
                         default=None,
                     )
                 ),
@@ -939,7 +945,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                         index for index, (page, candidate, keys) in enumerate(candidates)
                         if max((contact_attempts[key] for key in keys), default=0) == 0
                         and can_offer(user_id, page, candidate)
-                        and (refreshed_after_acceptance or assignment_counts[user_id] == min(
+                        and ((refreshed_after_acceptance and not ready.veo_queue(chat_id)) or assignment_counts[user_id] == min(
                             (assignment_counts[mid] for mid in rotation_ids if can_offer(mid, page, candidate)), default=minimum))
                     ),
                     None,
@@ -952,7 +958,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                 (contact_attempts[key] for key in contact_keys), default=0,
             ) + 1
             token = secrets.token_hex(4).upper()
-            response_minutes = (ready.REASSIGNMENT_MINUTES if ready.renewal_required(chat_id) and ready.enabled(chat_id)
+            response_minutes = (ready.reassignment_minutes(chat_id) if ready.renewal_required(chat_id) and ready.enabled(chat_id)
                                 and attempt_number > 1 else _timeout_minutes(chat_id))
             message, reminder = _assignment_text(user, page, contact, token, round_number, chat_id=chat_id, response_minutes=response_minutes)
             if ready.enabled(chat_id) and not ready.renewal_required(chat_id) and attempt_number > 1:
@@ -1006,7 +1012,7 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
             if ready.enabled(chat_id) and not ready.reserve(user, dedupe_key, now):
                 continue
             try:
-                created = enqueue_scheduled_action(
+                created = veo_standby.enqueue_offer(enqueue_scheduled_action, now=now,
                     chat_id=chat_id,
                     action_type="message",
                     payload=payload,
@@ -1046,6 +1052,8 @@ def queue_new_client_assignments(now: dt.datetime, allowed: set[int]) -> int:
                     item for item in candidates
                     if not item[2].intersection(used_contact_keys)
                 ]
+    if veo_standby.enabled():
+        veo_standby.reconcile(page_contacts, allowed, now)
     if read_failures:
         raise RuntimeError("New-client source read failed for " + ", ".join(map(str, read_failures)))
     return queued
@@ -1063,6 +1071,8 @@ def _crm_offer_eligible(action: dict) -> bool:
 def new_client_delivery_allowed(action: dict, now: dt.datetime) -> bool:
     if not is_new_client_action(action):
         return True
+    if not veo_standby.prepare_offer(action, now):
+        return False
     if GROUPS[int(action["chat_id"])].get("client_source") == "suno":
         from suno_store import suno_configured
         if not suno_configured() or not new_client_action_matches_source(action):
@@ -1221,6 +1231,7 @@ def new_client_report_lines(chat_id: int, work_date: dt.date) -> list[str]:
 
 
 def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
+    standby_database = veo_standby.database_available() if veo_standby.enabled() else None
     work_date = now.astimezone(MANILA).date()
     history = [row for row in new_client_actions(allowed.intersection(GROUPS)) if new_client_action_matches_source(row)]
     _enrich_history_contact_identities(history)
@@ -1374,8 +1385,10 @@ def new_client_status(allowed: set[int], now: dt.datetime) -> list[dict]:
             "active_now": len(current_members(members, now)),
             "volunteer_window_minutes": None if ready.renewal_required(chat_id) and ready.enabled(chat_id) else 10 if volunteers.enabled() or ready.enabled(chat_id) else None,
             "reply_deadline_minutes": _timeout_minutes(chat_id),
-            "ready_window_minutes": ready.READY_MINUTES if ready.renewal_required(chat_id) and ready.enabled(chat_id) else None,
-            "reassignment_deadline_minutes": ready.REASSIGNMENT_MINUTES if ready.renewal_required(chat_id) and ready.enabled(chat_id) else None,
+            "ready_window_minutes": ready.ready_minutes(chat_id) if ready.renewal_required(chat_id) and ready.enabled(chat_id) else None,
+            "reassignment_deadline_minutes": ready.reassignment_minutes(chat_id) if ready.renewal_required(chat_id) and ready.enabled(chat_id) else None,
+            "standby_bot_enabled": ready.veo_queue(chat_id) and veo_standby.enabled(),
+            "standby_database_available": standby_database if ready.veo_queue(chat_id) else None,
             "continuous_ready_enabled": ready.enabled(chat_id) and not ready.renewal_required(chat_id),
             "hourly_poll_ready_enabled": ready.poll_enabled(chat_id),
             "missed_offer_resume": ("ready_command_or_new_hourly_vote" if ready.poll_enabled(chat_id)

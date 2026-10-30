@@ -481,7 +481,8 @@ def activity_messages(
         offset += len(rows)
 
 
-def capacity_export_messages(chat_id: int, done_thread: int, start_utc: dt.datetime, end_utc: dt.datetime) -> list[dict]:
+def capacity_export_messages(chat_id: int, done_thread: int, start_utc: dt.datetime, end_utc: dt.datetime,
+                             *, close_thread: int | None = None) -> list[dict]:
     """Backread unthreaded export candidates, with bounded, paginated queries.
 
     A direct reply to DONE DEALS supplies topic evidence. Otherwise the shared
@@ -490,6 +491,9 @@ def capacity_export_messages(chat_id: int, done_thread: int, start_utc: dt.datet
     found = {}
     filters = [("reply_to_message_id", f"eq.{done_thread}"),
                ("text", "ilike.*paid*"), ("text", "ilike.*total*pay*"), ("text", "ilike.*tp:*")]
+    if close_thread is not None:
+        filters += [("reply_to_message_id", f"eq.{close_thread}"),
+                    ("text", "ilike.*price*deal*"), ("text", "ilike.*pd:*")]
     for field, value in filters:
         offset = 0
         while True:
@@ -500,8 +504,9 @@ def capacity_export_messages(chat_id: int, done_thread: int, start_utc: dt.datet
                 (field, value), ("order", "sent_utc.asc,message_id.asc"), ("limit", 1000), ("offset", offset),
             ])) or []
             for row in page:
-                found[row["message_id"]] = ({**row, "thread_id": done_thread}
-                    if row.get("reply_to_message_id") == done_thread else row)
+                thread = row.get("reply_to_message_id")
+                found[row["message_id"]] = ({**row, "thread_id": thread}
+                    if thread == done_thread or close_thread is not None and thread == close_thread else row)
             if len(page) < 1000:
                 break
             offset += len(page)

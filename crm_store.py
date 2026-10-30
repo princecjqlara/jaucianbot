@@ -94,7 +94,7 @@ def completed_detail_contacts(page_id: str, *, exclude_handled: bool = False) ->
         "select": (
             "contact_id,page_id,status,stop_reason,collected_details,missing_details,"
             "last_inbound_at,last_bot_reply_at,contacts!inner("
-            "id,page_id,name,psid,last_interaction_at,pipeline_stage)"
+            "id,page_id,name,psid,last_interaction_at,pipeline_stage,chatbot_enabled)"
         ),
         "page_id": f"eq.{page_id}",
         "stop_reason": "eq.details_collected",
@@ -143,6 +143,7 @@ def completed_detail_contacts(page_id: str, *, exclude_handled: bool = False) ->
                 "name": contact["name"].strip(),
                 "last_interaction_at": contact.get("last_interaction_at"),
                 "pipeline_stage": contact.get("pipeline_stage"),
+                "chatbot_enabled": contact.get("chatbot_enabled"),
                 "status": row.get("status"),
                 "stop_reason": row.get("stop_reason"),
                 "collected_details": row.get("collected_details") or {},

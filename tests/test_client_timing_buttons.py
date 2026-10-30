@@ -34,7 +34,7 @@ class TimingAndButtonTests(unittest.TestCase):
                 self.assertEqual(clients._timeout_minutes(chat), 15)
                 guide = workflow.guide(chat)
                 self.assertIn("Accept within 15 minutes", guide)
-                self.assertIn("60 minutes", guide)
+                self.assertIn(f"{ready.ready_minutes(chat)} minutes", guide)
 
     def test_new_warning_starts_at_ten_minutes_and_ends_at_fifteen(self):
         row = ready_offer()

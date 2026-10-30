@@ -133,6 +133,23 @@ class NightlyQueueTests(unittest.TestCase):
         self.assertIn("Nightly baseline: 2.00/day", capacity)
         self.assertIn("2026-10-08 to 2026-10-21", capacity)
 
+    def test_long_nightly_summary_is_split_without_dropping_content_or_duplicate_retries(self):
+        financial = "DAILY SALES & SALARY SUMMARY\n" + "Summary row with emoji 🚀\n" * 500
+        with ExitStack() as stack:
+            _, actions, _, _ = self.fixture(stack)
+            stack.enter_context(patch.object(reports, "summary_text", return_value=financial))
+            self.assertGreater(reports.queue_automation(NIGHT, {VEO, TARGET}), 0)
+            self.assertEqual(reports.queue_automation(NIGHT + dt.timedelta(seconds=20), {VEO, TARGET}), 0)
+        summaries = [a for a in actions.values() if a["payload"].get("report_category") == "summary"]
+        self.assertGreater(len(summaries), 1)
+        self.assertEqual(len({a["dedupe_key"] for a in summaries}), len(summaries))
+        text = "\n".join(a["payload"]["text"] for a in summaries)
+        self.assertEqual(text.count("Summary row with emoji 🚀"), 500)
+        self.assertIn("TOMORROW CAPACITY BY PAGE", text)
+        for action in summaries:
+            self.assertLessEqual(len(action["payload"]["text"].encode("utf-16-le")) // 2, 4096)
+            self.assertEqual(action["payload"]["nightly_publication_date"], str(DAY))
+
     def test_first_attempt_after_midnight_reports_yesterday_and_its_next_day(self):
         with ExitStack() as stack:
             _, actions, _, finances = self.fixture(stack)

@@ -45,7 +45,7 @@ def _save(chat: int, payload: dict, now: dt.datetime) -> None:
 
 def _verify(chat: int, uid: int, now: dt.datetime) -> dict:
     from telegram_sender import telegram_call
-    payload = {"user_id": uid, "status": "unknown", "current": False,
+    payload = {"user_id": uid, "status": "unknown", "current": False, "is_bot": None,
                "verified_at": now.isoformat(), "expires_at": (now + TTL).isoformat()}
     try:
         member = telegram_call("getChatMember", {"chat_id": chat, "user_id": uid}, timeout=3)

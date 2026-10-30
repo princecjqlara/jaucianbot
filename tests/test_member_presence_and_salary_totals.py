@@ -77,6 +77,24 @@ class CurrentMembershipTests(unittest.TestCase):
                 patch.object(presence, "_save"), patch.object(presence, "records", return_value={}):
             self.assertEqual(presence._verify(CHAT, 7, NOW)["status"], "unknown")
 
+    def test_failed_human_lookup_finishes_attempt_without_adding_or_repeatedly_refreshing_member(self):
+        cached = {}
+        def save(chat, payload, now):
+            cached[payload["user_id"]] = payload
+        users = [{"user_id": 7}]
+        with patch.object(telegram_sender, "telegram_call", side_effect=RuntimeError("lookup unavailable")) as lookup, \
+                patch.object(presence, "_save", side_effect=save), \
+                patch.object(presence, "records", side_effect=lambda chat: cached):
+            people, coverage = presence.filter_current(CHAT, users, NOW, humans_only=True)
+            self.assertEqual(people, [])
+            self.assertEqual(coverage["pending_verification"], 0)
+            self.assertEqual(coverage["unverified"], 1)
+            self.assertIsNone(cached[7]["is_bot"])
+            presence.filter_current(CHAT, users, NOW + dt.timedelta(minutes=1), humans_only=True)
+            self.assertEqual(lookup.call_count, 1)
+            presence.filter_current(CHAT, users, NOW + dt.timedelta(minutes=11), humans_only=True)
+            self.assertEqual(lookup.call_count, 2)
+
     def test_read_membership_works_for_paused_teams_without_enabling_sends(self):
         result = {"ok": True, "result": {"status": "left", "user": {"id": 7}}}
         with patch.dict(os.environ, {"AUTOMATION_CHAT_IDS": "", "TELEGRAM_BOT_TOKEN": "test-token"}), \

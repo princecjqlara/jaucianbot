@@ -42,6 +42,8 @@ REQUIRED_TEST_FILES = (
     "test_veo_forecast_evaluate.py",
     "test_staffing_update.py",
     "test_workload_capacity.py",
+    "test_production_capacity.py",
+    "test_veo_standby.py",
 )
 
 

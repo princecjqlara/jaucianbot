@@ -10,13 +10,28 @@ import urllib.parse
 from cloud_store import enqueue_scheduled_action, request
 
 OLLIE = -1004423057797
-GUIDE_VERSION = 13
+GUIDE_VERSION = 14
 ACCEPTANCE_MINUTES = 15
 REASSIGNMENT_MINUTES = 10
 READY_MINUTES = 60
 WARNING_BEFORE_MINUTES = 5
 COMMAND = re.compile(r"^\s*/?(ready|busy)(?:\s*@[\w]+)?\s*$", re.I)
 RESERVATION_LEASE = dt.timedelta(minutes=5)
+
+
+def ready_minutes(chat_id: int) -> int:
+    from daily_automation import GROUPS
+    return 30 if chat_id in GROUPS else READY_MINUTES
+
+
+def reassignment_minutes(chat_id: int) -> int:
+    from daily_automation import GROUPS
+    return 15 if chat_id in GROUPS else REASSIGNMENT_MINUTES
+
+
+def veo_queue(chat_id: int) -> bool:
+    from daily_automation import GROUPS
+    return chat_id in GROUPS
 
 
 def enabled(chat_id: int) -> bool:
@@ -35,7 +50,7 @@ def expires_at(chat_id: int, payload: dict) -> dt.datetime | None:
     since = _utc_time(payload.get("ready_at"))
     until = _utc_time(payload.get("ready_until"))
     if renewal_required(chat_id) and since:
-        limit = since + dt.timedelta(minutes=READY_MINUTES)
+        limit = since + dt.timedelta(minutes=ready_minutes(chat_id))
         return min(until, limit) if until and not payload.get("continuous") else limit
     return until
 
@@ -340,7 +355,7 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
     if stamp > now + dt.timedelta(seconds=30):
         return None
     renewal = renewal_required(chat_id)
-    until = stamp + dt.timedelta(minutes=READY_MINUTES if renewal else 15)
+    until = stamp + dt.timedelta(minutes=ready_minutes(chat_id) if renewal else 15)
     ready = match.group(1).lower() == "ready"
     name = " ".join(filter(None, (user.get("first_name"), user.get("last_name")))) or user.get("username") or str(user["id"])
     p = {"user_id": int(user["id"]), "user_name": name, "ready_at": stamp.isoformat(),
@@ -410,17 +425,19 @@ def queue_instructions(chat_id: int, now: dt.datetime, thread_id: int) -> int:
     internal = str(abs(chat_id))[3:]
     if renewal_required(chat_id):
         scope = ":sama" if config.get("client_page_scope") else ""
+        version = GUIDE_VERSION if veo_queue(chat_id) else 13
         queued = int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
-            dedupe_key=f"ready-instructions:v{GUIDE_VERSION}:{chat_id}:{now.astimezone(MANILA).date()}{scope}",
+            dedupe_key=f"ready-instructions:v{version}:{chat_id}:{now.astimezone(MANILA).date()}{scope}",
             payload={"message_thread_id": thread_id, "text": guide(chat_id), "reply_markup": menu()}))
         queued += int(enqueue_scheduled_action(chat_id=chat_id, action_type="message", scheduled_for=now,
-            dedupe_key=f"ready-rollout:v{GUIDE_VERSION}:{chat_id}{scope}", payload={
+            dedupe_key=f"ready-rollout:v{version}:{chat_id}{scope}", payload={
                 "message_thread_id": config["announcements"],
                 "text": f"{config['name'].upper()} — CLIENTS\n"
                         + (f"{config['client_page_scope']} members only. Confirm access with /pages.\n" if config.get("client_page_scope") else "") +
                         "Availability: Yes / No.\n"
-                        "/ready lasts 60 minutes; /busy stops offers.\n"
-                        "Round robin: 15 minutes to accept. Missed clients go to the earliest Ready member, with 10 minutes to accept.\n"
+                        f"/ready lasts {ready_minutes(chat_id)} minutes; /busy stops offers.\n"
+                        + ("Offers go only to Ready members, fairly in turn. Each offer has 15 minutes to accept. No Ready members: clients stay on standby.\n"
+                           if veo_queue(chat_id) else "Round robin: 15 minutes to accept. Missed clients go to the earliest Ready member, with 10 minutes to accept.\n") +
                         "After accepting, send /ready for another client.\n"
                         f"Client list: /clients\nhttps://t.me/c/{internal}/{thread_id}",
             }))

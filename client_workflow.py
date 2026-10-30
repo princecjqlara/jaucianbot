@@ -77,10 +77,12 @@ def guide(chat_id: int) -> str:
                 (f"{config['client_page_scope']} members only. Confirm access with /pages.\n" if config.get("client_page_scope") else "") +
                 "Active tomorrow? Choose Yes or No.\n"
                 "/pages — choose pages you can receive clients from.\n"
-                "/ready — available for 60 minutes from your message.\n"
+                f"/ready — available for {ready.ready_minutes(chat_id)} minutes from your message.\n"
                 "/busy — stop new offers.\n"
-                "Clients follow round robin. Accept within 15 minutes.\n"
-                "Missed offers go to the earliest Ready member: 10 minutes to accept.\n"
+                + ("Only Ready members receive offers; multiple Ready members share round robin turns.\n"
+                   "Accept within 15 minutes for every offer. Nobody Ready: clients stay on standby.\n" if ready.veo_queue(chat_id) else
+                   "Clients follow round robin. Accept within 15 minutes.\n"
+                   "Missed offers go to the earliest Ready member: 10 minutes to accept.\n") +
                 "A missed offer stops Ready. Send /ready to rejoin.\n"
                 "After accepting, send /ready to request another client.\n"
                 "Accept client: button or WORKING + token. Details stay visible.\n"
@@ -130,6 +132,8 @@ def current_rows(history: list[dict]) -> list[dict]:
 
 
 def directory(chat_id: int, now: dt.datetime) -> dict:
+    import ready_availability
+    import veo_standby
     from new_client_automation import _page_contacts, _action_contact_keys, _candidate_contact_keys, _reserved_contact_keys, _utc_time
     history = history_for(chat_id)
     reserved = _reserved_contact_keys(history)
@@ -180,15 +184,15 @@ def directory(chat_id: int, now: dt.datetime) -> dict:
                             "token": None, "message_id": None})
     entries.sort(key=lambda e: (e["status"], e["page"].casefold(), e["client"].casefold(), str(e["contact_id"])))
     hint = ""
-    if GROUPS[chat_id].get("client_source") == "suno" and any(e["available"] for e in entries):
-        import ready_availability
+    if any(e["available"] for e in entries) and (GROUPS[chat_id].get("client_source") == "suno"
+            or veo_standby.enabled() and ready_availability.enabled(chat_id)):
         people = ready_availability.available(chat_id, now, history)
         pages = {page_access.page_map(chat_id).get(e["page"]) for e in entries if e["available"]}
         access = page_access.members(chat_id)
         eligible = sum(bool(pages.intersection(access.get(int(u["user_id"]), set()))) for u in people)
         hint = (f"Ready: {eligible}. Offers follow round robin." if eligible else
                 "Ready members need access to the available pages. Update Page access." if people else
-                "Waiting for Ready members. Choose Page access, then tap Ready (60 minutes).")
+                f"{'Standby. ' if ready_availability.veo_queue(chat_id) else ''}Waiting for Ready members. Choose Page access, then tap Ready ({ready_availability.ready_minutes(chat_id)} minutes).")
     return {"team": GROUPS[chat_id]["name"], "chat_id": chat_id, "as_of_utc": now.isoformat(),
             "daily_only": True, "work_date": now.astimezone(MANILA).date().isoformat(),
             "handovers_enabled": handover_enabled(chat_id),
@@ -608,6 +612,7 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
 
 
 def queue_status_text(chat_id: int, user_id: int, now: dt.datetime) -> str:
+    import ready_availability
     from new_client_automation import new_client_status
     status = new_client_status({chat_id}, now)[0]
     member = next((m for m in status["members"] if int(m["user_id"]) == user_id), None)
@@ -630,8 +635,8 @@ def queue_status_text(chat_id: int, user_id: int, now: dt.datetime) -> str:
     }
     if chat_id in GROUPS:
         reasons.update({
-            "not_ready_now": "Send /ready when available. Ready lasts 60 minutes.",
-            "no_available_complete_clients": "You are Ready. Waiting for a client. Renew /ready every 60 minutes.",
+            "not_ready_now": f"Send /ready when available. Ready lasts {ready_availability.ready_minutes(chat_id)} minutes.",
+            "no_available_complete_clients": f"You are Ready. Waiting for a client. Renew /ready every {ready_availability.ready_minutes(chat_id)} minutes.",
             "ready_for_assignment": "Ready. Waiting for your turn.",
             "awaiting_working_reply": "Offer waiting. Tap Accept client before its deadline.",
         })

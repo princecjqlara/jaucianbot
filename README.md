@@ -1,7 +1,42 @@
 # Telegram group insights
 
+VEO NEW CLIENTS uses a full client list with Ready/Busy controls. `/ready` is
+valid for 30 minutes and authorizes one offer; accepting or missing an offer
+requires a fresh `/ready` before another. One eligible Ready member can receive
+work immediately. Multiple Ready members share fair turns based on existing
+assignment history, including after re-entering Ready. Initial and reassigned
+offers both allow 15 minutes from first delivery. Nobody Ready means standby;
+attendance votes and Telegram online presence do not authorize offers.
+
+With `VEO_STANDBY_BOT_ENABLED=true`, eligible unowned standby contacts whose
+veobot contact permission is off can have `contacts.chatbot_enabled` restored
+when no Ready member has access to their page. Shared VEO pages are checked
+across teams. This uses the server-only `CRM_DATABASE_URL` and the internal
+audit table in `crm/20261031_veo_standby.sql`. Row locks serialize these changes
+with offer enqueueing. A setting enabled by this feature is restored before a
+human offer; newer manual permission/takeover changes win. Existing bot work is
+invalidated using veobot's permission epoch and old follow-up jobs are cancelled.
+This does not send messages, replay replies, reset briefs, clear completion
+pauses or enable page bots; veobot retains its normal reply/collection rules.
+Confirmed ownership, human handling, opt-outs and explicit holds are preserved.
+Each scan changes at most 25 contact permissions. Suno retains its separate
+60-minute Ready and 10-minute reassignment policy.
+
+VEO's primary capacity estimate now uses **CD → DD elapsed time and concurrent
+projects**, with average DD shown separately. It links unambiguous posts for the
+same member, client, page and price, and requires at least three matched projects
+on three completion dates within 56 completed PHT dates. The estimate divides
+time-weighted concurrent matched projects by their mean elapsed days; gaps with
+no matched project underway do not reduce it. Average DD per declared Active
+date includes zero-output dates; output-day average stays separate. Unlinked,
+conflicting and unresolved records are excluded and counted, and can bias a
+completed-project estimate. Elapsed time includes nights, client waits and post
+delays: this is a workflow estimate, not hands-on hours or a verified maximum.
+Missing evidence stays pending. Team/page totals show supported coverage and
+deduplicate people; the recent-demand sales forecast stays separate.
+
 VEO reports now separate recent-demand sales forecasts from staff output evidence.
-The personal capacity reference is the highest recorded DD level reached on
+The supporting repeatable-output reference is the highest recorded DD level reached on
 at least three separate Active dates in the last 56 completed dates. Supporting
 dates and older evidence are shown. Recent selling-day averages use the shortest
 14/28/56-day personal window with at least three positive Active dates. These are
@@ -12,8 +47,8 @@ limited work, and unknown client supply do not by themselves lower this measure.
 Record or read dated ads/workload context with `remote_windows.ps1 workload`;
 these records never send Telegram messages. See [FORECASTING.md](FORECASTING.md).
 
-VEO automation is enabled across all six VEO teams. With
-`VEO_NEW_CLIENTS_ENABLED=false`, availability and reports stay on while
+VEO automation and new-client offers are enabled across all six VEO teams. Setting
+`VEO_NEW_CLIENTS_ENABLED=false` keeps availability and reports on while
 new-client offers, Ready controls, acceptance and client lists stay off for VEO.
 `VEO_PAGE_ACCESS_POLLS_ENABLED=true` independently enables a public multi-select
 page-access poll in each active VEO team's New Clients topic, with a No access

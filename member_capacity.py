@@ -116,6 +116,7 @@ def _date(value) -> dt.date | None:
 
 
 def summarize(chat_id: int, rows: list[dict], answers: list[dict], start: dt.date, end: dt.date, *, historical: bool = False) -> dict:
+    import production_capacity
     config = GROUPS[chat_id]
     parsed = collect_deals(rows, config, historical=historical)
     entries = [e for e in parsed["entries"] if e["kind"] == "dd" and e["count"] > 0]
@@ -178,6 +179,11 @@ def summarize(chat_id: int, rows: list[dict], answers: list[dict], start: dt.dat
             p["seen_dates"].add(dt.datetime.fromisoformat(row["sent_utc"].replace("Z", "+00:00")).astimezone(MANILA).date())
         except (ValueError, TypeError, KeyError):
             pass
+    project_events = production_capacity.history(chat_id, rows, config, names)
+    for event in project_events:
+        day = production_capacity.stamp(event["sent_utc"]).astimezone(MANILA).date()
+        if start <= day <= end:
+            person(event["user_id"], event["author_name"])["seen_dates"].add(day)
     dates = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
     members = []
     for p in people.values():
@@ -202,12 +208,14 @@ def summarize(chat_id: int, rows: list[dict], answers: list[dict], start: dt.dat
             "verified_full_working_days": len(full_days),
             "top_three_full_day_average": round(sum(top3) / 3, 2) if len(top3) == 3 else None,
             "maximum_capacity": None, "posts_needing_review": p["review"],
+            "project_history": [e for e in project_events if e["user_id"] == p["user_id"]],
             "daily": [{"date": day.isoformat(), "done_deals": daily[day],
                        "attendance": "Active" if day in active else "Inactive" if day in inactive else "Unknown"}
                       for day in dates]})
     members.sort(key=lambda p: (-p["done_deals"], p["name"].casefold(), str(p["user_id"])))
     for member in members:
         member["planning"] = reviewed_planning(member, end)
+        member["project_capacity"] = production_capacity.measure(member, end)
     return {"chat_id": chat_id, "team": config["name"], "start_date": start.isoformat(), "end_date": end.isoformat(),
             "members": members, "evidence": evidence, "source_counts": dict(sources),
             "duplicate_posts_excluded": len(parsed["duplicate_rows"]), "posts_needing_review": len(parsed["uncertain_rows"])}
@@ -220,12 +228,13 @@ def report(chat_id: int, days: int, now: dt.datetime) -> dict:
     start_utc = dt.datetime.combine(start, dt.time.min, tzinfo=MANILA).astimezone(dt.timezone.utc)
     end_utc = dt.datetime.combine(end + dt.timedelta(days=1), dt.time.min, tzinfo=MANILA).astimezone(dt.timezone.utc)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        read = pool.submit(activity_messages, chat_id, start_utc, end_utc, {GROUPS[chat_id]["done"]})
+        read = pool.submit(activity_messages, chat_id, start_utc, end_utc, {GROUPS[chat_id]["done"], GROUPS[chat_id]["close"]})
         votes = pool.submit(poll_answers_for_range, chat_id, start, end)
         return summarize(chat_id, read.result(), votes.result(), start, end)
 
 
 def combined(reports: list[dict]) -> dict:
+    import production_capacity
     """Recompute per-member daily output across teams; never average team averages."""
     people = defaultdict(list)
     for group in reports:
@@ -260,11 +269,14 @@ def combined(reports: list[dict]) -> dict:
             "observed_daily_peak": max((d["done_deals"] for d in daily), default=0) if output or active else None,
             "posts_needing_review": sum(m["posts_needing_review"] for _, m in values),
             "output_on_inactive_days": sum(d["done_deals"] for d in daily if d["attendance"] == "Inactive"),
-            "top_three_full_day_average": None, "maximum_capacity": None, "daily": daily})
+            "top_three_full_day_average": None, "maximum_capacity": None, "daily": daily,
+            "project_history": [e for _, m in values for e in m.get("project_history", [])]})
     members.sort(key=lambda m: (-m["done_deals"], m["name"].casefold(), str(m["user_id"])))
     end = max((_date(g["end_date"]) for g in reports), default=None)
     for member in members:
         member["planning"] = reviewed_planning(member, end)
+        if end is not None:
+            member["project_capacity"] = production_capacity.measure(member, end)
     return {"start_date": min(g["start_date"] for g in reports) if reports else None,
             "end_date": max(g["end_date"] for g in reports) if reports else None, "members": members,
             "attendance_rule": "An Active vote in any team marks that date Active. A date is Inactive only when all included team records for that member say Inactive; otherwise it is Unknown. Each date is counted once.",
@@ -277,8 +289,9 @@ def archive_report(chat_id: int, start: dt.date, end: dt.date) -> dict:
     start_utc = dt.datetime.combine(start, dt.time.min, tzinfo=MANILA).astimezone(dt.timezone.utc)
     end_utc = dt.datetime.combine(end + dt.timedelta(days=1), dt.time.min, tzinfo=MANILA).astimezone(dt.timezone.utc)
     with ThreadPoolExecutor(max_workers=3) as pool:
-        live = pool.submit(activity_messages, chat_id, start_utc, end_utc, {GROUPS[chat_id]["done"]})
-        exports = pool.submit(capacity_export_messages, chat_id, GROUPS[chat_id]["done"], start_utc, end_utc)
+        live = pool.submit(activity_messages, chat_id, start_utc, end_utc, {GROUPS[chat_id]["done"], GROUPS[chat_id]["close"]})
+        exports = pool.submit(capacity_export_messages, chat_id, GROUPS[chat_id]["done"], start_utc, end_utc,
+            close_thread=GROUPS[chat_id]["close"])
         votes = pool.submit(poll_answers_for_range, chat_id, start, end)
         # A live copy supersedes the export of the same Telegram message.
         rows = {r["message_id"]: r for r in exports.result()}
@@ -317,6 +330,7 @@ def compact(snapshot: dict) -> dict:
 
 
 DEFINITIONS = {
+    "project_capacity": "VEO project capacity = time-weighted concurrent matched projects / average CD-to-DD elapsed days. Use unambiguous same-client/page/member/price pairs, with at least 3 matched projects on 3 completion dates in the last 56 completed PHT dates. Gaps with no matched work are excluded. Calendar time includes nights, client waits and reporting delays. Unlinked and ambiguous work is excluded and can bias the estimate; insufficient history is Unknown. Not a sales forecast or verified maximum.",
     "planning": "VEO planning uses the last 30 completed dates. Mean = recorded DD on declared Active dates / those dates, including zero records. Keep decimals. Conservative average = 80% of that mean, a planning buffer rather than a guarantee. Needs seven Active dates and three output dates. Typical daily target = highest whole count achieved on at least half of Active dates and at least three dates. Show its Active-day achievement rate. Sum unrounded member averages before rounding a team total. Missing attendance/workload, incomplete archives and correlated output limit forecasts; this is recorded sales output, not verified production capacity.",
     "delivery_planning": "Planning estimates use the latest 30 completed dates. Safe plan is the rounded-down declared-Active-day average (including zero recorded output), capped at the repeated reachable level, with at least seven Active dates and three output dates. Reachable is the highest whole daily count recorded on at least three distinct dates in that window. These are planning estimates, not a verified maximum or guarantee.",
     "known_active_day_average": "Recorded Done Deals on declared Active days / declared Active days, including Active days with zero recorded Done Deals. Missing days are excluded and reported as Unknown.",

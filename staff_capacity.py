@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import datetime as dt
 import statistics
+import production_capacity
 
-POLICY = "workload-aware-output-v2"
+POLICY = "workload-aware-project-capacity-v3"
 WINDOW_DAYS = 56
 MIN_DATES = 3
 RECENT_WINDOWS = (14, 28, 56)
@@ -40,6 +41,7 @@ def personal_reference(positive: list[dict], end: dt.date) -> dict:
 
 
 def measure(member: dict, end: dt.date, records=(), source_chats=()) -> dict:
+    project = production_capacity.measure(member, end)
     start = end - dt.timedelta(days=WINDOW_DAYS - 1)
     uid = member.get("user_id")
     contexts = {(int(r["chat_id"]), r["work_date"], r.get("user_id")): r for r in records
@@ -64,6 +66,10 @@ def measure(member: dict, end: dt.date, records=(), source_chats=()) -> dict:
         if effective and all(p.get("ads") == "paused" for p in effective):
             ads_paused += 1
     return {"policy": POLICY, "window_start": str(start), "window_end": str(end), "minimum_dates": MIN_DATES,
+        "project_capacity": project,
+        "project_capacity_per_day": project["estimated_capacity_per_elapsed_day"],
+        "average_dd_per_active_day": project["average_dd_per_active_day"],
+        "average_dd_per_output_day": project["average_dd_per_output_day"],
         **personal_reference(positive, end),
         "active_days": len(active), "selling_days": len(positive),
         "selling_day_median": statistics.median(r["done_deals"] for r in positive) if len(positive) >= MIN_DATES else None,
@@ -73,7 +79,7 @@ def measure(member: dict, end: dt.date, records=(), source_chats=()) -> dict:
         "supplied_work_evidence": [{"date": r["date"], "recorded_output": r["done_deals"]} for r in sorted(supplied, key=lambda r: r["date"])],
         "no_work_days": no_work, "limited_work_days": limited, "unknown_work_zero_days": unknown_zero,
         "ads_paused_days": ads_paused, "maximum_capacity": None,
-        "basis": "paid-sale output; supplied-work measure and selling-day reference are separate from expected sales",
+        "basis": "project capacity uses matched CD-to-DD elapsed time and time-weighted concurrency; daily DD output and sales forecasts are separate",
         "limitations": "Repeated output demonstrates an observed level, not expected daily sales or maximum production. Recent averages condition on selling dates; workload and ad delivery remain separate evidence."}
 
 
@@ -100,7 +106,10 @@ def enrich(capacities: dict, end: dt.date, records=(), source_status="available"
 def aggregate(people: list[dict], *, tracked=True) -> dict:
     unique = {int(p["user_id"]): p.get("workload_capacity", {}) for p in people}
     result = {"active_members": len(unique) if tracked else None, "policy": POLICY}
-    for label, field in (("supplied_work", "supplied_work_output_per_day"),
+    for label, field in (("project_capacity", "project_capacity_per_day"),
+                        ("average_dd_active", "average_dd_per_active_day"),
+                        ("average_dd_output", "average_dd_per_output_day"),
+                        ("supplied_work", "supplied_work_output_per_day"),
                         ("repeatable_output", "repeatable_output_per_day"),
                         ("recent_selling", "recent_selling_day_average"),
                         ("selling_day", "selling_day_median")):
@@ -111,6 +120,7 @@ def aggregate(people: list[dict], *, tracked=True) -> dict:
             "total": sum(known) if tracked and len(known) == len(unique) else None}
     result["context_unavailable"] = any(p.get("context_source_status") == "unavailable" for p in unique.values())
     result["older_repeatable_references"] = sum(p.get("reference_status") == "older evidence" for p in unique.values())
+    result["partial_project_members"] = sum(p.get("project_capacity", {}).get("coverage") == "partial" for p in unique.values())
     return result
 
 
@@ -120,7 +130,17 @@ def render(summary: dict, unit="DD/day") -> list[str]:
         return ["Workload/output reference: availability pending."]
     if n == 0:
         return ["No confirmed Active page members; no workload/output reference to sum."]
-    lines = []
+    project = summary.get("project_capacity", {})
+    known = project.get("known_members", 0)
+    lines = ([f"Project-based capacity estimate: {project['known_total']:.2f} DD/elapsed day with work available; {known}/{n} members; avg {project['average_per_known_member']:.2f}."
+        + (" Partial; supported members only." if known < n else "")]
+        if known else ["Project-based capacity: pending matched CD → DD history (3 projects on 3 completion dates per person)."])
+    if summary.get("partial_project_members"):
+        lines.append(f"Unlinked project records excluded for {summary['partial_project_members']} member(s); matched-only estimates may be biased.")
+    for key, label in (("average_dd_active", "Average DD per Active day"), ("average_dd_output", "Average DD per output day")):
+        data = summary.get(key, {})
+        if data.get("known_members"):
+            lines.append(f"{label}: {data['average_per_known_member']:.2f} per member ({data['known_members']}/{n} members).")
     for key, label in (("repeatable_output", "Demonstrated repeatable output"),
                        ("recent_selling", "Recent selling-day average"),
                        ("supplied_work", "With confirmed sufficient work")):
@@ -136,5 +156,5 @@ def render(summary: dict, unit="DD/day") -> list[str]:
     if summary.get("older_repeatable_references"):
         lines.append(f"Older repeatable-output evidence: {summary['older_repeatable_references']} member(s); last support more than 14 days ago.")
     if summary.get("context_unavailable"):
-        lines.append("Ads/workload records unavailable; capacity remains unmeasured.")
+        lines.append("Ads/workload records unavailable; manager-confirmed supplied-work output remains unmeasured.")
     return lines

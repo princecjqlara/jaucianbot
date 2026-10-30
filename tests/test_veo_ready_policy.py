@@ -79,12 +79,12 @@ class VeoReadyPolicyTests(unittest.TestCase):
                 app.deliver_due_actions({chat})
             send.assert_not_called()
 
-    def test_ready_expires_exactly_sixty_minutes_from_command_even_across_midnight(self):
+    def test_ready_expires_exactly_thirty_minutes_from_command_even_across_midnight(self):
         for chat in daily.GROUPS:
             member = person(chat)
             with patch.object(ready, "records", return_value=[member]):
-                self.assertEqual(len(ready.available(chat, NOW + dt.timedelta(minutes=59, seconds=59), [])), 1)
-                self.assertEqual(ready.available(chat, NOW + dt.timedelta(minutes=60), []), [])
+                self.assertEqual(len(ready.available(chat, NOW + dt.timedelta(minutes=29, seconds=59), [])), 1)
+                self.assertEqual(ready.available(chat, NOW + dt.timedelta(minutes=30), []), [])
                 self.assertEqual(ready.available(chat, NOW + dt.timedelta(days=1), []), [])
 
     def test_hourly_votes_never_activate_veo_readiness(self):
@@ -136,7 +136,7 @@ class VeoReadyPolicyTests(unittest.TestCase):
                 self.assertEqual(row["payload"]["new_client_phase"], "expired")
                 take.assert_not_called()
 
-    def test_reassignment_uses_first_ready_even_when_they_have_more_clients(self):
+    def test_reassignment_respects_round_robin_among_ready_members(self):
         chat = ready.OLLIE
         missed, prior = offer(chat), offer(chat, user=22, accepted=True)
         missed.update(status="cancelled")
@@ -156,9 +156,9 @@ class VeoReadyPolicyTests(unittest.TestCase):
                 patch.object(clients, "enqueue_scheduled_action", return_value=True) as queue:
             self.assertEqual(clients.queue_new_client_assignments(NOW + dt.timedelta(minutes=20), {chat}), 1)
         payload = queue.call_args.kwargs["payload"]
-        self.assertEqual(payload["new_client_assignee_id"], 22)
-        self.assertEqual(payload["new_client_response_minutes"], 10)
-        self.assertIn("within 10 minutes", payload["text"])
+        self.assertEqual(payload["new_client_assignee_id"], 33)
+        self.assertEqual(payload["new_client_response_minutes"], 15)
+        self.assertIn("within 15 minutes", payload["text"])
 
     def test_accepted_offer_keeps_full_client_information_and_details_link(self):
         for chat in daily.GROUPS:
@@ -183,7 +183,7 @@ class VeoReadyPolicyTests(unittest.TestCase):
             self.assertLess(len(guide), 900)
             self.assertNotIn("handover", guide.lower())
             self.assertNotIn("TAKE", guide)
-            self.assertIn("60 minutes", guide)
+            self.assertIn("30 minutes", guide)
             text, _ = clients._assignment_text({"user_id": 11, "user_name": "Alex"}, "Page", {
                 "id": "client", "name": "Client", "collected_details": {"request": "ad"}}, "AABBCCDD", 1, chat_id=chat)
             self.assertLess(len(text), 400)

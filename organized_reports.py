@@ -23,6 +23,7 @@ import veo_forecast
 import page_capacity
 import nightly_reports
 import staff_capacity
+import production_capacity
 import workload_context
 from cloud_store import (allowed_chat_ids, daily_poll_active_users, daily_poll_counts,
     enqueue_scheduled_action, receipt_messages, request, poll_answers_for_range)
@@ -31,7 +32,7 @@ from daily_automation import (AVAILABILITY_GROUPS, DAILY_REPORTS_CHAT_ID, GROUPS
 from trabawho_receipts import receipt_report
 
 VERSION = 10
-CAPACITY_CACHE_VERSION = 11
+CAPACITY_CACHE_VERSION = 12
 
 
 def sources(approved: set[int]) -> set[int]:
@@ -367,6 +368,8 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
     for member in sorted(members, key=lambda m: m["name"].casefold()):
         p = member.get("planning") or {}
         lines += ["", " ".join(member["name"].split())]
+        project = (member.get("workload_capacity") or {}).get("project_capacity") or production_capacity.measure(member, day)
+        lines += production_capacity.render(project)
         reference = member.get("workload_capacity")
         if reference is not None:
             repeated = reference.get("repeatable_output_per_day")
@@ -419,7 +422,12 @@ def veo_capacity_text(chat: int, day: dt.date, members: list[dict]) -> str:
             lines.append(f"Forecast change: {p['daily_capacity_change']}")
     if not members:
         lines += ["", "No verified current members with readable recent history."]
-    lines += ["", "Repeatable output = highest recorded DD level achieved on at least 3 separate Active dates within 56 completed dates; it is not expected daily sales or a verified maximum.",
+        lines.append("Project capacity needs 3 matched CD-to-DD projects on 3 completion dates. Elapsed time includes client waits; missing history stays unknown.")
+        return "\n".join(lines)
+    lines += ["", "Capacity estimate = time-weighted concurrent matched projects / average CD-to-DD elapsed days; needs 3 projects on 3 completion dates within 56 completed dates.",
+        "Only unambiguous same-client/page/member/price pairs count. No matched project underway means no idle-time penalty; insufficient history stays pending.",
+        "Elapsed time includes nights, client waits and post delays. Unlinked records are excluded; matched-only estimates may be biased and are not verified maximums.",
+        "Repeatable output = highest recorded DD level achieved on at least 3 separate Active dates within 56 completed dates; it is not expected daily sales or a verified maximum.",
         "Recent selling-day averages use the shortest 14/28/56-day window with at least 3 positive Active dates; quiet dates do not establish low ability.",
         "Only member-specific sufficient-work records measure supplied-work output, including zero sales. Ads off or low sales alone cannot establish ability.",
         "Ads/workload unknown is kept unknown. Paid sales are not completed production or a verified maximum."]
@@ -814,13 +822,17 @@ def _queue_reports(now: dt.datetime, approved: set[int], *, report_day: dt.date 
                         "message_thread_id": report_topics.TEAM_THREADS[chat], "organized_report_date": day.isoformat(),
                         "organized_report_version": VERSION, "report_source_chat_id": chat, "report_category": category}))
     summary_ids = previous.get((0, "summary"), [])
-    queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
+    summary_parts = split_message(saved["summary"], limit=3500) if nightly else [saved["summary"]]
+    for number, part in enumerate(summary_parts, 1):
+        if number > 1:
+            part = f"DAILY SUMMARY (continued)\n{day} (PHT)\n\n{part}"
+        queued += int(enqueue(chat_id=DAILY_REPORTS_CHAT_ID, action_type="message", scheduled_for=delivery_time,
             repeat_interval_minutes=5,
-            dedupe_key=f"{financial_key}:summary", payload={"text": saved["summary"], "disable_notification": True,
-                "financial_summary_text": saved["summary"], **({} if nightly else {"organized_summary_date": day.isoformat()}),
+            dedupe_key=f"{financial_key}:summary" + (f":part-{number}" if number > 1 else ""), payload={"text": part, "disable_notification": True,
+                "financial_summary_text": part, **({} if nightly else {"organized_summary_date": day.isoformat()}),
                 "organized_report_date": day.isoformat(), "organized_report_version": VERSION,
                 "organized_refresh_id": revision,
-                "report_category": "summary", **({"edit_message_id": summary_ids[0]} if summary_ids else {})}))
+                "report_category": "summary", **({"edit_message_id": summary_ids[number - 1]} if number <= len(summary_ids) else {})}))
     edits = previous.get((0, "salary_totals"), [])
     for number, part in enumerate(split_message(saved["salary_totals"], limit=3500), 1):
         if number > 1:

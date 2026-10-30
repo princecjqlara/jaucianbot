@@ -58,9 +58,9 @@ class ReadyHandoffTests(unittest.TestCase):
                 ready.handle(command(minutes=age), {ready.OLLIE}, NOW)
             self.assertFalse(request.call_args.args[1]["payload"]["continuous"])
             self.assertEqual(request.call_args.args[1]["payload"]["ready_until"],
-                             (NOW + dt.timedelta(minutes=age + 60)).isoformat())
+                             (NOW + dt.timedelta(minutes=age + 30)).isoformat())
 
-    def test_legacy_veo_continuous_ready_expires_after_sixty_minutes(self):
+    def test_legacy_veo_continuous_ready_expires_after_thirty_minutes(self):
         with patch.object(ready, "records", return_value=[person(continuous=True)]):
             self.assertEqual(ready.available(ready.OLLIE, NOW + dt.timedelta(days=1), []), [])
 
@@ -371,11 +371,11 @@ class ReadyHandoffTests(unittest.TestCase):
         self.assertIn(f"ready-instructions:v{ready.GUIDE_VERSION}:", guide["dedupe_key"])
         self.assertEqual(announcement["dedupe_key"], f"ready-rollout:v{ready.GUIDE_VERSION}:{ready.OLLIE}")
         text = guide["payload"]["text"]
-        for instruction in ("/ready", "/busy", "WORKING + token", "60 minutes", "10 minutes", "round robin", "FREEBIE SENT"):
+        for instruction in ("/ready", "/busy", "WORKING + token", "30 minutes", "15 minutes", "round robin", "FREEBIE SENT"):
             self.assertIn(instruction, text)
         self.assertLess(len(text), 4096)
         self.assertIn("https://t.me/c/4423057797/5758", announcement["payload"]["text"])
-        for instruction in ("/ready", "/busy", "60 minutes", "15 minutes", "10 minutes"):
+        for instruction in ("/ready", "/busy", "30 minutes", "15 minutes"):
             self.assertIn(instruction, text)
             self.assertIn(instruction, announcement["payload"]["text"])
 

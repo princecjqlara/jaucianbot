@@ -1,5 +1,68 @@
 # VEO recorded-DD forecasting
 
+## Project-based capacity update — October 30, 2026
+
+The primary capacity estimate in personal, staffing, page and tomorrow reports
+uses linked **CD → DD** records. CD is the initial close deal and DD is the later
+paid outcome. These are post timestamps; written dates and edit times do not
+replace them or establish hands-on hours.
+
+The matching key is a Telegram member identity, source team, canonical page,
+exact normalized client and equal recorded deal price. Only the explicit
+`repeat client` suffix is removed; no fuzzy names or price upgrades are guessed.
+Same-day reposts use their earliest accepted timestamp for timing while the
+existing sales-count policy stays intact. Daily CD summaries, ambiguous multiple
+starts, reversed/zero/naive timestamps, transfers, and overlapping cross-team
+copies of the same client are excluded. A later CD after a completed pair can
+start a new project for the same repeat client. A live copy supersedes its
+export. Name-only exports require a unique ID association in the same team's
+evidence before entering a personal estimate.
+
+For pairs with DD in the latest 56 completed PHT dates, retain the actual CD
+timestamp even if it predates the window. The organized raw cache supplies up
+to 192 dates of history; a CD outside available history stays unmatched.
+
+1. Compute mean CD-to-DD elapsed days over matched completed projects.
+2. Compute the union of their CD-to-DD intervals, excluding gaps with no matched
+   project underway.
+3. Time-weighted concurrent projects = total project elapsed time / union time.
+4. Estimated DD per elapsed day with work available = time-weighted concurrency /
+   mean CD-to-DD days, equivalently matched completions / union elapsed days.
+
+At least three matched projects on three distinct completion dates are required
+for a rate; a smaller sample may still show descriptive cycle times. Mean and
+median cycle hours, time-weighted concurrency and the observed concurrent peak
+are separate. A brief peak is not used as sustained capacity. Arithmetic keeps
+decimals and calendar days (24 hours); no invented working shift is used.
+
+Average DD per Active date includes zero-DD Active dates in the same 56-date
+window. Average DD per output date is separate and may include output without a
+verified Active vote. Unknown attendance does not become zero or Inactive and
+is not needed to measure timestamp intervals. Quiet dates do not dilute the
+project-based rate while matched evidence remains in the window.
+
+Unresolved CDs, unmatched DDs and ambiguous matches are counted but do not prove
+current active work. They cannot inflate concurrency. Excluding unresolved or
+unrecorded outcomes can bias the completed-project estimate; coverage is labelled
+partial when these exist. Calendar elapsed time includes nights, payment waits
+and delayed posting. This is an observed workflow estimate, not verified
+production completion, a maximum, an assignment cap, a sales forecast or an
+independently validated improvement in future accuracy.
+
+Team/page summaries sum personal rates once per Telegram ID, show known/unknown
+coverage and leave incomplete totals Unknown. These are combined VEO personal
+histories, so page/team totals overlap. Daily-DD output references and the guarded
+recent-demand sales forecast remain separate. Cache v12 backreads both CD and DD
+topics and qualifying exports. Old snapshots remain preserved and cannot supply
+a fabricated project rate. Scheduler configuration, assignment limits, payroll
+policy and the Suno model are unchanged.
+
+A failed membership lookup now saves an explicit unknown bot/human flag for its
+ten-minute retry window. The person remains unverified and excluded, while the
+attempt no longer masquerades as an unfinished membership sweep that blocks the
+entire nightly batch. Successful human verification is still required to include
+a person, and expired failures are retried normally.
+
 ## Workload-aware output update — October 29, 2026
 
 Reports separate the historical-demand sales forecast from evidence about staff

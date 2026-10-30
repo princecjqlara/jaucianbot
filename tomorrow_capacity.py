@@ -146,7 +146,7 @@ def render(data: dict) -> str:
         if not n:
             return ["Active: 0 · No average to calculate."]
         if not rated:
-            return [f"Active: {n} · Rated history: 0/{n}", "Average and total: pending history."]
+            return [f"Active: {n} · Rated history: 0/{n}", *staff_capacity.render(t["workload_capacity"]), "Average and total: pending history."]
         return [f"Active: {n} · Forecast coverage: {rated}/{n}",
                 *staff_capacity.render(t["workload_capacity"]),
                 f"Personal: {t['personal_members']} · Trial default: {t['provisional_members']}",
@@ -165,6 +165,7 @@ def render(data: dict) -> str:
         "Choose per person between the 14-day reference and smoothed 7-day rate, using earlier personal errors only.",
         "The recent rate blends a weak 0.20 prior with personal evidence. Under 3 Active dates is provisional."]
     lines += ["", "Unrated members stay unknown; totals cover rated voters only. Shared members make team totals overlap.",
+              "Project capacity uses matched CD-to-DD elapsed time and time-weighted concurrency, excluding idle gaps. It includes client waits and posting delays; unlinked outcomes can bias the estimate.",
               "Repeatable output was recorded on 3+ separate Active dates per person; it does not predict daily sales or verify maximum production.",
               "Confirmed no-work/limited-work dates do not lower supplied-work capacity; ads off does not prove no organic or backlog work.",
               *description,

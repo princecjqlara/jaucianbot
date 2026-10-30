@@ -92,7 +92,7 @@ class QueueRecoveryTests(unittest.TestCase):
             text = workflow.queue_status_text(ready.OLLIE, 11, NOW)
         self.assertIn("You are Ready", text)
         self.assertIn("Eligible unassigned clients: 0", text)
-        self.assertIn("Renew /ready every 60 minutes", text)
+        self.assertIn("Renew /ready every 30 minutes", text)
 
     def test_lowest_client_count_gets_the_next_scarce_client(self):
         user_a, user_b = person(continuous=True), person(continuous=True)

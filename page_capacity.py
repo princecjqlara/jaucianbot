@@ -130,10 +130,13 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
                     lines += staff_capacity.render(summary)
                     lines.append(f"Recent-demand sales forecast: Avg {average}{suffix} DD/day per member.")
                 else:
+                    project = summary.get("project_capacity", {})
+                    capacity = (f"{project['known_total']:.2f} DD/elapsed day ({project['known_members']}/{summary['active_members']} members)"
+                        if project.get("known_members") else "n/a" if summary["active_members"] == 0 else "pending matched CD → DD history")
                     reference = summary["repeatable_output"]
                     value = (f"{reference['known_total']:.2f} ({reference['known_members']}/{summary['active_members']} members)"
                         if reference["known_members"] else "n/a" if summary["active_members"] == 0 else "pending")
-                    lines[-1] += f" · Repeated output {value} · Sales forecast Avg {average}{suffix}"
+                    lines[-1] += f" · Project capacity {capacity} · Repeated output {value} · Sales forecast Avg {average}{suffix}"
                     supplied = summary["supplied_work"]
                     if supplied["known_members"]:
                         lines.append(f"With sufficient work: {supplied['known_total']:.2f} ({supplied['known_members']}/{summary['active_members']} members).")
@@ -165,6 +168,7 @@ def render(data: dict, *, detailed: bool = False) -> list[str]:
             else:
                 lines.append("Recent forecast correction: insufficient history; uncalibrated trial.")
             lines.append("VEO figures describe those people's combined VEO DD, not exclusive page sales. All current human members are eligible.")
+            lines.append("Project capacity uses CD-to-DD elapsed time and time-weighted concurrent matched projects, excluding idle gaps. Calendar elapsed time includes client waits; unlinked work is excluded. Estimates, not verified maximums.")
             lines.append("Repeated output was recorded on 3+ separate Active dates per person; it is not expected daily sales or a verified maximum. Ads/workload missing stays unknown.")
             if not detailed:
                 lines.append("Supplied-work capacity needs 3 member-specific confirmed sufficient-work Active dates. Shared output is counted once per page.")

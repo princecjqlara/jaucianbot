@@ -214,7 +214,7 @@ class PageAccessTests(unittest.TestCase):
             new_client_contact_page_id=PAGES[0][1], new_client_phase="expired", new_client_cancelled_reason=volunteers.EXPIRED)
         offers = self.assign(self.users(), {22: {PAGES[1][1]}, 33: {PAGES[0][1]}}, self.contacts(0, "missed"), [missed])
         self.assertEqual(offers[0]["new_client_assignee_id"], 33)
-        self.assertEqual(offers[0]["new_client_response_minutes"], 10)
+        self.assertEqual(offers[0]["new_client_response_minutes"], 15)
 
     def test_a_member_without_access_to_available_page_does_not_block_its_round_robin(self):
         old = offer(CHAT, user=22, accepted=True)
