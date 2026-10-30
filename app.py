@@ -52,6 +52,7 @@ import availability_reminders
 import page_access_reminders
 import team_surveys
 import workload_context
+import member_warnings
 from daily_report_plans import planning_snapshot
 from freebie_automation import (
     confirm_freebie_reply, freebie_delivery_allowed, is_freebie_action,
@@ -71,7 +72,7 @@ from trabawho_songs import confirm_song_reply, is_song_notice, queue_song_follow
 
 
 MAX_BODY_BYTES = 1_000_000
-AUTOMATION_VERSION = "2026-10-31.3"
+AUTOMATION_VERSION = "2026-10-31.4"
 SCHEDULE_STATUSES = {"pending", "processing", "sent", "failed", "cancelled"}
 
 
@@ -115,6 +116,10 @@ def status_route(environ, start_response):
                                         "daily_reports": {"time": "23:59", "timezone": "Asia/Manila",
                                             "frequency": "once_per_day", "live_updates": False,
                                             "capacity_changes": "nightly_personal_estimate_comparison"},
+                                        "member_warnings": {"enabled": member_warnings.enabled(),
+                                            "time": "00:10", "timezone": "Asia/Manila", "covers": "previous completed date",
+                                            "zero_output_mode": member_warnings.zero_mode(),
+                                            "quiet_teams_are_silent": True},
                                         "done_deal_tracking": done_deal_tracking.mode()})
 
 
@@ -737,6 +742,10 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
                 continue
             now = dt.datetime.now(dt.timezone.utc)
             import nightly_reports
+            if not member_warnings.delivery_allowed(action, now):
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("obsolete warning schedule was not finalized")
+                continue
             if not nightly_reports.prepare_delivery(action, now):
                 if not finish_scheduled_action(action["id"], success=True, claim=action):
                     raise RuntimeError("obsolete report schedule was not finalized")
@@ -964,6 +973,11 @@ def dispatch_route(environ, start_response):
             except Exception as guard_error:
                 queue_errors.append("scheduler_guard")
                 print(f"Scheduler guard failed: {type(guard_error).__name__}")
+        try:
+            queued += member_warnings.queue(dt.datetime.now(dt.timezone.utc), approved)
+        except Exception as warning_error:
+            queue_errors.append("member_warnings")
+            print(f"Member warning queue failed: {type(warning_error).__name__}")
         try:
             queued += referral_incentives.queue_automation(dt.datetime.now(dt.timezone.utc), allowed)
             queued += referral_incentives.queue_share_recovery(dt.datetime.now(dt.timezone.utc), allowed)
@@ -1198,6 +1212,45 @@ def webhook_route(environ, start_response):
     return response(start_response, 200, {"ok": True})
 
 
+def warnings_route(environ, start_response):
+    if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
+        return response(start_response, 401, {"ok": False})
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        yesterday = now.astimezone(MANILA).date() - dt.timedelta(days=1)
+        params = parse_qs(environ.get("QUERY_STRING", ""))
+        day = dt.date.fromisoformat(params.get("date", [str(yesterday)])[0])
+        if day > yesterday:
+            raise ValueError("Only completed dates can be assessed")
+        teams = automation_controls.enabled_chat_ids(allowed_chat_ids()).intersection(GROUPS)
+        group = int(params["group"][0]) if params.get("group") else None
+        if group is not None and group not in teams:
+            return response(start_response, 404, {"ok": False})
+        if params.get("check_sources") == ["1"]:
+            inputs, offers, reminders, audits, context = member_warnings.load_inputs(day, teams)
+            return response(start_response, 200, {"ok": True, "read_only": True, "source_check": True,
+                "work_date": str(day), "offers_read": len(offers), "reminders_read": len(reminders),
+                "ready_audits_read": len(audits), "workload_records_read": len(context),
+                "groups": [{"chat_id": c, "team": GROUPS[c]["name"], "output_members": len(d["output"]),
+                    "active_votes": len(d["active"]), "next_poll_found": d["next_poll_id"] is not None}
+                    for c, d in sorted(inputs.items())], "warnings_assessed": False})
+        policy = member_warnings.saved(member_warnings.POLICY_KEY)
+        if policy is None or day < member_warnings.stamp(policy["enforced_from_utc"]).astimezone(MANILA).date():
+            return response(start_response, 200, {"ok": True, "read_only": True, "enabled": member_warnings.enabled(),
+                "work_date": str(day), "policy": policy, "warning_count": None, "groups": [],
+                "coverage": "Before warning activation; historical breaches are not inferred or backfilled."})
+        data = member_warnings.preview(day, teams, now, policy)
+        if group is not None:
+            data["groups"] = [g for g in data["groups"] if g["chat_id"] == group]
+            data["warning_count"] = sum(g["warning_count"] for g in data["groups"])
+        return response(start_response, 200, data)
+    except (ValueError, TypeError):
+        return response(start_response, 400, {"ok": False, "error": "invalid_completed_date_or_group"})
+    except Exception as error:
+        print(f"Warning preview unavailable: {type(error).__name__}")
+        return response(start_response, 503, {"ok": False, "error": "warning_sources_unavailable"})
+
+
 def app(environ, start_response):
     method = environ.get("REQUEST_METHOD", "GET").upper()
     path = environ.get("PATH_INFO", "")
@@ -1237,6 +1290,10 @@ def app(environ, start_response):
         return daily_summary_route(environ, start_response)
     if path == "/api/reports/concerns" and method == "GET":
         return concerns_route(environ, start_response)
+    if path == "/api/reports/warnings":
+        if method != "GET":
+            return response(start_response, 405, {"ok": False})
+        return warnings_route(environ, start_response)
     if path == "/api/reports/topics" and method == "GET":
         return report_topics_route(environ, start_response)
     if path == "/api/reports/members" and method == "GET":

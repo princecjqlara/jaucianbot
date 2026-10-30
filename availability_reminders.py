@@ -133,7 +133,7 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
               and not cached[int(p["user_id"])].get("is_bot")]
     # A vote may arrive while membership API requests are in flight.
     answered.update(int(row["user_id"]) for row in daily_poll_answers(current_poll["poll_id"]))
-    mentions = []
+    mentions, notified = [], []
     for person in people:
         uid = int(person["user_id"])
         if uid in answered:
@@ -141,10 +141,15 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
         name = cached.get(uid, {}).get("user_name") or person.get("user_name") or str(uid)
         name = " ".join(name.split())[:64]
         mentions.append(f'<a href="tg://user?id={uid}">{html.escape(name)}</a>')
+        notified.append(uid)
     if not mentions:
         return False
     source.update(text=f"Active tomorrow ({day:%b %d}, PHT)? Vote Yes or No.\n\n" + ", ".join(mentions),
+        availability_reminder_notified_ids=notified,
         parse_mode="HTML", message_thread_id=current_poll["thread_id"], disable_notification=False,
         reply_markup={"inline_keyboard": [[{"text": "Vote here", "url":
             f"https://t.me/c/{str(abs(chat))[3:]}/{current_poll['telegram_message_id']}"}]]})
+    import member_warnings
+    if member_warnings.enabled() and chat in member_warnings.GROUPS:
+        source["text"] += "\n\nPlease answer by midnight. Unanswered personal reminders with 2+ hours to respond appear in daily warnings."
     return True

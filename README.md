@@ -1,5 +1,42 @@
 # Telegram group insights
 
+`VEO_WARNINGS_ENABLED=true` enables a daily VEO warning report after **00:10 PHT**
+for the previous completed work date. Team Announcements tag only verified human
+members with warnings; teams without warnings receive no warning announcement.
+DAILY REPORTS receives the combined summary, including a quiet-day zero summary.
+Each person shows today's, rolling 30-day and total recorded warning counts for
+that team. Evidence links retain group, UTC timestamp and Telegram message ID.
+
+Rules count delivered client offers missed before their saved deadline, plus
+unanswered availability/page-access polls after a personal reminder that actually
+mentioned the member and allowed at least two hours before midnight. Yes, No and
+No access are valid answers. Old reminders without actual recipient IDs do not
+establish an obligation. Replaced polls, failed/undelivered offers, bots, departed
+and unverified people are excluded. Repeated Ready with two or more due offers,
+all missed and no on-time acceptance, is labelled as a pattern; it adds no extra
+points beyond the missed offers. Ready without offered work never earns a warning.
+
+`VEO_WARNINGS_ZERO_OUTPUT=supplied` is the default: Active with no recorded CD or
+DD earns one warning only with an actual, member-specific sufficient-work record
+in `workload`. Other Active zero-output dates appear privately as activity checks,
+without warning points or team mentions. Shared-person output is checked across
+the monitored VEO teams; unreadable or unattributed deals remain unknown. The
+work date on the vote is used, so tomorrow's Active choice is not judged today.
+`review` keeps all such cases as manager checks; `always` explicitly flags every
+Active zero-output date even when work supply is unverified. Zero-output checks
+start with the first full monitored day. Low sales do not establish low ability.
+
+The first normal scheduler run records activation. Warnings are not backfilled
+for earlier obligations. Cancelled metadata rows save Ready/button audit events
+and immutable daily ledgers; they cannot send independently. Daily report part
+keys deduplicate retries and team-scope changes. Previewing saved ledgers is
+read-only and never changes counts or publishes messages:
+`./remote_windows.ps1 warnings --date YYYY-MM-DD --group=-1003647732254`.
+Source errors and pending membership sweeps retry. Unverified people are excluded
+with coverage reported. `warnings --check-sources` reads coverage only and never
+assesses or publishes warnings, including for pre-activation dates.
+There are no automatic pay, assignment, membership or disciplinary penalties.
+
 VEO NEW CLIENTS uses a full client list with Ready/Busy controls. `/ready` is
 valid for 30 minutes and authorizes one offer; accepting or missing an offer
 requires a fresh `/ready` before another. One eligible Ready member can receive

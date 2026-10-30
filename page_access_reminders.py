@@ -96,7 +96,7 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
         budget={"remaining": MENTIONS_PER_MESSAGE}, humans_only=True)
     cached = member_presence.records(chat) if people else {}
     answered.update(page_access.answered_members(chat, part))
-    mentions = []
+    mentions, notified = [], []
     for person in people:
         uid = int(person["user_id"])
         member = cached.get(uid, {})
@@ -105,10 +105,15 @@ def prepare_delivery(action: dict, now: dt.datetime) -> bool:
             continue
         name = " ".join((member.get("user_name") or person.get("user_name") or str(uid)).split())[:64]
         mentions.append(f'<a href="tg://user?id={uid}">{html.escape(name)}</a>')
+        notified.append(uid)
     if not mentions:
         return False
     source.update(text="Please vote in the page-access poll. Choose your pages or No access.\n\n" + ", ".join(mentions),
+        page_access_reminder_notified_ids=notified,
         parse_mode="HTML", disable_notification=False, message_thread_id=AVAILABILITY_GROUPS[chat]["contact_thread"],
         reply_markup={"inline_keyboard": [[{"text": "Choose pages", "url":
             f"https://t.me/c/{str(abs(chat))[3:]}/{int(poll['message_id'])}"}]]})
+    import member_warnings
+    if member_warnings.enabled() and chat in member_warnings.GROUPS:
+        source["text"] += "\n\nPlease answer by midnight. Unanswered personal reminders with 2+ hours to respond appear in daily warnings."
     return True

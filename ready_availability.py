@@ -386,6 +386,11 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> int | None:
             raise RuntimeError("Ready update conflicted; webhook should retry")
     # Reply with the persisted state even if Telegram retries an older READY
     # after a newer BUSY update. Never tell an editor they are ready when not.
+    import member_warnings
+    try:
+        member_warnings.observe_ready(update, chat_id, effective, now)
+    except Exception as error:
+        print(f"Ready warning audit unavailable: {type(error).__name__}")
     effective_until = dt.datetime.fromisoformat(effective["ready_until"])
     if renewal:
         expiry = expires_at(chat_id, effective)

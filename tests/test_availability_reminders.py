@@ -83,6 +83,7 @@ class ReminderTests(unittest.TestCase):
                 patch.object(member_presence, "records", return_value={1: membership(1)}):
             self.assertFalse(reminders.prepare_delivery(action(1), NOW))
 
+    @patch.dict(os.environ, {"VEO_WARNINGS_ENABLED": "true"})
     def test_team_owners_and_admins_are_excluded_in_veo_and_suno(self):
         cached = {1: membership(1, "creator", current=True),
                   2: membership(2, "administrator", current=True),
@@ -100,6 +101,8 @@ class ReminderTests(unittest.TestCase):
                 self.assertNotIn(f"tg://user?id={uid}", item["payload"]["text"])
             for uid in (3, 4):
                 self.assertIn(f"tg://user?id={uid}", item["payload"]["text"])
+            self.assertEqual(item["payload"]["availability_reminder_notified_ids"], [3, 4])
+            self.assertEqual("daily warnings" in item["payload"]["text"], chat == CHAT)
 
     def test_admin_only_reminder_is_suppressed(self):
         with patch.object(reminders, "poll", return_value=POLL), \

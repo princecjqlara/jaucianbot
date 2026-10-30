@@ -44,6 +44,7 @@ REQUIRED_TEST_FILES = (
     "test_workload_capacity.py",
     "test_production_capacity.py",
     "test_veo_standby.py",
+    "test_member_warnings.py",
 )
 
 

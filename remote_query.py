@@ -32,6 +32,10 @@ def main() -> None:
     commands.add_parser("daily-plan", help="Read-only tomorrow staffing and planned-ad-budget preview")
     commands.add_parser("report-topics", help="Read named topics in DAILY REPORTS")
     commands.add_parser("report-members", help="Read cached Telegram membership verification for capacity reports")
+    warnings = commands.add_parser("warnings", help="Read completed-date VEO warnings without publishing")
+    warnings.add_argument("--group", type=int)
+    warnings.add_argument("--date", help="Completed PHT date, YYYY-MM-DD")
+    warnings.add_argument("--check-sources", action="store_true", help="Read source coverage without assessing or publishing warnings")
     surveys = commands.add_parser("refresh-surveys", help="Queue manager-requested links to tracked page-access and tomorrow polls")
     surveys.add_argument("--group", type=int, action="append", required=True)
     surveys.add_argument("--date", required=True, help="Tomorrow's PHT date, YYYY-MM-DD")
@@ -141,6 +145,9 @@ def main() -> None:
         path = "/api/reports/topics"
     elif args.command == "report-members":
         path = "/api/reports/members"
+    elif args.command == "warnings":
+        path = "/api/reports/warnings?" + urllib.parse.urlencode({k: v for k, v in
+            {"group": args.group, "date": args.date, "check_sources": 1 if args.check_sources else None}.items() if v is not None})
     elif args.command == "tomorrow-capacity":
         path = "/api/workers/capacity?tomorrow=1"
     elif args.command == "makata-status":

@@ -42,6 +42,7 @@ def action(*ids, chat=CHAT, part=0):
 
 @patch.dict(os.environ, ENV)
 class PageAccessReminderTests(unittest.TestCase):
+    @patch.dict(os.environ, {"VEO_WARNINGS_ENABLED": "true"})
     def test_only_current_nonadmin_humans_without_a_vote_are_mentioned_in_all_team_types(self):
         cached = {1: member(1), 2: member(2), 3: member(3, "administrator"), 4: member(4, "creator"),
             5: member(5, "left", current=False), 6: member(6, "unknown", current=False),
@@ -59,6 +60,8 @@ class PageAccessReminderTests(unittest.TestCase):
                 self.assertNotIn(f"tg://user?id={uid}", text)
             for uid in (8, 9):
                 self.assertIn(f"tg://user?id={uid}", text)
+            self.assertEqual(item["payload"]["page_access_reminder_notified_ids"], [8, 9])
+            self.assertEqual("daily warnings" in text, chat == CHAT)
             self.assertIn("Melo &lt;&amp;&gt;", text)
             self.assertIn("No access", text)
             expected = daily.MAKATA["contact_thread"] if chat == daily.MAKATA_CHAT_ID else reminders.AVAILABILITY_GROUPS[chat]["contact_thread"]
