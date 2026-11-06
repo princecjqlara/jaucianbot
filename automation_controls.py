@@ -50,6 +50,9 @@ def queue_mode_notices(now, approved: set[int]) -> int:
 
 def enabled_chat_ids(approved: set[int]) -> set[int]:
     """An absent setting preserves existing behavior; an empty setting pauses all."""
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+        from daily_automation import GROUPS, DAILY_REPORTS_CHAT_ID
+        approved = approved.intersection(set(GROUPS) | {DAILY_REPORTS_CHAT_ID})
     raw = os.environ.get("AUTOMATION_CHAT_IDS")
     if raw is None:
         return set(approved)
@@ -66,6 +69,8 @@ def enabled_chat_ids(approved: set[int]) -> set[int]:
 
 
 def chat_enabled(chat_id: int) -> bool:
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+        return int(chat_id) in enabled_chat_ids({int(chat_id)})
     if int(chat_id) in enabled_chat_ids({int(chat_id)}):
         return True
     if int(chat_id) > 0:

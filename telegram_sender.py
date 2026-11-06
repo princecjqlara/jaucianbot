@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from http.client import HTTPException
 import os
 import urllib.error
 import urllib.request
@@ -36,18 +37,39 @@ def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
             description = detail.get("description", "request failed")
         except (json.JSONDecodeError, UnicodeError):
             description = "request failed"
-        raise TelegramError(f"Telegram HTTP {error.code}: {description}") from error
+        failure = TelegramError(f"Telegram HTTP {error.code}: {description}")
+        failure.delivery_uncertain = error.code >= 500
+        raise failure from error
     except urllib.error.URLError as error:
-        raise TelegramError(f"Telegram network error ({type(error.reason).__name__})") from error
+        failure = TelegramError(f"Telegram network error ({type(error.reason).__name__})")
+        failure.delivery_uncertain = True
+        raise failure from error
+    except (TimeoutError, ConnectionError) as error:
+        failure = TelegramError("Telegram delivery acknowledgment unavailable")
+        failure.delivery_uncertain = True
+        raise failure from error
+    except (json.JSONDecodeError, UnicodeDecodeError, HTTPException) as error:
+        failure = TelegramError("Telegram response was incomplete; delivery acknowledgment unavailable")
+        failure.delivery_uncertain = True
+        raise failure from error
     if method == "deleteMessage" and isinstance(result, dict) and result.get("ok") and result.get("result") is True:
         return {"deleted": True}
     if not isinstance(result, dict) or not result.get("ok") or not isinstance(result.get("result"), dict):
         description = result.get("description", "request failed") if isinstance(result, dict) else "invalid response"
-        raise TelegramError(f"Telegram API error: {description}")
+        failure = TelegramError(f"Telegram API error: {description}")
+        failure.delivery_uncertain = not isinstance(result, dict) or result.get("ok") is not False
+        raise failure
+    if method in {"sendPhoto", "sendMessage"} and (isinstance(result["result"].get("message_id"), bool) or not isinstance(result["result"].get("message_id"), int) or result["result"]["message_id"] <= 0):
+        failure = TelegramError("Telegram message acknowledgment is incomplete")
+        failure.delivery_uncertain = True
+        raise failure
     return result["result"]
 
 
 def send_scheduled_action(action: dict) -> dict:
+    if action.get("payload", {}).get("veo_submission_id"):
+        from veo_workspace import send
+        return send(action)
     from automation_controls import new_client_delivery_allowed
     if not new_client_delivery_allowed(action):
         raise TelegramError("New-client features are disabled for this VEO team")

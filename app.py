@@ -124,6 +124,13 @@ def status_route(environ, start_response):
 
 
 def health_route(environ, start_response):
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+        try:
+            from veo_workspace import review_required
+            if review_required():
+                return response(start_response, 503, {"ok": False, "reason": "veo_delivery_reconciliation_required"})
+        except Exception:
+            return response(start_response, 503, {"ok": False, "reason": "veo_delivery_health_unavailable"})
     try:
         allowed = allowed_chat_ids()
         archive_status(allowed)
@@ -919,6 +926,9 @@ def _deliver_claimed_actions(actions: list[dict], allowed: set[int]) -> tuple[in
 
 
 def dispatch_route(environ, start_response):
+    from veo_workspace import enabled, dispatch
+    if enabled():
+        return dispatch(environ, start_response, response)
     queued = 0
     queue_errors = []
     try:
@@ -1092,6 +1102,11 @@ def webhook_route(environ, start_response):
             return response(start_response, 503, {"ok": False, "error": "allowed groups not configured"})
         update = read_json_body(environ)
         active = automation_controls.enabled_chat_ids(allowed)
+        if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+            # Retain only approved VEO updates; archive posts do not generate financial records.
+            from daily_automation import GROUPS
+            save_update(update, active.intersection(GROUPS))
+            return response(start_response, 200, {"ok": True})
         makata_automation.hydrate(allowed)
         if makata_automation.register_private(update, allowed, dt.datetime.now(dt.timezone.utc)):
             return response(start_response, 200, {"ok": True})
@@ -1252,8 +1267,15 @@ def warnings_route(environ, start_response):
 
 
 def app(environ, start_response):
+    if environ.get("PATH_INFO") == "/api/veo/handoff" and environ.get("REQUEST_METHOD") == "POST":
+        from veo_workspace import receive
+        return receive(environ, start_response, response)
     method = environ.get("REQUEST_METHOD", "GET").upper()
     path = environ.get("PATH_INFO", "")
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true" and (
+            path.startswith("/api/suno/") or path == "/api/new-clients/suno-supply" or
+            path in {"/api/workers/capacity", "/api/reports/plan", "/api/reports/replace", "/api/reports/members"}):
+        return response(start_response, 410, {"ok": False, "error": "Archived workflow", "source": "Use the VEO workspace verified sales and capacity views"})
     if path == "/api/status" and method == "GET":
         return status_route(environ, start_response)
     if path == "/api/health" and method == "GET":
