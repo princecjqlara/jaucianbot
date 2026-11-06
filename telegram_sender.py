@@ -59,8 +59,12 @@ def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
         failure = TelegramError(f"Telegram API error: {description}")
         failure.delivery_uncertain = not isinstance(result, dict) or result.get("ok") is not False
         raise failure
-    if method in {"sendPhoto", "sendMessage"} and (isinstance(result["result"].get("message_id"), bool) or not isinstance(result["result"].get("message_id"), int) or result["result"]["message_id"] <= 0):
+    if method in {"sendPhoto", "sendMessage", "sendPoll"} and (isinstance(result["result"].get("message_id"), bool) or not isinstance(result["result"].get("message_id"), int) or result["result"]["message_id"] <= 0):
         failure = TelegramError("Telegram message acknowledgment is incomplete")
+        failure.delivery_uncertain = True
+        raise failure
+    if method == "sendPoll" and not isinstance((result["result"].get("poll") or {}).get("id"), str):
+        failure = TelegramError("Telegram poll acknowledgment is incomplete")
         failure.delivery_uncertain = True
         raise failure
     return result["result"]

@@ -149,7 +149,7 @@ def reporting(work_date: str) -> dict:
     base = os.environ.get("VEO_WORKSPACE_URL", "").rstrip("/")
     if not base.startswith("https://") or not os.environ.get("VEO_JAUCIAN_SECRET"):
         raise RuntimeError("Workspace reporting is not configured")
-    target = base + "/api/workspace/handoff?" + urllib.parse.urlencode({"tenant_id": tenant, "report_date": work_date})
+    target = base + "/api/workspace/handoff?" + urllib.parse.urlencode({"tenant_id": tenant, "report_date": work_date, "include_operations": "1"})
     req = urllib.request.Request(target, headers={"Authorization": "Bearer " + os.environ["VEO_JAUCIAN_SECRET"]})
     with urllib.request.urlopen(req, timeout=30) as response:
         return json.load(response)
@@ -163,26 +163,14 @@ def review_required() -> bool:
 
 
 def queue_reports(now: dt.datetime, allowed: set[int]) -> int:
-    from daily_automation import MANILA, GROUPS
-    local = now.astimezone(MANILA)
-    if local.hour == 0 and local.minute < 10:
-        return 0
-    day = str(local.date() - dt.timedelta(days=1))
-    launched = os.environ.get("VEO_WORKSPACE_LAUNCH_AT", "")
-    if not launched or dt.date.fromisoformat(day) < dt.datetime.fromisoformat(launched.replace("Z", "+00:00")).astimezone(MANILA).date():
-        return 0
-    data = reporting(day)
-    queued = 0
-    for team in data["teams"]:
-        if team.get("chat_id") not in allowed.intersection(GROUPS):
-            continue
-        queued += int(enqueue_scheduled_action(chat_id=team["chat_id"], action_type="message", scheduled_for=now,
-            dedupe_key=f"veo-ledger-report:{data['tenant_id']}:{team['id']}:{day}", payload={"veo_report_date": day,
-                "veo_team_id": team["id"], "text": "Authoritative VEO daily commission report"}))
-    return queued
+    from veo_shift_reports import queue
+    return queue(now, allowed)
 
 
 def send_report(action: dict) -> dict:
+    if action["payload"].get("veo_report_slot"):
+        from veo_shift_reports import send as send_shift
+        return send_shift(action)
     from telegram_sender import telegram_call
     source = action["payload"]
     data = reporting(source["veo_report_date"])
@@ -234,7 +222,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
-        if not (payload.get("veo_submission_id") or payload.get("veo_report_date")):
+        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date")):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Archived at VEO workspace launch"}):
                 failed += 1
             continue
@@ -248,18 +236,30 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 payload["_veo_sending"] = True
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Could not reserve Telegram delivery")
-                result = send(action) if payload.get("veo_submission_id") else send_report(action)
+                if payload.get("veo_availability_date"):
+                    from veo_shift_reports import send_availability
+                    result = send_availability(action)
+                    payload["_veo_poll_id"] = result["poll"]["id"]
+                else:
+                    result = send(action) if payload.get("veo_submission_id") else send_report(action)
                 message_id = int(result["message_id"])
                 # Checkpoint the acknowledged message before completing the outbox lease.
                 payload["_veo_message_id"] = message_id
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Telegram acknowledgment checkpoint failed")
+            if payload.get("veo_availability_date"):
+                from veo_shift_reports import register_availability
+                register_availability(action)
             if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id, claim=action):
                 raise RuntimeError("Delivery completion checkpoint failed")
             sent += 1
         except Exception as error:
             failed += 1
-            if getattr(error, "delivery_uncertain", False):
+            if getattr(error, "scope_changed", False):
+                payload["_veo_sending"] = False
+                payload["veo_scope_changed"] = True
+                _update_claim(action, {"status": "cancelled", "payload": payload, "last_error": "Report scope or poll date changed; prior snapshot withheld"})
+            elif getattr(error, "delivery_uncertain", False):
                 payload["veo_delivery_unknown"] = True
                 _update_claim(action, {"status": "cancelled", "payload": payload, "last_error": "Telegram delivery requires reconciliation; automatic resend suppressed"})
             else:
@@ -281,8 +281,13 @@ def dispatch(environ, start_response, respond):
         if approved:
             request("scheduled_actions?" + urllib.parse.urlencode({
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null",
+                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null",
             }), {"status": "cancelled", "last_error": "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
+    except Exception:
+        guard_error = True
+    try:
+        request("scheduled_actions?" + urllib.parse.urlencode({"dedupe_key": "like.veo-ledger-report:*", "status": "in.(pending,failed)"}),
+            {"status": "cancelled", "last_error": "Superseded by three scheduled VEO performance snapshots"}, method="PATCH")
     except Exception:
         guard_error = True
     try:

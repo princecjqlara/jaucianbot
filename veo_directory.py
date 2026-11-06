@@ -75,7 +75,7 @@ def directory(tenant: str) -> dict:
     for row in deliveries:
         p = row.get("payload") or {}
         safe.append({k: row.get(k) for k in ("id", "chat_id", "status", "attempts", "scheduled_for", "updated_at", "telegram_message_id")}
-                    | {k: p.get(k) for k in ("veo_order_id", "veo_team_id", "veo_report_date")}
+                    | {k: p.get(k) for k in ("veo_order_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed")}
                     | {"review_required": bool((p.get("_veo_sending") or p.get("veo_delivery_unknown"))
                                                 and not (p.get("_veo_message_id") or row.get("telegram_message_id"))
                                                 and row.get("status") == "cancelled")})
@@ -91,7 +91,7 @@ def directory(tenant: str) -> dict:
             "coverage": "Observed identities only; current human membership is checked when saving a mapping. Historical messages never verify VEO payments."}
 
 
-def workspace_connection(tenant: str) -> dict:
+def workspace_directory(tenant: str) -> dict:
     base = os.environ.get("VEO_WORKSPACE_URL", "")
     parsed = urllib.parse.urlsplit(base)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
@@ -102,6 +102,11 @@ def workspace_connection(tenant: str) -> dict:
         data = json.load(response)
     if data.get("tenant_id") != tenant or data.get("ok") is not True or data.get("read_only") is not True:
         raise ValueError("VEO directory did not match the connected tenant")
+    return data
+
+
+def workspace_connection(tenant: str) -> dict:
+    data = workspace_directory(tenant)
     groups = teams()
     workers = [a for a in data["accounts"] if a["role"] in {"member", "manager"}]
     return {"ok": True, "source": data["source"], "checked_at": data["checked_at"],
@@ -145,6 +150,9 @@ def route(environ, start_response, respond):
         resource = params.get("resource", ["directory"])[0]
         if resource == "identity":
             result = verify_identity(int(params.get("chat_id", [""])[0]), int(params.get("user_id", [""])[0]))
+        elif resource == "workforce":
+            from veo_workforce import snapshot
+            result = snapshot(tenant, offset=int(params.get("offset", ["0"])[0]), limit=int(params.get("limit", ["8"])[0]))
         elif resource == "directory":
             result = directory(tenant)
         else:

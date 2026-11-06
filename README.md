@@ -1064,3 +1064,9 @@ names per message for readability, without a pagination interface. Durable
 date/hour/team keys prevent repeated scheduler ticks from duplicating reminders.
 Candidate IDs come from captured authors, previous voters and observed joins;
 Telegram's bot API cannot enumerate silent members who have never been captured.
+
+## VEO workspace staff operations
+
+Workspace mode uses the existing bot and the VEO verified order ledger. The normal scheduler queues client/performance snapshots at 08:00, 16:00 and 00:10 Philippine time (the last closes the prior date), with durable multipart acknowledgments and permission rechecks. Salary and ad-budget amounts stay in the role-protected app. A mapped group receives one non-anonymous Active tomorrow poll after 16:00. Verified numeric worker mappings reconcile tomorrow votes and confirmed departures through tenant-bound authenticated APIs; outages remain unknown and never fire staff. Page declarations need supervisor review. No historical receipt or Telegram post creates another VEO sale.
+
+`veo_workforce.py` handles bounded membership/declaration reads and update-ID-fenced poll metadata; `veo_shift_reports.py` handles immutable report manifests and availability polls. Run `py validate_project.py` before deployment, then `./remote_windows.ps1 configure-scheduler --verify-recovery`, scheduler status and health. Use only normal scheduled delivery for live verification. The CRM requires compatible migrations 020?024 before these integrations activate.

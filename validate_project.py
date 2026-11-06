@@ -8,6 +8,7 @@ import sys
 
 # These suites must travel with every deployment, even when other tests remain.
 REQUIRED_TEST_FILES = (
+    "test_veo_workforce.py", "test_veo_shift_reports.py",
     "test_veo_directory.py",
     "test_veo_workspace.py",
     "test_poll_ready_recovery.py", "test_queue_fairness_recovery.py",

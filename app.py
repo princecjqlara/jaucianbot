@@ -1124,7 +1124,12 @@ def webhook_route(environ, start_response):
         if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
             # Retain only approved VEO updates; archive posts do not generate financial records.
             from daily_automation import GROUPS
-            save_update(update, active.intersection(GROUPS))
+            if "poll_answer" in update:
+                save_poll_answer(update, active.intersection(GROUPS))
+                from veo_workforce import observe_vote
+                observe_vote(update, active.intersection(GROUPS))
+            else:
+                save_update(update, active.intersection(GROUPS))
             return response(start_response, 200, {"ok": True})
         makata_automation.hydrate(allowed)
         if makata_automation.register_private(update, allowed, dt.datetime.now(dt.timezone.utc)):
