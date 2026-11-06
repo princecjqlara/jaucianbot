@@ -188,6 +188,17 @@ def send_report(action: dict) -> dict:
     if not team or team.get("chat_id") != int(action["chat_id"]):
         raise ValueError("Team report mapping changed")
     lines = [f"VEO · {team['name']} · {data['work_date']} PHT", data["source"]]
+    capacity = team.get("capacity")
+    if capacity:
+        quota = capacity["quota"]
+        history = capacity["history"]
+        lines += [
+            f"TEAM QUOTAS: Closed {capacity['closed']}/{quota['closed']} · Done {capacity['done']}/{quota['done']}",
+            f"Combined full capacity: {capacity['capacity']} per day · average {capacity['average_worker_capacity'] if capacity['average_worker_capacity'] is not None else 'unavailable'} per worker",
+            f"Participating workers: {capacity['participating']} · attendance unknown: {capacity['attendance_unknown']}",
+            f"Combined daily average: {history['average_done_per_day'] if history['average_done_per_day'] is not None else 'unavailable'} Done Deals over {history['completed_days']} completed PHT dates (zero days included)",
+            f"Best-three team days average: {history['best_three_average'] if history['best_three_average'] is not None else 'insufficient history'}",
+        ]
     active = 0
     target = 0
     for worker in team["workers"]:
@@ -198,7 +209,13 @@ def send_report(action: dict) -> dict:
         if worker.get("active_tomorrow") is True:
             active += 1
             target += worker["tomorrow_target"]
-    lines.append(f"Active tomorrow: {active} · CD and DD team target: {target} each")
+    if capacity:
+        plan = capacity["tomorrow"]
+        lines.append(f"Active tomorrow ({plan['work_date']}): {plan['active']} · CD and DD team quota: {plan['capacity']} each · average active-worker capacity: {plan['average_active_capacity'] if plan['average_active_capacity'] is not None else 'unavailable'}")
+        lines.append(f"Full-team potential tomorrow: {plan['full_capacity']} · awaiting declarations: {plan['unknown']}")
+        lines.append("Individual commission still requires each worker to reach both personal targets.")
+    else:
+        lines.append(f"Active tomorrow: {active} · CD and DD team target: {target} each")
     text = "\n".join(lines)
     if len(text) > 4096:
         # Do not silently drop workers or split a non-idempotent send mid-report.

@@ -22,6 +22,34 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_team_report_uses_authoritative_quotas_and_combined_capacity_without_changing_personal_rates(self):
+        capacity = {"capacity": 8, "average_worker_capacity": 4, "participating": 1, "attendance_unknown": 0,
+            "closed": 3, "done": 2, "quota": {"closed": 4, "done": 4},
+            "history": {"average_done_per_day": 1.5, "completed_days": 14, "best_three_average": 5},
+            "tomorrow": {"work_date": "2026-11-07", "active": 1, "capacity": 3, "average_active_capacity": 3, "full_capacity": 7, "unknown": 1}}
+        team = {"id": "team", "name": "VEO team", "chat_id": 123, "capacity": capacity, "workers": [
+            {"name": "Worker", "salary": {"closed": 0, "done": 2, "target": 1, "rate": 35, "totals": []}, "active_tomorrow": True, "tomorrow_target": 99}]}
+        with patch.object(workspace, "reporting", return_value={"work_date": "2026-11-06", "source": "Verified VEO ledger", "teams": [team]}), \
+                patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as send:
+            workspace.send_report({"chat_id": 123, "payload": {"veo_report_date": "2026-11-06", "veo_team_id": "team"}})
+        text = send.call_args.args[1]["text"]
+        self.assertIn("TEAM QUOTAS: Closed 3/4 · Done 2/4", text)
+        self.assertIn("Combined full capacity: 8 per day · average 4 per worker", text)
+        self.assertIn("1.5 Done Deals over 14 completed PHT dates", text)
+        self.assertIn("CD and DD team quota: 3 each", text)
+        self.assertNotIn("target: 99", text)
+        self.assertIn("CD 0/1 · DD 2/1 · 35%", text)
+
+    def test_team_report_missing_history_stays_explicitly_unavailable(self):
+        team = {"id": "team", "name": "Empty", "chat_id": 123, "workers": [], "capacity": {
+            "capacity": 0, "average_worker_capacity": None, "participating": 0, "attendance_unknown": 0, "closed": 0, "done": 0,
+            "quota": {"closed": 0, "done": 0}, "history": {"average_done_per_day": None, "completed_days": 0, "best_three_average": None},
+            "tomorrow": {"work_date": "2026-11-07", "active": 0, "capacity": 0, "average_active_capacity": None, "full_capacity": 0, "unknown": 0}}}
+        with patch.object(workspace, "reporting", return_value={"work_date": "2026-11-06", "source": "Verified", "teams": [team]}), patch("telegram_sender.telegram_call", return_value={"message_id": 2}) as send:
+            workspace.send_report({"chat_id": 123, "payload": {"veo_report_date": "2026-11-06", "veo_team_id": "team"}})
+        self.assertIn("insufficient history", send.call_args.args[1]["text"])
+        self.assertIn("average unavailable per worker", send.call_args.args[1]["text"])
+
     def test_health_fails_for_an_unacknowledged_delivery_hold(self):
         statuses = []
         with patch.dict(os.environ, {"VEO_WORKSPACE_ENABLED": "true"}), patch.object(workspace, "review_required", return_value=True):
