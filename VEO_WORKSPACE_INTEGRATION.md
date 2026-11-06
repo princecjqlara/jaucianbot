@@ -2,7 +2,7 @@
 
 When `VEO_WORKSPACE_ENABLED=true`, VEO's verified ledger supplies sales, personal commission and team capacity. Jaucian's existing bot and database supply approved VEO groups, observed identities and durable Telegram delivery. Archived receipt text never creates new VEO sales. Legacy polls, ready queues, referrals, freebies and warning automation do not run through the workspace dispatcher.
 
-The rule is 40% when **both personal Closed and Done Deal quotas** are reached on the Philippine date; otherwise 35%. Team quotas do not override the personal rate. VEO calculates the entire day's commission and Jaucian reads that result.
+The rule is 40% when **both personal Closed and Done Deal quotas** are reached on the Philippine date; otherwise 35%. Team quotas do not override the personal rate. VEO calculates the entire day's commission and Jaucian reads that result. The existing authenticated `/api/reports/daily-summary` URL also reads the verified VEO report in workspace mode; it no longer falls back to archived Telegram receipt counts.
 
 `GET /api/veo/workspace?tenant_id=...` requires `VEO_JAUCIAN_SECRET` and the configured `VEO_WORKSPACE_TENANT_ID`. It reads only approved, active VEO groups and returns observed identity candidates and the latest 50 tenant-specific VEO outbox states. Directory coverage is bounded and never described as the complete current membership list. Message bodies, credentials, signed photo URLs and Suno records are excluded.
 

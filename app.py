@@ -379,6 +379,25 @@ def daily_summary_route(environ, start_response):
     """Preview observed deals without queueing reports, payment or member actions."""
     if not authorized(environ.get("HTTP_AUTHORIZATION"), "INSIGHTS_API_KEY"):
         return response(start_response, 401, {"ok": False})
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+        # Keep the older reporting URL usable without silently reverting to
+        # receipt-derived counts after the workspace launch.
+        params = parse_qs(environ.get("QUERY_STRING", ""))
+        try:
+            day = dt.date.fromisoformat(params.get("date", [str(dt.datetime.now(MANILA).date())])[0])
+            group = int(params["group"][0]) if params.get("group") else None
+            permitted = automation_controls.enabled_chat_ids(allowed_chat_ids()).intersection(GROUPS)
+            if group is not None and group not in permitted:
+                return response(start_response, 404, {"ok": False})
+            from veo_workspace import reporting
+            data = reporting(str(day))
+            data["teams"] = [t for t in data["teams"] if t.get("chat_id") in permitted and (group is None or t.get("chat_id") == group)]
+            return response(start_response, 200, {**data, "ok": True, "read_only": True, "source": "Verified VEO ledger; Telegram receipts excluded"})
+        except (ValueError, IndexError):
+            return response(start_response, 400, {"ok": False, "error": "invalid_date_or_group"})
+        except Exception as error:
+            print(f"Verified VEO summary unavailable: {type(error).__name__}")
+            return response(start_response, 503, {"ok": False, "error": "verified_ledger_unavailable"})
     allowed = allowed_chat_ids()
     if DAILY_REPORTS_CHAT_ID not in allowed:
         return response(start_response, 403, {"ok": False})

@@ -22,6 +22,23 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_existing_summary_endpoint_reads_only_verified_veo_sales_and_scopes_active_teams(self):
+        chat = next(iter(GROUPS))
+        env = {"VEO_WORKSPACE_ENABLED": "true", "INSIGHTS_API_KEY": "test-key", "ALLOWED_CHAT_IDS": str(chat), "AUTOMATION_CHAT_IDS": str(chat)}
+        data = {"tenant_id": "tenant", "work_date": "2026-11-06", "teams": [
+            {"id": "visible", "chat_id": chat}, {"id": "unmapped", "chat_id": None}, {"id": "archived", "chat_id": next(iter(SUNO_GROUPS))}]}
+        statuses = []
+        with patch.dict(os.environ, env), patch.object(workspace, "reporting", return_value=data) as report, \
+                patch("done_deal_summary.summarize") as legacy:
+            body = app.app({"PATH_INFO": "/api/reports/daily-summary", "REQUEST_METHOD": "GET",
+                "HTTP_AUTHORIZATION": "Bearer test-key", "QUERY_STRING": "date=2026-11-06"}, lambda status, headers: statuses.append(status))
+        self.assertTrue(statuses[0].startswith("200"))
+        result = json.loads(b"".join(body))
+        self.assertEqual([t["id"] for t in result["teams"]], ["visible"])
+        self.assertIn("Telegram receipts excluded", result["source"])
+        report.assert_called_once_with("2026-11-06")
+        legacy.assert_not_called()
+
     def test_team_report_uses_authoritative_quotas_and_combined_capacity_without_changing_personal_rates(self):
         capacity = {"capacity": 8, "average_worker_capacity": 4, "participating": 1, "attendance_unknown": 0,
             "closed": 3, "done": 2, "quota": {"closed": 4, "done": 4},
