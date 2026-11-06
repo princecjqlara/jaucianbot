@@ -146,14 +146,28 @@ class WorkspaceTests(unittest.TestCase):
         row = fixture()
         action = {"id": 1, "chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"], "veo_order_id": row["order_id"], "veo_tenant_id": row["tenant_id"]}}
         with patch.dict(os.environ, {"VEO_WORKSPACE_ENABLED": "true"}), \
-                patch.object(workspace, "authoritative", return_value=row) as read, patch("telegram_sender.telegram_call", return_value={"message_id": 8}) as send:
+                patch.object(workspace, "authoritative", return_value=row) as read, \
+                patch("veo_directory.verify_identity", return_value={"verified": True}) as identity, \
+                patch("telegram_sender.telegram_call", return_value={"message_id": 8}) as send:
             workspace.send(action)
             read.assert_called_once()
+            identity.assert_called_once_with(row["telegram_chat_id"], row["telegram_user_id"])
             self.assertEqual(send.call_args.args[0], "sendPhoto")
             self.assertEqual(send.call_args.args[1]["photo"], row["photo_url"])
         row["paid_minor"] = 9999
         with patch.object(workspace, "allowed_chat_ids", return_value=set(GROUPS)), patch.object(workspace, "chat_enabled", return_value=True):
             with self.assertRaises(ValueError): workspace.validate(row)
+
+    def test_worker_leaving_or_team_remapping_blocks_a_queued_photo_before_telegram_send(self):
+        row = fixture()
+        action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"],
+                  "veo_order_id": row["order_id"], "veo_tenant_id": row["tenant_id"]}}
+        with patch.dict(os.environ, {"VEO_WORKSPACE_ENABLED": "true"}), patch.object(workspace, "authoritative", return_value=row), \
+                patch("veo_directory.verify_identity", side_effect=ValueError("Not a current human member")), \
+                patch("telegram_sender.telegram_call") as send:
+            with self.assertRaises(ValueError):
+                workspace.send(action)
+        send.assert_not_called()
 
     def test_retry_reuses_acknowledged_message_and_archives_old_jobs(self):
         actions = [{"id": 1, "chat_id": 1, "payload": {"veo_submission_id": "x", "_veo_message_id": 99}},

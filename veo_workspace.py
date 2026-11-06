@@ -113,6 +113,8 @@ def send(action: dict) -> dict:
     data = authoritative(action["payload"]["veo_submission_id"])
     if data["order_id"] != action["payload"]["veo_order_id"] or data["tenant_id"] != action["payload"]["veo_tenant_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
         raise ValueError("Sale or destination changed; review required")
+    from veo_directory import verify_identity
+    verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
     from telegram_sender import telegram_call
     caption = "\n".join(["VEO · VERIFIED DONE DEAL", f"Seller: {data.get('seller_name') or 'Unknown'} ({data['telegram_user_id']})",
         f"Client: {data.get('contact_name') or 'Unknown'}", str(data.get("description") or "Order")[:250],

@@ -1,5 +1,7 @@
 # Telegram group insights
 
+**Current VEO mode:** see [VEO workspace integration](VEO_WORKSPACE_INTEGRATION.md). With `VEO_WORKSPACE_ENABLED=true`, the verified VEO ledger and workspace dispatcher replace the older financial/poll/assignment workflows described below. The existing bot also exposes an authenticated VEO group/identity directory; it does not share its database administrator key.
+
 `VEO_WARNINGS_ENABLED=true` enables a daily VEO warning report after **00:10 PHT**
 for the previous completed work date. Team Announcements tag only verified human
 members with warnings; teams without warnings receive no warning announcement.

@@ -1267,6 +1267,9 @@ def warnings_route(environ, start_response):
 
 
 def app(environ, start_response):
+    if environ.get("PATH_INFO") == "/api/veo/workspace":
+        from veo_directory import route
+        return route(environ, start_response, response)
     if environ.get("PATH_INFO") == "/api/veo/handoff" and environ.get("REQUEST_METHOD") == "POST":
         from veo_workspace import receive
         return receive(environ, start_response, response)
