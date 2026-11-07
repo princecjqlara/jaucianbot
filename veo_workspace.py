@@ -10,6 +10,7 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import urllib.error
 import uuid
 
 from cloud_http import authorized
@@ -21,6 +22,10 @@ def enabled() -> bool:
     return os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true"
 
 
+class ReceiptDeleted(ValueError):
+    """The authoritative CRM permanently withdrew this receipt's evidence."""
+
+
 def authoritative(submission_id: str) -> dict:
     uuid.UUID(submission_id)
     base = os.environ.get("VEO_WORKSPACE_URL", "").rstrip("/")
@@ -29,8 +34,18 @@ def authoritative(submission_id: str) -> dict:
         raise RuntimeError("VEO workspace handoff is not configured")
     target = base + "/api/workspace/handoff?" + urllib.parse.urlencode({"submission_id": submission_id})
     req = urllib.request.Request(target, headers={"Authorization": "Bearer " + secret, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as response:
-        result = json.load(response)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 410:
+            try:
+                reason = json.loads(error.read(4096))
+            except (ValueError, TypeError):
+                reason = {}
+            if reason.get("code") == "RECEIPT_DELETED":
+                raise ReceiptDeleted("Receipt deleted; delivery cancelled") from error
+        raise
     validate(result)
     return result
 
@@ -290,6 +305,12 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 raise RuntimeError("Delivery completion checkpoint failed")
             sent += 1
         except Exception as error:
+            if isinstance(error, ReceiptDeleted):
+                payload["_veo_sending"] = False
+                payload["veo_receipt_deleted"] = True
+                if not _update_claim(action, {"status": "cancelled", "payload": payload, "last_error": "Receipt deleted in VEO; delivery cancelled"}):
+                    failed += 1
+                continue
             failed += 1
             if getattr(error, "scope_changed", False):
                 payload["_veo_sending"] = False

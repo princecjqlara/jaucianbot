@@ -22,6 +22,25 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_explicit_receipt_deletion_is_permanent_but_other_photo_errors_keep_their_existing_retry_policy(self):
+        env = {"VEO_WORKSPACE_URL": "https://veo.test", "VEO_JAUCIAN_SECRET": "secret"}
+        import urllib.error
+        for body, expected in (({"code": "RECEIPT_DELETED"}, workspace.ReceiptDeleted), ({"error": "Photo expired"}, urllib.error.HTTPError)):
+            error = urllib.error.HTTPError("https://veo.test/api/workspace/handoff", 410, "Gone", {}, io.BytesIO(json.dumps(body).encode()))
+            with patch.dict(os.environ, env), patch.object(workspace.urllib.request, "urlopen", side_effect=error):
+                with self.assertRaises(expected):
+                    workspace.authoritative(fixture()["submission_id"])
+
+    def test_deleted_receipt_cancels_the_scheduled_delivery_without_sending_or_accumulating_retry_failures(self):
+        row = fixture()
+        action = {"id": 1, "chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"], "veo_order_id": row["order_id"]}}
+        with patch("cloud_store.claim_scheduled_actions", return_value=[action]), patch("cloud_store._update_claim", return_value=True) as checkpoint, patch("cloud_store.finish_scheduled_action") as finish, patch.object(workspace, "send", side_effect=workspace.ReceiptDeleted("Deleted")), patch("telegram_sender.telegram_call") as telegram:
+            self.assertEqual(workspace.deliver({row["telegram_chat_id"]}), (1, 0, 0))
+        self.assertEqual(checkpoint.call_args.args[1]["status"], "cancelled")
+        self.assertTrue(checkpoint.call_args.args[1]["payload"]["veo_receipt_deleted"])
+        finish.assert_not_called()
+        telegram.assert_not_called()
+
     def test_stage_closed_receipt_needs_no_order_or_verified_financial_payment(self):
         row = {**fixture(), "receipt_kind": "closed", "closed_deal_id": fixture()["submission_id"], "order_id": None,
                "lead_stage": "qualified", "closed_amount_minor": 4000, "paid_minor": 0, "payment_verified": False, "done_at": None}
