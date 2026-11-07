@@ -19,6 +19,56 @@ def report():
 
 
 class ShiftTests(unittest.TestCase):
+    def test_quota_reminders_show_team_and_personal_remaining_targets_and_authoritative_rate(self):
+        data = report(); worker = data["teams"][0]["workers"][0]
+        worker["salary"].update(closed=1, done=0, target=2, rate=35, provisional=True)
+        text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
+        self.assertIn("Team quota reminder: 1 more Closed and 2 more Done", text)
+        self.assertIn("Quota reminder: 1 more Closed and 2 more Done", text)
+        self.assertIn("35% (provisional until Philippine midnight)", text)
+        worker["salary"].update(closed=2, done=2, rate=40, provisional=False)
+        text = "\n".join(shifts.lines(data, data["teams"][0], "24"))
+        self.assertIn("Quota reached: both personal", text)
+        self.assertIn("40% (final for this work date)", text)
+
+    def test_no_ad_zero_operating_quota_does_not_invent_zero_target_commission(self):
+        data = report(); worker = data["teams"][0]["workers"][0]
+        worker["salary"].update(closed=0, done=0, target=1, operating_quota=0, production_capacity=1, rate=35, provisional=True)
+        text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
+        self.assertIn("Quota reminder: 1 more Closed and 1 more Done", text)
+        self.assertIn("35%", text); self.assertNotIn("Quota reached:", text)
+
+    def test_report_includes_canonical_poll_and_mapping_warnings_without_publishing_salary(self):
+        data = report()
+        data["teams"][0]["workers"][0]["warnings"] = [
+            {"kind": "availability_unanswered", "severity": "attention", "work_date": "2026-11-07", "poll_url": "https://t.me/c/123/99"},
+            {"kind": "telegram_mapping_missing", "severity": "attention"}]
+        text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
+        self.assertIn("WARNINGS / ATTENTION: 2", text)
+        self.assertIn("active-for-tomorrow", text)
+        self.assertIn("https://t.me/c/123/99", text)
+        self.assertIn("Telegram identity or team mapping is incomplete", text)
+        self.assertNotIn("400.00", text)
+
+    def test_overdue_reason_is_preserved_instead_of_claiming_it_was_not_recorded(self):
+        data = report()
+        client = data["teams"][0]["workers"][0]["clients"][0]
+        client.update(overdue=True, overdue_hours=4, work_status="working", work_reason="Client requested a revised script")
+        text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
+        self.assertIn("OVERDUE 4.0h", text)
+        self.assertIn("Delay explanation: Client requested a revised script", text)
+        self.assertNotIn("WARNING: add", text)
+        for placeholder in ("", "N/A", "unknown", "none"):
+            client["work_reason"] = placeholder
+            self.assertIn("WARNING: add", "\n".join(shifts.lines(data, data["teams"][0], "16")))
+
+    def test_report_without_custom_topic_uses_the_existing_announcements_topic(self):
+        data = report(); data["teams"][0]["thread_id"] = None
+        action = {"chat_id": CHAT, "payload": {"veo_report_date": "2026-11-06", "veo_team_id": "team", "veo_report_signature": "allowed", "veo_report_text": "snapshot", "veo_report_part": 0, "veo_report_parts": 1}}
+        with patch.object(workspace, "reporting", return_value=data), patch("telegram_sender.telegram_call", return_value={"message_id": 12}) as send:
+            shifts.send(action)
+        self.assertEqual(send.call_args.args[1]["message_thread_id"], GROUPS[CHAT]["announcements"])
+
     def test_held_receipts_prompt_missing_workflow_steps_without_reporting_unearned_salary(self):
         data = report()
         data["teams"][0]["workers"][0]["receipt_holds"] = [{"contact_name": "Held client", "reasons": ["converted_lead_required", "create_and_link_order", "verify_full_payment"]}]

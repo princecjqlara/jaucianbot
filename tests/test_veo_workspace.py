@@ -72,6 +72,15 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("no salary yet", caption)
         self.assertIn("Not created / not required", caption)
         self.assertNotIn("VERIFIED CLOSED DEAL", caption)
+        self.assertEqual(sender.call_args.args[1]["message_thread_id"], GROUPS[row["telegram_chat_id"]]["close"])
+
+    def test_done_receipts_default_to_the_existing_done_topic_and_respect_an_explicit_topic(self):
+        for explicit in (None, 777):
+            row = {**fixture(), "telegram_thread_id": explicit}
+            action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"], "veo_order_id": row["order_id"], "veo_tenant_id": row["tenant_id"]}}
+            with patch.object(workspace, "enabled", return_value=True), patch.object(workspace, "authoritative", return_value=row), patch("veo_directory.verify_identity"), patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as sender:
+                workspace.send(action)
+            self.assertEqual(sender.call_args.args[1]["message_thread_id"], explicit or GROUPS[row["telegram_chat_id"]]["done"])
 
     def test_closed_receipt_accepts_verified_deposit_but_done_requires_full_settlement(self):
         row = fixture()

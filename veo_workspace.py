@@ -173,8 +173,10 @@ def send(action: dict) -> dict:
             f"Closed: {data['closed_at']}", f"Order: {data.get('linked_order_id') or 'Not created / not required for Closed Deal'}",
             f"Closed Deal: {data['closed_deal_id']}", "Source: VEO stage-qualified receipt. Count this deal once; this summary does not create a payment."])
     payload = {"chat_id": int(data["telegram_chat_id"]), "photo": data["photo_url"], "caption": caption[:1024]}
-    if data.get("telegram_thread_id"):
-        payload["message_thread_id"] = int(data["telegram_thread_id"])
+    from daily_automation import GROUPS
+    topic = data.get("telegram_thread_id") or GROUPS.get(int(data["telegram_chat_id"]), {}).get("close" if kind == "closed" else "done")
+    if topic:
+        payload["message_thread_id"] = int(topic)
     return telegram_call("sendPhoto", payload)
 
 
@@ -262,8 +264,10 @@ def send_report(action: dict) -> dict:
         # Do not silently drop workers or split a non-idempotent send mid-report.
         raise ValueError("Team report exceeds Telegram message size; split the team before enabling its report")
     payload = {"chat_id": int(action["chat_id"]), "text": text}
-    if team.get("thread_id"):
-        payload["message_thread_id"] = team["thread_id"]
+    from daily_automation import GROUPS
+    topic = team.get("thread_id") or GROUPS.get(int(action["chat_id"]), {}).get("announcements")
+    if topic:
+        payload["message_thread_id"] = int(topic)
     return telegram_call("sendMessage", payload)
 
 

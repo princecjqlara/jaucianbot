@@ -75,7 +75,7 @@ def directory(tenant: str) -> dict:
     for row in deliveries:
         p = row.get("payload") or {}
         safe.append({k: row.get(k) for k in ("id", "chat_id", "status", "attempts", "scheduled_for", "updated_at", "telegram_message_id")}
-                    | {k: p.get(k) for k in ("veo_order_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed")}
+                    | {k: p.get(k) for k in ("veo_order_id", "veo_closed_deal_id", "veo_receipt_kind", "veo_submission_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed")}
                     | {"review_required": bool((p.get("_veo_sending") or p.get("veo_delivery_unknown"))
                                                 and not (p.get("_veo_message_id") or row.get("telegram_message_id"))
                                                 and row.get("status") == "cancelled")})

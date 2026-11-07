@@ -61,6 +61,14 @@ class WsgiApplicationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["groups"], [{"chat_id": -100123}])
 
+    def test_workspace_status_describes_the_active_three_snapshots_and_warning_source(self):
+        with patch.dict(os.environ, {"INSIGHTS_API_KEY": "correct", "VEO_WORKSPACE_ENABLED": "true", "ALLOWED_CHAT_IDS": "-100123"}), patch("app.archive_status", return_value=[]):
+            status, payload = call_app("/api/status", headers={"Authorization": "Bearer correct"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["daily_reports"]["times_pht"], ["08:00", "16:00", "00:10"])
+        self.assertEqual(payload["member_warnings"]["source"], "VEO current staff warnings")
+        self.assertFalse(payload["page_access_reminders"]["enabled"])
+
     def test_groups_show_discovered_and_approved_state(self):
         discovered = [{"chat_id": -100999, "title": "Daily Reports", "approved": False}]
         with patch.dict(

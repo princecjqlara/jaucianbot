@@ -41,7 +41,7 @@ class DirectoryTests(unittest.TestCase):
                 self.assertEqual(params["chat_id"], [f"in.({CHAT})"])
                 return [{"id": 1, "chat_id": CHAT, "status": "cancelled", "payload": {
                     "text": "private message", "photo_url": "private signed URL", "_veo_sending": True,
-                    "veo_order_id": "order", "veo_tenant_id": TENANT}}]
+                    "veo_order_id": "order", "veo_tenant_id": TENANT, "veo_receipt_kind": "closed", "veo_closed_deal_id": "closed-deal"}}]
             return []
         suno = next(iter(SUNO_GROUPS))
         with patch.dict(os.environ, {**ENV, "ALLOWED_CHAT_IDS": f"{CHAT},{suno}", "AUTOMATION_CHAT_IDS": f"{CHAT},{suno}"}), \
@@ -51,6 +51,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([g["chat_id"] for g in body["groups"]], [CHAT])
         self.assertTrue(body["recent_deliveries"][0]["review_required"])
+        self.assertEqual(body["recent_deliveries"][0]["veo_receipt_kind"], "closed")
+        self.assertEqual(body["recent_deliveries"][0]["veo_closed_deal_id"], "closed-deal")
         self.assertNotIn("private", json.dumps(body))
         reverse.assert_called_once_with(TENANT)
 

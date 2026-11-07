@@ -106,7 +106,7 @@ def status_route(environ, start_response):
             payload["error"] = "archive_service_restricted"
             payload["restriction"] = getattr(error, "restriction", None) or "unknown"
         return response(start_response, 503, payload)
-    return response(start_response, 200, {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
+    payload = {"ok": True, "groups": groups, "automation_version": AUTOMATION_VERSION,
                                         "automation": automation,
                                         "availability_reminders": {"enabled": availability_reminders.enabled(),
                                             "exclude_admins": True,
@@ -120,7 +120,20 @@ def status_route(environ, start_response):
                                             "time": "00:10", "timezone": "Asia/Manila", "covers": "previous completed date",
                                             "zero_output_mode": member_warnings.zero_mode(),
                                             "quiet_teams_are_silent": True},
-                                        "done_deal_tracking": done_deal_tracking.mode()})
+                                        "done_deal_tracking": done_deal_tracking.mode()}
+    if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true":
+        payload.update(
+            daily_reports={"times_pht": ["08:00", "16:00", "00:10"], "timezone": "Asia/Manila",
+                           "frequency": "three_per_day", "source": "VEO authoritative ledger", "live_updates": False,
+                           "closeout": "00:10 covers the previous Philippine financial date; client status and warnings are current"},
+            member_warnings={"enabled": True, "source": "VEO current staff warnings", "delivery": "same three team snapshots",
+                             "covers": ["unanswered availability polls", "receipt salary holds", "overdue projects without reasons", "missing Telegram mappings"],
+                             "missing_or_stale_poll_data": "unknown; never establishes a missed vote"},
+            availability_reminders={"enabled": True, "source": "Jaucian non-anonymous active-for-tomorrow poll", "polls_after_pht": "16:00",
+                                    "reminders": "current warnings in team snapshots"},
+            page_access_reminders={"enabled": False, "source": "VEO account Page assignments"},
+            done_deal_tracking="VEO authoritative ledger; Telegram messages never create another sale")
+    return response(start_response, 200, payload)
 
 
 def health_route(environ, start_response):

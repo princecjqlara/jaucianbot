@@ -73,12 +73,36 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
         f"Team capacity: {capacity.get('capacity', 0)} · average per worker: {capacity.get('average_worker_capacity', 'unavailable')}",
         "Financial milestones use the work date; open-client status is current as of " + clean(data.get("generated_at")),
         "Finished work waiting only for the client's balance is not staff overdue."]
+    if quota.get("closed") is not None and quota.get("done") is not None:
+        result.append(f"Team quota reminder: {max(0, int(quota['closed']) - int(capacity.get('closed', 0)))} more Closed and {max(0, int(quota['done']) - int(capacity.get('done', 0)))} more Done to reach the team targets.")
     for worker in team["workers"]:
         salary = worker["salary"]
         result += ["", f"{clean(worker.get('name'))}: Closed {salary['closed']}/{salary['target']} · Done {salary['done']}/{salary['target']}",
                    "Assigned Pages: " + (", ".join(clean(p.get("name"), 80) for p in worker.get("pages", [])) or "Unavailable")]
+        remaining_closed = max(0, int(salary["target"]) - int(salary["closed"]))
+        remaining_done = max(0, int(salary["target"]) - int(salary["done"]))
+        result.append(f"Quota reminder: {remaining_closed} more Closed and {remaining_done} more Done to reach both personal targets."
+                      if remaining_closed or remaining_done else "Quota reached: both personal Closed and Done targets.")
+        if salary.get("rate") in (35, 40):
+            rate_status = "provisional until Philippine midnight" if salary.get("provisional") else "final for this work date"
+            result.append(f"Daily commission rate: {salary['rate']}% ({rate_status}). Both personal targets are required for 40%.")
         if "operating_quota" in salary:
             result.append(f"Operating quota: {salary['operating_quota']} CD and DD · proven capacity: {salary.get('production_capacity', 'unknown')}. No zero-quota salary; actual verified sales are required.")
+        warnings = worker.get("warnings") or []
+        if warnings:
+            result.append(f"WARNINGS / ATTENTION: {len(warnings)} current item(s)")
+            for warning in warnings:
+                kind = warning.get("kind")
+                if kind in {"salary_on_hold", "overdue_without_reason"}:
+                    continue  # Receipt and client details below explain these.
+                title = {"availability_unanswered": "Answer Jaucian's active-for-tomorrow Telegram poll",
+                         "telegram_mapping_missing": "Telegram identity or team mapping is incomplete; ask your supervisor"}.get(kind, warning.get("title") or "Check your VEO staff warnings")
+                result.append(f"• {clean(warning.get('severity'), 30).upper()}: {clean(title, 240)}")
+                if kind == "availability_unanswered":
+                    result.append("  Poll work date: " + clean(warning.get("work_date"), 20))
+                    url = warning.get("poll_url")
+                    if isinstance(url, str) and url.startswith("https://t.me/"):
+                        result.append("  " + clean(url, 240))
         holds = worker.get("receipt_holds") or []
         if holds:
             result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Complete Qualified/Converted lead + saved order + verified settlement (PHP difference at most 2), then use Recheck in VEO Receipts. Closed Deals do not require an order.")
@@ -103,8 +127,11 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
                 state += " · balance pending"
             if client.get("overdue"):
                 state += f" · OVERDUE {float(client.get('overdue_hours') or 0):.1f}h"
-                if not str(client.get("work_reason") or "").strip():
+                reason = str(client.get("work_reason") or "").strip()
+                if not reason or re.fullmatch(r"unknown|n/?a|none|not provided|[-?]+", reason, re.I):
                     state += " · WARNING: add a truthful delay explanation"
+                else:
+                    state += " · Delay explanation: " + clean(reason, 180)
             result.append(f"• {clean(client.get('name'), 100)} / {clean(client.get('page_name'), 80)}: {state}")
     tomorrow = capacity.get("tomorrow") or {}
     result += ["", f"Active tomorrow ({tomorrow.get('work_date', 'PHT')}): {tomorrow.get('active', 0)} · Closed and Done team quota: {tomorrow.get('capacity', 0)} each · awaiting declarations: {tomorrow.get('unknown', 0)}"]
@@ -206,8 +233,9 @@ def send(action: dict) -> dict:
     if not isinstance(text, str) or len(text.encode("utf-16-le")) // 2 > 3500:
         raise ValueError("Invalid report part")
     payload = {"chat_id": int(action["chat_id"]), "text": f"{text}\nPart {int(p['veo_report_part'])+1}/{int(p['veo_report_parts'])}"}
-    if team.get("thread_id"):
-        payload["message_thread_id"] = team["thread_id"]
+    topic = team.get("thread_id") or GROUPS.get(int(action["chat_id"]), {}).get("announcements")
+    if topic:
+        payload["message_thread_id"] = int(topic)
     return telegram_call("sendMessage", payload)
 
 
