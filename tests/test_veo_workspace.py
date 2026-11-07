@@ -22,6 +22,38 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_stage_closed_receipt_needs_no_order_or_verified_financial_payment(self):
+        row = {**fixture(), "receipt_kind": "closed", "closed_deal_id": fixture()["submission_id"], "order_id": None,
+               "lead_stage": "qualified", "closed_amount_minor": 4000, "paid_minor": 0, "payment_verified": False, "done_at": None}
+        with patch.object(workspace, "allowed_chat_ids", return_value={row["telegram_chat_id"]}), patch.object(workspace, "chat_enabled", return_value=True):
+            workspace.validate(row)
+            workspace.validate({**row, "lead_stage": "converted"})
+            with self.assertRaises(ValueError):
+                workspace.validate({**row, "lead_stage": "new"})
+            with self.assertRaises(ValueError):
+                workspace.validate({**row, "receipt_kind": "done"})
+
+    def test_done_settlement_accepts_only_a_two_peso_php_difference(self):
+        row = {**fixture(), "settlement_tolerance_minor": 200}
+        with patch.object(workspace, "allowed_chat_ids", return_value={row["telegram_chat_id"]}), patch.object(workspace, "chat_enabled", return_value=True):
+            for difference in (-200, -100, 0, 100, 200):
+                workspace.validate({**row, "paid_minor": 10000 + difference})
+            for data in ({**row, "paid_minor": 9799}, {**row, "paid_minor": 10201}, {**row, "currency": "USD"}, {**row, "settlement_tolerance_minor": 201}, {**row, "payment_verified": False}):
+                with self.assertRaises(ValueError):
+                    workspace.validate(data)
+
+    def test_stage_closed_caption_distinguishes_reported_receipt_from_verified_salary(self):
+        row = {**fixture(), "receipt_kind": "closed", "closed_deal_id": fixture()["submission_id"], "order_id": None,
+               "lead_stage": "qualified", "closed_amount_minor": 4000, "paid_minor": 0, "payment_verified": False, "done_at": None}
+        action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"], "veo_order_id": None,
+                  "veo_closed_deal_id": row["closed_deal_id"], "veo_tenant_id": row["tenant_id"], "veo_receipt_kind": "closed"}}
+        with patch.object(workspace, "enabled", return_value=True), patch.object(workspace, "authoritative", return_value=row), patch("veo_directory.verify_identity"), patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as sender:
+            workspace.send(action)
+        caption = sender.call_args.args[1]["caption"]
+        self.assertIn("no salary yet", caption)
+        self.assertIn("Not created / not required", caption)
+        self.assertNotIn("VERIFIED CLOSED DEAL", caption)
+
     def test_closed_receipt_accepts_verified_deposit_but_done_requires_full_settlement(self):
         row = fixture()
         row.update(receipt_kind="closed", paid_minor=4000, done_at=None)

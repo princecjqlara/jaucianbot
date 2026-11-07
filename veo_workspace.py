@@ -36,7 +36,7 @@ def authoritative(submission_id: str) -> dict:
 
 
 def validate(data: dict) -> None:
-    for key in ("submission_id", "tenant_id", "team_id", "seller_id", "page_id", "contact_id", "order_id"):
+    for key in ("submission_id", "tenant_id", "team_id", "seller_id", "page_id", "contact_id"):
         uuid.UUID(data[key])
     expected_tenant = os.environ.get("VEO_WORKSPACE_TENANT_ID")
     if expected_tenant and data["tenant_id"] != expected_tenant:
@@ -48,8 +48,20 @@ def validate(data: dict) -> None:
     kind = data.get("receipt_kind", "done")
     if kind not in {"closed", "done"}:
         raise ValueError("Unknown receipt milestone")
+    stage_closed = kind == "closed" and bool(data.get("closed_deal_id"))
+    if stage_closed:
+        uuid.UUID(data["closed_deal_id"])
+        if data.get("lead_stage") not in {"qualified", "converted"} or int(data.get("closed_amount_minor", 0)) <= 0:
+            raise ValueError("Qualified or Converted Closed Deal receipt required")
+    else:
+        if not isinstance(data.get("order_id"), str):
+            raise ValueError("A created order is required for Done Deals")
+        uuid.UUID(data["order_id"])
     total, paid = int(data["total_minor"]), int(data["paid_minor"])
-    if int(data["telegram_user_id"]) <= 0 or total <= 0 or paid <= 0 or paid > total or (kind == "done" and paid != total):
+    tolerance = int(data.get("settlement_tolerance_minor", 0))
+    if tolerance not in {0, 200} or (data.get("currency") != "PHP" and tolerance):
+        raise ValueError("Settlement tolerance exceeds PHP 2")
+    if int(data["telegram_user_id"]) <= 0 or total <= 0 or paid < 0 or (not stage_closed and (paid <= 0 or paid > total + tolerance)) or (kind == "done" and (abs(paid - total) > tolerance or data.get("payment_verified") is False)):
         raise ValueError("Verified settlement and worker identity required")
     if not data.get("closed_at") or (kind == "done" and not data.get("done_at")) or dt.datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")) <= dt.datetime.now(dt.timezone.utc):
         raise ValueError("Expired or incomplete sale")
@@ -71,14 +83,18 @@ def receive(environ, start_response, respond):
                 raise ValueError("Sale attribution or destination changed")
         if current.get("receipt_kind", "done") != data.get("receipt_kind", "done"):
             raise ValueError("Receipt milestone changed")
+        if current.get("closed_deal_id") != data.get("closed_deal_id"):
+            raise ValueError("Closed Deal reference changed")
         kind = current.get("receipt_kind", "done")
-        key = f"veo-sale:{current['tenant_id']}:{current['order_id']}" + (":closed" if kind == "closed" else "")
+        reference = current.get("closed_deal_id") if kind == "closed" else current["order_id"]
+        reference = reference or current["order_id"]
+        key = f"veo-sale:{current['tenant_id']}:{reference}" + (":closed" if kind == "closed" else "")
         rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             enqueue_scheduled_action(chat_id=int(current["telegram_chat_id"]), action_type="message",
                 scheduled_for=dt.datetime.now(dt.timezone.utc), dedupe_key=key,
                 payload={"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"],
-                    "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "text": "Verified VEO order; authoritative details requested at delivery"})
+                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "text": "VEO receipt; authoritative eligibility requested at delivery"})
             rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             raise RuntimeError("Handoff persistence failed")
@@ -104,6 +120,7 @@ def receive(environ, start_response, respond):
                 {"chat_id": current["telegram_chat_id"], "status": "pending", "attempts": 0, "last_error": None,
                     "scheduled_for": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "payload": {"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"], "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind,
+                    "veo_closed_deal_id": current.get("closed_deal_id"),
                     "text": "Verified VEO order; delivery eligibility refreshed"}}, method="PATCH")
             saved["status"] = "pending"
         return respond(start_response, 200, {"ok": True, "status": saved["status"], "order_id": current["order_id"]})
@@ -121,6 +138,8 @@ def send(action: dict) -> dict:
     if data["order_id"] != action["payload"]["veo_order_id"] or data["tenant_id"] != action["payload"]["veo_tenant_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
         raise ValueError("Sale or destination changed; review required")
     kind = data.get("receipt_kind", "done")
+    if data.get("closed_deal_id") != action["payload"].get("veo_closed_deal_id"):
+        raise ValueError("Closed Deal reference changed; review required")
     if kind != action["payload"].get("veo_receipt_kind", "done"):
         raise ValueError("Receipt milestone changed; review required")
     from veo_directory import verify_identity
@@ -131,6 +150,13 @@ def send(action: dict) -> dict:
         f"Verified received: {int(data['paid_minor']) / 100:.2f} / {int(data['total_minor']) / 100:.2f} {data['currency']}",
         f"Closed: {data['closed_at']}", f"Done: {data.get('done_at') or 'Balance pending'}", f"Order: {data['order_id']}",
         "Source: VEO verified sales ledger. Count this order once; this summary is not a new receipt."])
+    if kind == "closed" and data.get("closed_deal_id"):
+        caption = "\n".join(["VEO · CLOSED DEAL", f"Seller: {data.get('seller_name') or 'Unknown'} ({data['telegram_user_id']})",
+            f"Client: {data.get('contact_name') or 'Unknown'}", f"Lead stage: {data['lead_stage']}",
+            f"Reported Closed Deal payment: {int(data['closed_amount_minor']) / 100:.2f} {data['currency']}",
+            "Payment matched to the verified ledger." if data.get("payment_verified") else "Payment verification pending Done Deal reconciliation; no salary yet.",
+            f"Closed: {data['closed_at']}", f"Order: {data.get('linked_order_id') or 'Not created / not required for Closed Deal'}",
+            f"Closed Deal: {data['closed_deal_id']}", "Source: VEO stage-qualified receipt. Count this deal once; this summary does not create a payment."])
     payload = {"chat_id": int(data["telegram_chat_id"]), "photo": data["photo_url"], "caption": caption[:1024]}
     if data.get("telegram_thread_id"):
         payload["message_thread_id"] = int(data["telegram_thread_id"])
@@ -141,7 +167,7 @@ def report_rows(tenant_id: str, work_date: str) -> dict:
     """Read-only report reconciliation; Telegram receipts are excluded after launch."""
     import crm_store
     uuid.UUID(tenant_id)
-    rows = crm_store.crm_request("veo_order_facts?" + urllib.parse.urlencode({
+    rows = crm_store.crm_request("veo_sales_facts?" + urllib.parse.urlencode({
         "select": "id,seller_id,team_id,currency,total_minor,paid_minor,closed_date,done_date",
         "tenant_id": "eq." + tenant_id,
         "or": f"(closed_date.eq.{work_date},done_date.eq.{work_date})", "limit": 10000,

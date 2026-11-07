@@ -81,9 +81,10 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
             result.append(f"Operating quota: {salary['operating_quota']} CD and DD · proven capacity: {salary.get('production_capacity', 'unknown')}. No zero-quota salary; actual verified sales are required.")
         holds = worker.get("receipt_holds") or []
         if holds:
-            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Complete Converted lead + saved order + verified full payment, then use Recheck in VEO Receipts.")
+            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Complete Qualified/Converted lead + saved order + verified settlement (PHP difference at most 2), then use Recheck in VEO Receipts. Closed Deals do not require an order.")
             reasons = {
                 "converted_lead_required": "set lead to Converted",
+                "eligible_lead_required": "set lead to Qualified or Converted",
                 "create_and_link_order": "create/link the order",
                 "verify_full_payment": "verify the full payment / mark paid",
                 "seller_or_order_attribution_changed": "supervisor attribution review",
