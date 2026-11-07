@@ -77,6 +77,22 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
         salary = worker["salary"]
         result += ["", f"{clean(worker.get('name'))}: Closed {salary['closed']}/{salary['target']} · Done {salary['done']}/{salary['target']}",
                    "Assigned Pages: " + (", ".join(clean(p.get("name"), 80) for p in worker.get("pages", [])) or "Unavailable")]
+        if "operating_quota" in salary:
+            result.append(f"Operating quota: {salary['operating_quota']} CD and DD · proven capacity: {salary.get('production_capacity', 'unknown')}. No zero-quota salary; actual verified sales are required.")
+        holds = worker.get("receipt_holds") or []
+        if holds:
+            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Complete Converted lead + saved order + verified full payment, then use Recheck in VEO Receipts.")
+            reasons = {
+                "converted_lead_required": "set lead to Converted",
+                "create_and_link_order": "create/link the order",
+                "verify_full_payment": "verify the full payment / mark paid",
+                "seller_or_order_attribution_changed": "supervisor attribution review",
+            }
+            for held in holds[:20]:
+                steps = ", ".join(reasons.get(key, clean(key)) for key in held.get("reasons", []))
+                result.append(f"• {clean(held.get('contact_name'), 100)}: {steps}")
+            if len(holds) > 20:
+                result.append("More held receipts are listed in the role-protected VEO Receipts view.")
         clients = worker.get("clients", [])
         if not clients:
             result.append("No open or work-date clients recorded.")
@@ -86,6 +102,8 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
                 state += " · balance pending"
             if client.get("overdue"):
                 state += f" · OVERDUE {float(client.get('overdue_hours') or 0):.1f}h"
+                if not str(client.get("work_reason") or "").strip():
+                    state += " · WARNING: add a truthful delay explanation"
             result.append(f"• {clean(client.get('name'), 100)} / {clean(client.get('page_name'), 80)}: {state}")
     tomorrow = capacity.get("tomorrow") or {}
     result += ["", f"Active tomorrow ({tomorrow.get('work_date', 'PHT')}): {tomorrow.get('active', 0)} · Closed and Done team quota: {tomorrow.get('capacity', 0)} each · awaiting declarations: {tomorrow.get('unknown', 0)}"]

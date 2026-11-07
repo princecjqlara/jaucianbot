@@ -11,6 +11,18 @@ TENANT = "00000000-0000-4000-8000-000000000001"
 
 
 class WorkforceTests(unittest.TestCase):
+    def test_current_poll_metadata_distinguishes_unanswered_from_a_withdrawn_vote(self):
+        tomorrow = str(dt.datetime.now(workforce.MANILA).date() + dt.timedelta(days=1))
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        polls = [{"chat_id": CHAT, "poll_id": "current", "work_date": tomorrow, "created_at": now, "telegram_message_id": 99}]
+        with patch("telegram_sender.telegram_call", return_value={"status": "member", "user": {"id": 42, "is_bot": False}}):
+            missing = workforce.inspect(self.data()["accounts"][0], {CHAT}, [], [], [], set(), "2026-11-05T00:00:00Z", polls)
+            voted = workforce.inspect(self.data()["accounts"][0], {CHAT}, [{"poll_id": "current", "user_id": 42, "active": False, "updated_at": now, "daily_polls": {"chat_id": CHAT, "work_date": tomorrow}}], [], [], set(), "2026-11-05T00:00:00Z", polls)
+        self.assertFalse(missing["availability"]["has_vote"])
+        self.assertTrue(voted["availability"]["has_vote"])
+        self.assertFalse(voted["attendance"]["active"])
+        self.assertEqual(voted["availability"]["poll_id"], "current")
+
     def data(self):
         return {"tenant_id": TENANT, "launch_at": "2026-11-05T00:00:00Z", "pages": [{"id": "allowed-page"}],
                 "accounts": [{"user_id": "worker", "role": "member", "telegram_chat_id": CHAT, "telegram_user_id": 42},

@@ -45,9 +45,13 @@ def validate(data: dict) -> None:
     from daily_automation import GROUPS
     if chat not in GROUPS or chat not in allowed_chat_ids() or not chat_enabled(chat):
         raise ValueError("Destination is not an approved active VEO team")
-    if int(data["telegram_user_id"]) <= 0 or int(data["total_minor"]) <= 0 or int(data["paid_minor"]) != int(data["total_minor"]):
+    kind = data.get("receipt_kind", "done")
+    if kind not in {"closed", "done"}:
+        raise ValueError("Unknown receipt milestone")
+    total, paid = int(data["total_minor"]), int(data["paid_minor"])
+    if int(data["telegram_user_id"]) <= 0 or total <= 0 or paid <= 0 or paid > total or (kind == "done" and paid != total):
         raise ValueError("Verified settlement and worker identity required")
-    if not data.get("closed_at") or not data.get("done_at") or dt.datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")) <= dt.datetime.now(dt.timezone.utc):
+    if not data.get("closed_at") or (kind == "done" and not data.get("done_at")) or dt.datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")) <= dt.datetime.now(dt.timezone.utc):
         raise ValueError("Expired or incomplete sale")
 
 
@@ -65,13 +69,16 @@ def receive(environ, start_response, respond):
         for key in ("tenant_id", "team_id", "seller_id", "page_id", "contact_id", "order_id", "telegram_chat_id", "telegram_user_id"):
             if current[key] != data[key]:
                 raise ValueError("Sale attribution or destination changed")
-        key = f"veo-sale:{current['tenant_id']}:{current['order_id']}"
+        if current.get("receipt_kind", "done") != data.get("receipt_kind", "done"):
+            raise ValueError("Receipt milestone changed")
+        kind = current.get("receipt_kind", "done")
+        key = f"veo-sale:{current['tenant_id']}:{current['order_id']}" + (":closed" if kind == "closed" else "")
         rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             enqueue_scheduled_action(chat_id=int(current["telegram_chat_id"]), action_type="message",
                 scheduled_for=dt.datetime.now(dt.timezone.utc), dedupe_key=key,
                 payload={"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"],
-                    "veo_tenant_id": current["tenant_id"], "text": "Verified VEO order; authoritative details requested at delivery"})
+                    "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "text": "Verified VEO order; authoritative details requested at delivery"})
             rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             raise RuntimeError("Handoff persistence failed")
@@ -96,7 +103,7 @@ def receive(environ, start_response, respond):
                 "payload->>veo_delivery_unknown": "is.null"}),
                 {"chat_id": current["telegram_chat_id"], "status": "pending", "attempts": 0, "last_error": None,
                     "scheduled_for": dt.datetime.now(dt.timezone.utc).isoformat(),
-                    "payload": {"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"], "veo_tenant_id": current["tenant_id"],
+                    "payload": {"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"], "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind,
                     "text": "Verified VEO order; delivery eligibility refreshed"}}, method="PATCH")
             saved["status"] = "pending"
         return respond(start_response, 200, {"ok": True, "status": saved["status"], "order_id": current["order_id"]})
@@ -113,13 +120,16 @@ def send(action: dict) -> dict:
     data = authoritative(action["payload"]["veo_submission_id"])
     if data["order_id"] != action["payload"]["veo_order_id"] or data["tenant_id"] != action["payload"]["veo_tenant_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
         raise ValueError("Sale or destination changed; review required")
+    kind = data.get("receipt_kind", "done")
+    if kind != action["payload"].get("veo_receipt_kind", "done"):
+        raise ValueError("Receipt milestone changed; review required")
     from veo_directory import verify_identity
     verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
     from telegram_sender import telegram_call
-    caption = "\n".join(["VEO · VERIFIED DONE DEAL", f"Seller: {data.get('seller_name') or 'Unknown'} ({data['telegram_user_id']})",
+    caption = "\n".join(["VEO · VERIFIED CLOSED DEAL" if kind == "closed" else "VEO · VERIFIED DONE DEAL", f"Seller: {data.get('seller_name') or 'Unknown'} ({data['telegram_user_id']})",
         f"Client: {data.get('contact_name') or 'Unknown'}", str(data.get("description") or "Order")[:250],
-        f"Full verified payment: {int(data['total_minor']) / 100:.2f} {data['currency']}",
-        f"Closed: {data['closed_at']}", f"Done: {data['done_at']}", f"Order: {data['order_id']}",
+        f"Verified received: {int(data['paid_minor']) / 100:.2f} / {int(data['total_minor']) / 100:.2f} {data['currency']}",
+        f"Closed: {data['closed_at']}", f"Done: {data.get('done_at') or 'Balance pending'}", f"Order: {data['order_id']}",
         "Source: VEO verified sales ledger. Count this order once; this summary is not a new receipt."])
     payload = {"chat_id": int(data["telegram_chat_id"]), "photo": data["photo_url"], "caption": caption[:1024]}
     if data.get("telegram_thread_id"):

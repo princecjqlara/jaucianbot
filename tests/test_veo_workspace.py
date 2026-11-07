@@ -22,6 +22,30 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_closed_receipt_accepts_verified_deposit_but_done_requires_full_settlement(self):
+        row = fixture()
+        row.update(receipt_kind="closed", paid_minor=4000, done_at=None)
+        with patch.object(workspace, "allowed_chat_ids", return_value={row["telegram_chat_id"]}), patch.object(workspace, "chat_enabled", return_value=True):
+            workspace.validate(row)
+            with self.assertRaises(ValueError):
+                workspace.validate({**row, "receipt_kind": "done"})
+            with self.assertRaises(ValueError):
+                workspace.validate({**row, "paid_minor": 0})
+
+    def test_closed_and_done_handoffs_use_distinct_idempotency_keys_without_creating_sales(self):
+        keys = []
+        for kind in ("closed", "done"):
+            row = {**fixture(), "receipt_kind": kind}
+            raw = json.dumps(row).encode()
+            saved = {"id": 1, "status": "pending", "chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"]}}
+            with patch.dict(os.environ, {"VEO_WORKSPACE_ENABLED": "true", "VEO_JAUCIAN_SECRET": "secret"}), patch.object(workspace, "validate"), patch.object(workspace, "authoritative", return_value=row), patch.object(workspace, "request", side_effect=[[], [saved]]), patch.object(workspace, "enqueue_scheduled_action") as enqueue:
+                result = workspace.receive({"HTTP_AUTHORIZATION": "Bearer secret", "CONTENT_LENGTH": str(len(raw)), "wsgi.input": io.BytesIO(raw)}, None, lambda _, status, payload: payload)
+            self.assertTrue(result["ok"])
+            keys.append(enqueue.call_args.kwargs["dedupe_key"])
+        self.assertTrue(keys[0].endswith(":closed"))
+        self.assertFalse(keys[1].endswith(":closed"))
+        self.assertNotEqual(keys[0], keys[1])
+
     def test_existing_summary_endpoint_reads_only_verified_veo_sales_and_scopes_active_teams(self):
         chat = next(iter(GROUPS))
         env = {"VEO_WORKSPACE_ENABLED": "true", "INSIGHTS_API_KEY": "test-key", "ALLOWED_CHAT_IDS": str(chat), "AUTOMATION_CHAT_IDS": str(chat)}

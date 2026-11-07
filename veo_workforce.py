@@ -57,7 +57,7 @@ def observe_vote(update: dict, approved: set[int]) -> None:
                 {"payload": payload, "updated_at": now.isoformat()}, method="PATCH")
 
 
-def inspect(person: dict, chats: set[int], attendance: list[dict], votes: list[dict], pages: list[dict], valid_pages: set[str], launch: str) -> dict:
+def inspect(person: dict, chats: set[int], attendance: list[dict], votes: list[dict], pages: list[dict], valid_pages: set[str], launch: str, polls: list[dict] = ()) -> dict:
     chat, uid = int(person["telegram_chat_id"]), int(person["telegram_user_id"])
     now = dt.datetime.now(dt.timezone.utc)
     row = {"user_id": person["user_id"], "telegram_user_id": uid, "chat_id": chat,
@@ -80,21 +80,30 @@ def inspect(person: dict, chats: set[int], attendance: list[dict], votes: list[d
     except Exception:
         row["error"] = "membership_lookup_unavailable"
         return row
+    tomorrow = str(now.astimezone(MANILA).date() + dt.timedelta(days=1))
+    current_poll = next((p for p in polls if int(p["chat_id"]) == chat and p["work_date"] == tomorrow), None)
     candidates = []
     # Durable vote metadata fences update_id. The older aggregate table does
     # not, so a delayed webhook must not overwrite a newer vote for that poll.
     observed_polls = {str((v.get("payload") or {}).get("poll_id")) for v in votes
         if int((v.get("payload") or {}).get("user_id") or 0) == uid and int(v["chat_id"]) == chat}
     for answer in attendance:
-        if int(answer["user_id"]) == uid and int(answer["daily_polls"]["chat_id"]) == chat and str(answer.get("poll_id")) not in observed_polls:
+        if int(answer["user_id"]) == uid and int(answer["daily_polls"]["chat_id"]) == chat and str(answer.get("poll_id")) not in observed_polls and (not current_poll or str(answer.get("poll_id")) == str(current_poll["poll_id"])):
             candidates.append({"work_date": answer["daily_polls"]["work_date"], "active": answer["active"], "updated_at": answer["updated_at"]})
     for vote in votes:
         p = vote.get("payload") or {}
-        if int(p.get("user_id") or 0) == uid and int(vote["chat_id"]) == chat:
+        if int(p.get("user_id") or 0) == uid and int(vote["chat_id"]) == chat and (not current_poll or str(p.get("poll_id")) == str(current_poll["poll_id"])):
             candidates.append({k: p.get(k) for k in ("work_date", "active", "updated_at")})
     candidates = [p for p in candidates if timestamp(launch) <= timestamp(p.get("updated_at")) <= now]
     if candidates:
         row["attendance"] = max(candidates, key=lambda p: timestamp(p["updated_at"]))
+    if current_poll:
+        private_chat = str(chat)[4:] if str(chat).startswith("-100") else None
+        message = int(current_poll.get("telegram_message_id") or 0)
+        row["availability"] = {"work_date": tomorrow, "poll_id": current_poll["poll_id"],
+            "telegram_message_id": message, "created_at": current_poll.get("created_at"),
+            "has_vote": isinstance((row.get("attendance") or {}).get("active"), bool),
+            "poll_url": f"https://t.me/c/{private_chat}/{message}" if private_chat and message > 0 else None}
     declared = [p for p in pages if int(p["chat_id"]) == chat and int((p.get("payload") or {}).get("user_id") or 0) == uid and timestamp(launch) <= timestamp(p.get("updated_at")) <= now]
     if declared:
         chosen = set()
@@ -112,19 +121,21 @@ def snapshot(tenant: str, *, offset: int = 0, limit: int = 8) -> dict:
     mapped = sorted([p for p in people if p.get("telegram_user_id") and p.get("telegram_chat_id")], key=lambda p: p["user_id"])
     batch = mapped[offset:offset + limit]
     chats = teams()
-    answers = votes = pages = []
+    answers = votes = pages = polls = []
     if batch:
         ids = ",".join(str(int(p["telegram_user_id"])) for p in batch)
         group_ids = ",".join(str(c) for c in sorted({int(p["telegram_chat_id"]) for p in batch}.intersection(chats)))
         tomorrow = str(dt.datetime.now(MANILA).date() + dt.timedelta(days=1))
         if group_ids:
+            polls = request("daily_polls?" + urllib.parse.urlencode({"select": "poll_id,chat_id,work_date,telegram_message_id,created_at",
+                "chat_id": f"in.({group_ids})", "work_date": "eq." + tomorrow, "limit": 1000})) or []
             answers = request("daily_poll_answers?" + urllib.parse.urlencode({"select": "poll_id,user_id,active,updated_at,daily_polls!inner(chat_id,work_date)",
                 "user_id": f"in.({ids})", "daily_polls.chat_id": f"in.({group_ids})", "daily_polls.work_date": "eq." + tomorrow, "limit": 1000})) or []
             votes = request("scheduled_actions?" + urllib.parse.urlencode({"select": "chat_id,payload", "chat_id": f"in.({group_ids})", "dedupe_key": f"like.workspace-vote:{tenant}:*", "payload->>user_id": f"in.({ids})", "payload->>work_date": "eq." + tomorrow, "limit": 1000})) or []
             pages = request("scheduled_actions?" + urllib.parse.urlencode({"select": "chat_id,payload,updated_at", "chat_id": f"in.({group_ids})", "dedupe_key": "like.page-access-member:*", "payload->>user_id": f"in.({ids})", "order": "updated_at.desc", "limit": 1000})) or []
     valid_pages = {p["id"] for p in data["pages"]}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        workers = list(pool.map(lambda p: inspect(p, chats, answers, votes, pages, valid_pages, data["launch_at"]), batch))
+        workers = list(pool.map(lambda p: inspect(p, chats, answers, votes, pages, valid_pages, data["launch_at"], polls), batch))
     next_offset = offset + len(batch) if offset + len(batch) < len(mapped) else 0
     return {"ok": True, "tenant_id": tenant, "workers": workers, "unmapped": len(people) - len(mapped),
             "next_offset": next_offset, "mapped_total": len(mapped), "source": "Existing Jaucian bot and recorded polls"}

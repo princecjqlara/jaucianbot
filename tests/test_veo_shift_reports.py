@@ -19,6 +19,15 @@ def report():
 
 
 class ShiftTests(unittest.TestCase):
+    def test_held_receipts_prompt_missing_workflow_steps_without_reporting_unearned_salary(self):
+        data = report()
+        data["teams"][0]["workers"][0]["receipt_holds"] = [{"contact_name": "Held client", "reasons": ["converted_lead_required", "create_and_link_order", "verify_full_payment"]}]
+        text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
+        self.assertIn("SALARY ON HOLD", text)
+        self.assertIn("Held client: set lead to Converted, create/link the order, verify the full payment", text)
+        self.assertIn("Recheck", text)
+        self.assertNotIn("400.00", text)
+
     def test_three_philippine_slots_and_midnight_closeout_date(self):
         zone = ZoneInfo("Asia/Manila")
         for hour, minute, expected, day in [(0, 9, None, None), (0, 10, "24", "2026-11-05"), (7, 59, "24", "2026-11-05"), (8, 0, "08", "2026-11-06"), (16, 0, "16", "2026-11-06"), (23, 59, "16", "2026-11-06")]:
