@@ -53,20 +53,60 @@ def snapshot(tenant: str, *, offset: int = 0, limit: int = 4) -> dict:
             "identity_source": "Existing verified numeric mappings; current Telegram human membership"}
 
 
-def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
+def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | dict | None:
     if os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() != "true":
         return None
     from veo_directory import teams, verify_identity
     message = update.get("message") or {}
     user = message.get("from") or {}
     chat = (message.get("chat") or {}).get("id")
-    if chat not in allowed.intersection(teams()) or not isinstance(user.get("id"), int) or isinstance(user["id"], bool) or user["id"] <= 0 or user.get("is_bot") is not False:
+    approved = allowed.intersection(teams())
+    if not isinstance(user.get("id"), int) or isinstance(user["id"], bool) or user["id"] <= 0 or user.get("is_bot") is not False:
         return None
     if any(message.get(k) for k in ("forward_origin", "forward_from", "forward_date")):
         return None
     if not isinstance(message.get("date"), int) or abs(now.timestamp() - message["date"]) > 600:
         return None
-    match = re.fullmatch(r"/veolink(?:@[A-Za-z0-9_]+)?\s+([a-f0-9]{48})", str(message.get("text") or "").strip())
+    text = str(message.get("text") or "").strip()
+    # New, simpler flow: staff ask Jaucian privately for a short-lived code,
+    # then enter it in their signed-in VEO profile.
+    if chat == user["id"] and re.fullmatch(r"/(?:start|veolink|link)(?:@[A-Za-z0-9_]+)?", text, re.I):
+        verify_identity_for = None
+        for group in sorted(approved):
+            try:
+                verify_identity(group, user["id"])
+                verify_identity_for = group
+                break
+            except Exception:
+                continue
+        if verify_identity_for is None:
+            return {"method": "sendMessage", "chat_id": user["id"], "text": "I could not find you in an approved VEO team group. Join your team group, then message /link again."}
+        code = os.urandom(24).hex()
+        tenant = os.environ["VEO_WORKSPACE_TENANT_ID"]
+        from veo_intake import open_request
+        base = os.environ["VEO_WORKSPACE_URL"].rstrip("/")
+        if not base.startswith("https://"):
+            raise ValueError("Secure VEO workspace URL required")
+        req = urllib.request.Request(base + "/api/workspace/handoff", data=json.dumps({
+            "resource": "telegram_pairing_issue", "tenant_id": tenant, "code": code,
+            "telegram_user_id": user["id"], "chat_id": verify_identity_for,
+            "username": user.get("username")}).encode(), headers={
+            "Authorization": "Bearer " + os.environ["VEO_JAUCIAN_SECRET"],
+            "Content-Type": "application/json"}, method="POST")
+        try:
+            with open_request(req) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            if error.code in {400, 403, 409}:
+                return {"method": "sendMessage", "chat_id": user["id"], "text": "Could not issue a link code. If your Telegram account is already linked, contact your supervisor."}
+            raise RuntimeError("VEO Telegram link temporarily unavailable") from error
+        if result.get("ok") is not True or result.get("tenant_id") != tenant:
+            raise RuntimeError("VEO Telegram link response did not match")
+        return {"method": "sendMessage", "chat_id": user["id"], "text": f"Your VEO link code is {code}. Enter it in your signed-in VEO Telegram profile within 10 minutes. Do not share it."}
+    if chat not in approved:
+        # Retain the existing group command for codes already created in VEO.
+        return None
+    match = re.fullmatch(r"/veolink(?:@[A-Za-z0-9_]+)?\s+([a-f0-9]{48})", text)
     if not match:
         return None
     verify_identity(chat, user["id"])
