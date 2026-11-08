@@ -53,6 +53,15 @@ class IntakeTests(unittest.TestCase):
             with patch.dict(os.environ, {'VEO_TELEGRAM_INTAKE_ENABLED': 'false'}): self.assertIsNone(intake.handle(self.update(), {CHAT}, self.now))
             source.assert_not_called()
 
+    def test_handover_opens_the_same_authoritative_assignment_menu_as_reassign(self):
+        with patch.object(intake, 'call', return_value=self.result()) as source, patch.object(intake, 'enqueue_scheduled_action', return_value=True) as enqueue:
+            for command in ['/handover', '/handover@VeoBot', '/reassign']:
+                self.assertIn('Saved in Tokko', intake.handle(self.update(text=command), {CHAT}, self.now))
+                self.assertEqual(source.call_args.args, ('reassign',))
+                self.assertEqual(source.call_args.kwargs['user'], 42)
+                self.assertEqual(enqueue.call_args.kwargs['payload']['veo_intake_request_id'], REFERENCE)
+            self.assertEqual(source.call_args_list[0].kwargs['data'], source.call_args_list[1].kwargs['data'])
+
     def test_old_assignment_buttons_cannot_write_a_parallel_owner(self):
         with patch.object(intake, 'call') as source, patch.object(intake, 'enqueue_scheduled_action') as enqueue:
             self.assertIn('Use /clients', intake.handle(self.update(callback='cw:take:old-offer'), {CHAT}, self.now))

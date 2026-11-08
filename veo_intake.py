@@ -90,7 +90,7 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
             return None
         text = str(message.get("text") or "").strip().lower()
         command = text.split("@", 1)[0] if text.startswith("/") else text
-        action = {"/ready": "ready", "ready": "ready", "/busy": "busy", "busy": "busy", "/clients": "pool", "/offers": "offers", "/myclients": "assigned", "/reassign": "reassign"}.get(command)
+        action = {"/ready": "ready", "ready": "ready", "/busy": "busy", "busy": "busy", "/clients": "pool", "/offers": "offers", "/myclients": "assigned", "/reassign": "reassign", "/handover": "reassign"}.get(command)
         if action is None:
             return None
     update_id = update.get("update_id")

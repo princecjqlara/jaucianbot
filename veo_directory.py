@@ -89,7 +89,7 @@ def directory(tenant: str) -> dict:
         connection = {"ok": False, "error": "Jaucian cannot currently read the VEO directory"}
     from veo_intake import enabled as intake_enabled
     return {"ok": True, "tenant_id": tenant, "source": "Jaucian database", "read_only": True,
-            "client_assignments": {"enabled": intake_enabled(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/reassign"]},
+            "client_assignments": {"enabled": intake_enabled(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/handover", "/reassign"]},
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(), "groups": groups,
             "veo_connection": connection,
             "recent_deliveries": safe, "delivery_limit": 50,
