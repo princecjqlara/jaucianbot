@@ -89,6 +89,41 @@ class IntakeTests(unittest.TestCase):
         with patch.object(intake, 'call', return_value={'offers': [offer]}), patch.object(intake, 'request', return_value=[{'dedupe_key': key}]), patch.object(intake, 'enqueue_scheduled_action') as enqueue:
             self.assertEqual(intake.queue(self.now, {CHAT}), 0); enqueue.assert_not_called()
 
+    def test_fresh_inquiry_is_announced_once_before_any_editor_offer(self):
+        notice = {'notice_id': REFERENCE, 'chat_id': CHAT}
+        with patch.object(intake, 'call', return_value={'offers': [], 'notices': [notice]}), patch.object(intake, 'request', return_value=[]), patch.object(intake, 'enqueue_scheduled_action', return_value=True) as enqueue:
+            self.assertEqual(intake.queue(self.now, {CHAT}), 1)
+            self.assertEqual(enqueue.call_args.kwargs['payload']['veo_intake_notice_id'], REFERENCE)
+            self.assertNotIn('veo_intake_user_id', enqueue.call_args.kwargs['payload'])
+            self.assertEqual(enqueue.call_args.kwargs['dedupe_key'], f'veo-intake-notice:{TENANT}:{REFERENCE}:{CHAT}')
+        with patch.object(intake, 'call', return_value={'offers': [], 'notices': [notice]}), patch.object(intake, 'request', return_value=[{'dedupe_key': f'veo-intake-notice:{TENANT}:{REFERENCE}:{CHAT}'}]), patch.object(intake, 'enqueue_scheduled_action') as enqueue:
+            self.assertEqual(intake.queue(self.now, {CHAT}), 0);enqueue.assert_not_called()
+
+    def test_announcements_use_live_group_scope_and_allow_only_bound_availability_buttons(self):
+        action = {'chat_id': CHAT, 'payload': {'veo_tenant_id': TENANT, 'veo_intake_notice_id': REFERENCE}}
+        result = {'chat_id': CHAT, 'text': 'New inquiry. First offer after one hour.', 'reply_markup': {'inline_keyboard': [[{'text': 'Ready', 'callback_data': 'cw:ready'}]]}}
+        with patch('veo_directory.teams', return_value={CHAT}), patch.object(intake, 'call', return_value=result) as source, patch('telegram_sender.telegram_call', return_value={'message_id': 77}) as send:
+            self.assertEqual(intake.send(action)['message_id'], 77)
+            self.assertEqual(source.call_args.args, ('render_notice',))
+            self.assertIn('one hour', send.call_args.args[1]['text'])
+            result['reply_markup']['inline_keyboard'][0][0]['callback_data'] = 'cw:take:unbound'
+            with self.assertRaises(ValueError): intake.send(action)
+
+    def test_acknowledged_inquiry_retries_only_the_app_checkpoint_and_never_resends(self):
+        import veo_workspace
+        action = {'id': 1, 'chat_id': CHAT, 'payload': {'veo_tenant_id': TENANT, 'veo_intake_notice_id': REFERENCE, '_veo_message_id': 77}}
+        with patch('cloud_store.claim_scheduled_actions', return_value=[action]), patch('cloud_store.finish_scheduled_action', return_value=True), patch.object(intake, 'call', return_value={'ok': True}) as source, patch.object(intake, 'send') as send:
+            self.assertEqual(veo_workspace.deliver({CHAT}), (1, 1, 0));send.assert_not_called()
+            source.assert_called_once_with('ack_notice', chat=CHAT, data={'notice_id': REFERENCE, 'message_id': 77})
+
+    def test_offer_checkpoint_retry_preserves_the_telegram_delivery_time(self):
+        import veo_workspace
+        delivered_at = self.now.isoformat()
+        action = {'id': 1, 'chat_id': CHAT, 'payload': {'veo_tenant_id': TENANT, 'veo_intake_offer_id': REFERENCE, '_veo_message_id': 77, '_veo_sent_at': delivered_at}}
+        with patch('cloud_store.claim_scheduled_actions', return_value=[action]), patch('cloud_store.finish_scheduled_action', return_value=True), patch.object(intake, 'call', return_value={'ok': True}) as source, patch.object(intake, 'send') as send:
+            self.assertEqual(veo_workspace.deliver({CHAT}), (1, 1, 0)); send.assert_not_called()
+            source.assert_called_once_with('ack_offer', chat=CHAT, data={'offer_id': REFERENCE, 'message_id': 77, 'sent_at': delivered_at})
+
     def action(self):
         return {'chat_id': CHAT, 'payload': {'veo_intake_request_id': REFERENCE, 'veo_intake_user_id': 42, 'veo_tenant_id': TENANT}}
 

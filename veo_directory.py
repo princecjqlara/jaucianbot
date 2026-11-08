@@ -53,7 +53,8 @@ def group_directory(chat: int) -> dict:
     topics = {k: config[k] for k in ("announcements", "done", "close", "active") if k in config}
     if config.get("contact_thread"):
         topics["clients"] = config["contact_thread"]
-    return {"chat_id": chat, "name": config["name"],
+    from automation_controls import new_clients_enabled
+    return {"chat_id": chat, "name": config["name"], "new_clients_enabled": new_clients_enabled(chat),
             "topics": topics,
             "pages": config.get("crm_pages", {}),
             "identity_coverage": {"message_sample": len(rows), "message_limit": 1000,
@@ -78,7 +79,7 @@ def directory(tenant: str) -> dict:
     for row in deliveries:
         p = row.get("payload") or {}
         safe.append({k: row.get(k) for k in ("id", "chat_id", "status", "attempts", "scheduled_for", "updated_at", "telegram_message_id")}
-                    | {k: p.get(k) for k in ("veo_order_id", "veo_closed_deal_id", "veo_receipt_kind", "veo_submission_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed", "veo_intake_offer_id", "veo_intake_request_id", "veo_intake_help")}
+                    | {k: p.get(k) for k in ("veo_order_id", "veo_closed_deal_id", "veo_receipt_kind", "veo_submission_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed", "veo_intake_offer_id", "veo_intake_request_id", "veo_intake_notice_id", "veo_intake_help")}
                     | {"review_required": bool((p.get("_veo_sending") or p.get("veo_delivery_unknown"))
                                                 and not (p.get("_veo_message_id") or row.get("telegram_message_id"))
                                                 and row.get("status") == "cancelled")})

@@ -127,10 +127,13 @@ def queue(now: dt.datetime, allowed: set[int]) -> int:
         return 0
     from automation_controls import new_clients_enabled
     tenant = os.environ["VEO_WORKSPACE_TENANT_ID"]
-    offers = [o for o in call("pending").get("offers", []) if int(o["chat_id"]) in allowed.intersection(GROUPS) and new_clients_enabled(int(o["chat_id"]))]
-    if not offers:
+    pending = call("pending")
+    offers = [o for o in pending.get("offers", []) if int(o["chat_id"]) in allowed.intersection(GROUPS) and new_clients_enabled(int(o["chat_id"]))]
+    notices = [n for n in pending.get("notices", []) if int(n["chat_id"]) in allowed.intersection(GROUPS) and new_clients_enabled(int(n["chat_id"]))]
+    if not offers and not notices:
         return 0
     keys = [f"veo-intake-offer:{tenant}:{o['offer_id']}:{o['chat_id']}" for o in offers]
+    keys += [f"veo-intake-notice:{tenant}:{n['notice_id']}:{n['chat_id']}" for n in notices]
     existing = request("scheduled_actions?" + urllib.parse.urlencode({"select": "dedupe_key", "dedupe_key": "in.(" + ",".join(keys) + ")", "limit": 100})) or []
     known, queued = {r["dedupe_key"] for r in existing}, 0
     for offer, key in zip(offers, keys):
@@ -141,8 +144,37 @@ def queue(now: dt.datetime, allowed: set[int]) -> int:
             payload={"veo_intake_offer_id": offer["offer_id"], "veo_intake_user_id": int(offer["telegram_user_id"]), "veo_tenant_id": tenant,
                      "text": "Tokko client offer; current access and expiry checked at delivery"}))
         if queued >= 10:
-            break
+            return queued
+    for notice in notices:
+        key = f"veo-intake-notice:{tenant}:{notice['notice_id']}:{notice['chat_id']}"
+        if key in known:
+            continue
+        uuid.UUID(notice["notice_id"])
+        queued += int(enqueue_scheduled_action(chat_id=int(notice["chat_id"]), action_type="message", scheduled_for=now, dedupe_key=key,
+            payload={"veo_intake_notice_id": notice["notice_id"], "veo_tenant_id": tenant, "text": "New VEO inquiry; current group and Page scope checked at delivery"}))
+        if queued >= 10:
+            return queued
     return queued
+
+
+def acknowledge_delivery(action: dict, message_id: int) -> None:
+    payload = action["payload"]
+    if payload.get("veo_intake_notice_id"):
+        call("ack_notice", chat=int(action["chat_id"]), data={"notice_id": payload["veo_intake_notice_id"], "message_id": message_id})
+    elif payload.get("veo_intake_offer_id"):
+        call("ack_offer", chat=int(action["chat_id"]), data={"offer_id": payload["veo_intake_offer_id"], "message_id": message_id, **({"sent_at": payload["_veo_sent_at"]} if payload.get("_veo_sent_at") else {})})
+
+
+def validate_reply(current: dict, *, announcement: bool = False) -> None:
+    if len(str(current.get("text") or "").encode("utf-16-le")) // 2 > 3500:
+        raise ValueError("Assignment reply is too long")
+    for row in (current.get("reply_markup") or {}).get("inline_keyboard", []):
+        for item in row:
+            callback = item.get("callback_data")
+            if callback is not None and not re.fullmatch(r"vi:[a-f0-9-]{36}", callback) and not (announcement and callback in {"cw:ready", "cw:busy"}):
+                raise ValueError("Unbound assignment button")
+            if "url" in item and not item["url"].startswith("https://veochatbot.vercel.app/dashboard/"):
+                raise ValueError("Invalid Tokko link")
 
 
 def send(action: dict) -> dict:
@@ -154,6 +186,12 @@ def send(action: dict) -> dict:
     payload, chat = action["payload"], int(action["chat_id"])
     if payload.get("veo_tenant_id") != os.environ.get("VEO_WORKSPACE_TENANT_ID") or chat not in teams() or not new_clients_enabled(chat):
         raise IntakeScopeChanged("Assignment destination changed")
+    if payload.get("veo_intake_notice_id"):
+        current = call("render_notice", chat=chat, data={"notice_id": payload["veo_intake_notice_id"]})
+        if int(current.get("chat_id") or 0) != chat:
+            raise IntakeScopeChanged("Fresh inquiry group changed")
+        validate_reply(current, announcement=True)
+        return telegram_call("sendMessage", {"chat_id": chat, "message_thread_id": current.get("thread_id") or GROUPS[chat].get("contact_thread") or GROUPS[chat].get("announcements"), "text": current["text"], "reply_markup": current.get("reply_markup") or {}})
     user = int(payload["veo_intake_user_id"])
     try:
         verify_identity(chat, user)

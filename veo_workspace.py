@@ -280,7 +280,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
-        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_help")):
+        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help")):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Archived at VEO workspace launch"}):
                 failed += 1
             continue
@@ -294,7 +294,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 payload["_veo_sending"] = True
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Could not reserve Telegram delivery")
-                if payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_help"):
+                if payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help"):
                     from veo_intake import send as send_intake
                     result = send_intake(action)
                 elif payload.get("veo_availability_date"):
@@ -306,11 +306,15 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 message_id = int(result["message_id"])
                 # Checkpoint the acknowledged message before completing the outbox lease.
                 payload["_veo_message_id"] = message_id
+                payload["_veo_sent_at"] = dt.datetime.fromtimestamp(int(result.get("date") or dt.datetime.now(dt.timezone.utc).timestamp()), dt.timezone.utc).isoformat()
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Telegram acknowledgment checkpoint failed")
             if payload.get("veo_availability_date"):
                 from veo_shift_reports import register_availability
                 register_availability(action)
+            if payload.get("veo_intake_notice_id") or payload.get("veo_intake_offer_id"):
+                from veo_intake import acknowledge_delivery
+                acknowledge_delivery(action, message_id)
             if not finish_scheduled_action(action["id"], success=True, telegram_message_id=message_id, claim=action):
                 raise RuntimeError("Delivery completion checkpoint failed")
             sent += 1
@@ -348,7 +352,7 @@ def dispatch(environ, start_response, respond):
         if approved:
             request("scheduled_actions?" + urllib.parse.urlencode({
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_help": "is.null",
+                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
             }), {"status": "cancelled", "last_error": "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
     except Exception:
         guard_error = True
