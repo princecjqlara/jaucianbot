@@ -22,6 +22,19 @@ def fixture():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_workspace_webhook_routes_assignment_buttons_without_legacy_client_ownership(self):
+        chat = next(iter(GROUPS))
+        update = {'update_id': 101, 'callback_query': {'id': 'callback-1', 'data': 'vi:00000000-0000-4000-8000-000000000001', 'message': {'chat': {'id': chat}}}}
+        env = {'HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN': 'test-hook'}
+        with patch.dict(os.environ, {'TELEGRAM_WEBHOOK_SECRET': 'test-hook', 'VEO_WORKSPACE_ENABLED': 'true'}), patch.object(app, 'read_json_body', return_value=update), patch.object(app, 'allowed_chat_ids', return_value={chat}), patch.object(automation_controls, 'enabled_chat_ids', return_value={chat}), patch.object(app, 'save_update') as archive, patch('veo_intake.handle', return_value='Saved in Tokko') as intake, patch.object(app.client_workflow, 'handle') as legacy:
+            status = MagicMock()
+            body = json.loads(b''.join(app.webhook_route(env, status)))
+        self.assertEqual(body['method'], 'answerCallbackQuery')
+        self.assertEqual(body['callback_query_id'], 'callback-1')
+        archive.assert_called_once_with(update, {chat})
+        intake.assert_called_once()
+        legacy.assert_not_called()
+
     def test_explicit_receipt_deletion_is_permanent_but_other_photo_errors_keep_their_existing_retry_policy(self):
         env = {"VEO_WORKSPACE_URL": "https://veo.test", "VEO_JAUCIAN_SECRET": "secret"}
         import urllib.error

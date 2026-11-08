@@ -73,10 +73,16 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
         f"Team capacity: {capacity.get('capacity', 0)} · average per worker: {capacity.get('average_worker_capacity', 'unavailable')}",
         "Financial milestones use the work date; open-client status is current as of " + clean(data.get("generated_at")),
         "Finished work waiting only for the client's balance is not staff overdue."]
+    if team.get("group_report"):
+        result.insert(2, "Group results and client lists cover this group's routed Pages. Personal quota qualification and attendance remain once per worker across all Pages.")
+        result = [s.replace('Team capacity:', 'Whole-team capacity across all Pages:').replace('Active tomorrow (', 'Whole-team active tomorrow (') for s in result]
     if quota.get("closed") is not None and quota.get("done") is not None:
         result.append(f"Team quota reminder: {max(0, int(quota['closed']) - int(capacity.get('closed', 0)))} more Closed and {max(0, int(quota['done']) - int(capacity.get('done', 0)))} more Done to reach the team targets.")
     for worker in team["workers"]:
         salary = worker["salary"]
+        if worker.get("group_results") is not None:
+            result += ["", f"{clean(worker.get('name'))} — this group: Closed {worker['group_results']['closed']} · Done {worker['group_results']['done']}",
+                       "The personal daily totals below cover all assigned Pages."]
         result += ["", f"{clean(worker.get('name'))}: Closed {salary['closed']}/{salary['target']} · Done {salary['done']}/{salary['target']}",
                    "Assigned Pages: " + (", ".join(clean(p.get("name"), 80) for p in worker.get("pages", [])) or "Unavailable")]
         remaining_closed = max(0, int(salary["target"]) - int(salary["closed"]))
@@ -134,7 +140,8 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
                     state += " · Delay explanation: " + clean(reason, 180)
             result.append(f"• {clean(client.get('name'), 100)} / {clean(client.get('page_name'), 80)}: {state}")
     tomorrow = capacity.get("tomorrow") or {}
-    result += ["", f"Active tomorrow ({tomorrow.get('work_date', 'PHT')}): {tomorrow.get('active', 0)} · Closed and Done team quota: {tomorrow.get('capacity', 0)} each · awaiting declarations: {tomorrow.get('unknown', 0)}"]
+    tomorrow_label = 'Whole-team active tomorrow' if team.get('group_report') else 'Active tomorrow'
+    result += ["", f"{tomorrow_label} ({tomorrow.get('work_date', 'PHT')}): {tomorrow.get('active', 0)} · Closed and Done team quota: {tomorrow.get('capacity', 0)} each · awaiting declarations: {tomorrow.get('unknown', 0)}"]
     for plan in team.get("page_quotas", []):
         result.append(f"Page quota — {clean(plan['page_name'])}: {plan['quota']} Closed and {plan['quota']} Done (same allocated targets as VEO ad planning)")
     result.append("Salary and ad-budget amounts are available only in the role-protected VEO workspace.")
@@ -154,7 +161,7 @@ def activation(tenant: str, chat: int, now: dt.datetime) -> dt.datetime:
 
 
 def manifest(data: dict, team: dict, day: dt.date, slot: str, now: dt.datetime) -> dict:
-    key = f"workspace-report-manifest:{data['tenant_id']}:{team['id']}:{day}:{slot}"
+    key = f"workspace-report-manifest:{data['tenant_id']}:{team.get('delivery_key') or team['id']}:{day}:{slot}"
     path = "scheduled_actions?" + urllib.parse.urlencode({"select": "payload", "dedupe_key": "eq." + key, "limit": 1})
     rows = request(path) or []
     if not rows:
@@ -206,7 +213,7 @@ def queue(now: dt.datetime, allowed: set[int]) -> int:
                 position = chat_parts.get(team["chat_id"], 0)
                 chat_parts[team["chat_id"]] = position + 1
                 queued += int(enqueue_scheduled_action(chat_id=team["chat_id"], action_type="message", scheduled_for=now + dt.timedelta(minutes=position // 12),
-                    dedupe_key=f"veo-shift:{data['tenant_id']}:{team['id']}:{day}:{slot}:{index}", payload={"veo_report_date": str(day), "veo_team_id": team["id"],
+                    dedupe_key=f"veo-shift:{data['tenant_id']}:{team.get('delivery_key') or team['id']}:{day}:{slot}:{index}", payload={"veo_report_date": str(day), "veo_team_id": team["id"],
                         "veo_report_slot": slot, "veo_report_part": index, "veo_report_parts": len(texts), "veo_report_text": text,
                         "veo_report_signature": snapshot["signature"], "text": "Verified VEO performance snapshot"}))
     # The normal scheduler creates a single non-anonymous poll per mapped group.
@@ -226,7 +233,7 @@ def send(action: dict) -> dict:
     from telegram_sender import telegram_call
     p = action["payload"]
     data = reporting(p["veo_report_date"])
-    team = next((t for t in data["teams"] if t["id"] == p["veo_team_id"]), None)
+    team = next((t for t in data["teams"] if t["id"] == p["veo_team_id"] and t.get("chat_id") == int(action["chat_id"])), None)
     if not team or team.get("chat_id") != int(action["chat_id"]) or team.get("access_signature") != p["veo_report_signature"]:
         raise ReportScopeChanged("Current team or Page permissions changed")
     text = p["veo_report_text"]
@@ -245,7 +252,9 @@ def send_availability(action: dict) -> dict:
     p, chat = action["payload"], int(action["chat_id"])
     data = workspace_directory(p["veo_tenant_id"])
     tomorrow = str(dt.datetime.now(MANILA).date() + dt.timedelta(days=1))
-    if p["veo_availability_date"] != tomorrow or chat not in teams() or not any(t.get("telegram_chat_id") == chat for t in data["teams"]):
+    if p["veo_availability_date"] != tomorrow or chat not in teams() or not any(
+            any(int(g.get("chat_id") or 0) == chat for g in (t.get("telegram_groups") or []))
+            or not t.get("telegram_groups_managed") and t.get("telegram_chat_id") == chat for t in data["teams"]):
         raise ReportScopeChanged("Availability poll date or mapping changed")
     return telegram_call("sendPoll", {"chat_id": chat, "message_thread_id": GROUPS[chat]["active"],
         "question": f"Active tomorrow — {tomorrow} (Philippine time)?", "options": ["Active", "Not active"], "is_anonymous": False, "allows_multiple_answers": False})

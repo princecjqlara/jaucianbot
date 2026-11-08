@@ -118,7 +118,14 @@ def snapshot(tenant: str, *, offset: int = 0, limit: int = 8) -> dict:
         raise ValueError("Invalid workforce page")
     data = workspace_directory(tenant)
     people = [p for p in data["accounts"] if p["role"] != "owner"]
-    mapped = sorted([p for p in people if p.get("telegram_user_id") and p.get("telegram_chat_id")], key=lambda p: p["user_id"])
+    mapped = []
+    for person in people:
+        if not person.get("telegram_user_id"):
+            continue
+        groups = person.get("telegram_groups") or ([{"chat_id": person["telegram_chat_id"]}] if person.get("telegram_chat_id") else [])
+        for chat in sorted({int(g["chat_id"]) for g in groups}):
+            mapped.append({**person, "telegram_chat_id": chat})
+    mapped.sort(key=lambda p: (p["user_id"], p["telegram_chat_id"]))
     batch = mapped[offset:offset + limit]
     chats = teams()
     answers = votes = pages = polls = []
@@ -137,8 +144,8 @@ def snapshot(tenant: str, *, offset: int = 0, limit: int = 8) -> dict:
     with ThreadPoolExecutor(max_workers=4) as pool:
         workers = list(pool.map(lambda p: inspect(p, chats, answers, votes, pages, valid_pages, data["launch_at"], polls), batch))
     next_offset = offset + len(batch) if offset + len(batch) < len(mapped) else 0
-    return {"ok": True, "tenant_id": tenant, "workers": workers, "unmapped": len(people) - len(mapped),
-            "next_offset": next_offset, "mapped_total": len(mapped), "source": "Existing Jaucian bot and recorded polls"}
+    return {"ok": True, "tenant_id": tenant, "workers": workers, "unmapped": len(people) - len({p["user_id"] for p in mapped}),
+            "next_offset": next_offset, "mapped_total": len(mapped), "source": "Existing Jaucian bot and recorded polls; each linked group checked separately"}
 
 
 def push_snapshot(snapshot_data: dict) -> dict:

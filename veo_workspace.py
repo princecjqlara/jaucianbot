@@ -227,9 +227,12 @@ def send_report(action: dict) -> dict:
     from telegram_sender import telegram_call
     source = action["payload"]
     data = reporting(source["veo_report_date"])
-    team = next((t for t in data["teams"] if t["id"] == source["veo_team_id"]), None)
+    team = next((t for t in data["teams"] if t["id"] == source["veo_team_id"] and t.get("chat_id") == int(action["chat_id"])), None)
     if not team or team.get("chat_id") != int(action["chat_id"]):
         raise ValueError("Team report mapping changed")
+    if team.get('group_report'):
+        from veo_shift_reports import ReportScopeChanged
+        raise ReportScopeChanged('Use current Page-scoped group report snapshots')
     lines = [f"VEO · {team['name']} · {data['work_date']} PHT", data["source"]]
     capacity = team.get("capacity")
     if capacity:
@@ -277,7 +280,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
-        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date")):
+        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_help")):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Archived at VEO workspace launch"}):
                 failed += 1
             continue
@@ -291,7 +294,10 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 payload["_veo_sending"] = True
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Could not reserve Telegram delivery")
-                if payload.get("veo_availability_date"):
+                if payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_help"):
+                    from veo_intake import send as send_intake
+                    result = send_intake(action)
+                elif payload.get("veo_availability_date"):
                     from veo_shift_reports import send_availability
                     result = send_availability(action)
                     payload["_veo_poll_id"] = result["poll"]["id"]
@@ -342,7 +348,7 @@ def dispatch(environ, start_response, respond):
         if approved:
             request("scheduled_actions?" + urllib.parse.urlencode({
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null",
+                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_help": "is.null",
             }), {"status": "cancelled", "last_error": "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
     except Exception:
         guard_error = True
@@ -359,6 +365,11 @@ def dispatch(environ, start_response, respond):
         queued = queue_reports(dt.datetime.now(dt.timezone.utc), allowed)
     except Exception:
         queued = 0
+        guard_error = True
+    try:
+        from veo_intake import queue as queue_intake
+        queued += queue_intake(dt.datetime.now(dt.timezone.utc), allowed)
+    except Exception:
         guard_error = True
     try:
         processed, sent, failed = deliver(allowed)

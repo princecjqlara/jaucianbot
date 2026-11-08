@@ -50,8 +50,11 @@ def group_directory(chat: int) -> dict:
         person.update(membership=p.get("status", "unknown"), membership_checked_at=p.get("verified_at"),
                       membership_expires_at=p.get("expires_at"))
     config = GROUPS[chat]
+    topics = {k: config[k] for k in ("announcements", "done", "close", "active") if k in config}
+    if config.get("contact_thread"):
+        topics["clients"] = config["contact_thread"]
     return {"chat_id": chat, "name": config["name"],
-            "topics": {k: config[k] for k in ("announcements", "done", "close", "active") if k in config},
+            "topics": topics,
             "pages": config.get("crm_pages", {}),
             "identity_coverage": {"message_sample": len(rows), "message_limit": 1000,
                                   "membership_limit": 1000, "complete_member_list": False},
@@ -75,7 +78,7 @@ def directory(tenant: str) -> dict:
     for row in deliveries:
         p = row.get("payload") or {}
         safe.append({k: row.get(k) for k in ("id", "chat_id", "status", "attempts", "scheduled_for", "updated_at", "telegram_message_id")}
-                    | {k: p.get(k) for k in ("veo_order_id", "veo_closed_deal_id", "veo_receipt_kind", "veo_submission_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed")}
+                    | {k: p.get(k) for k in ("veo_order_id", "veo_closed_deal_id", "veo_receipt_kind", "veo_submission_id", "veo_team_id", "veo_report_date", "veo_report_slot", "veo_report_part", "veo_report_parts", "veo_availability_date", "veo_scope_changed", "veo_intake_offer_id", "veo_intake_request_id", "veo_intake_help")}
                     | {"review_required": bool((p.get("_veo_sending") or p.get("veo_delivery_unknown"))
                                                 and not (p.get("_veo_message_id") or row.get("telegram_message_id"))
                                                 and row.get("status") == "cancelled")})
@@ -84,7 +87,9 @@ def directory(tenant: str) -> dict:
     except Exception as error:
         print(f"VEO reverse directory unavailable: {type(error).__name__}")
         connection = {"ok": False, "error": "Jaucian cannot currently read the VEO directory"}
+    from veo_intake import enabled as intake_enabled
     return {"ok": True, "tenant_id": tenant, "source": "Jaucian database", "read_only": True,
+            "client_assignments": {"enabled": intake_enabled(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/reassign"]},
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(), "groups": groups,
             "veo_connection": connection,
             "recent_deliveries": safe, "delivery_limit": 50,
@@ -111,7 +116,8 @@ def workspace_connection(tenant: str) -> dict:
     workers = [a for a in data["accounts"] if a["role"] in {"member", "manager"}]
     return {"ok": True, "source": data["source"], "checked_at": data["checked_at"],
             "accounts": len(data["accounts"]), "teams": len(data["teams"]),
-            "unmapped_teams": sum(t.get("telegram_chat_id") not in groups for t in data["teams"]),
+            "unmapped_teams": sum(not any(int(g.get("chat_id") or 0) in groups for g in
+                (t.get("telegram_groups") if t.get("telegram_groups_managed") else [{"chat_id": t.get("telegram_chat_id")}]) or []) for t in data["teams"]),
             "unmapped_workers": sum(not w.get("telegram_user_id") for w in workers),
             "commission_rule": data["commission_rule"]}
 

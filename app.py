@@ -1143,6 +1143,10 @@ def webhook_route(environ, start_response):
                 observe_vote(update, active.intersection(GROUPS))
             else:
                 save_update(update, active.intersection(GROUPS))
+                import veo_intake
+                result = veo_intake.handle(update, active.intersection(GROUPS), dt.datetime.now(dt.timezone.utc))
+                if result is not None and update.get('callback_query'):
+                    return response(start_response, 200, {"method": "answerCallbackQuery", "callback_query_id": update['callback_query'].get('id'), "text": result[:200], "show_alert": True})
             return response(start_response, 200, {"ok": True})
         makata_automation.hydrate(allowed)
         if makata_automation.register_private(update, allowed, dt.datetime.now(dt.timezone.utc)):

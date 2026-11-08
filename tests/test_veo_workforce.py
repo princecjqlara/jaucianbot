@@ -11,6 +11,14 @@ TENANT = "00000000-0000-4000-8000-000000000001"
 
 
 class WorkforceTests(unittest.TestCase):
+    def test_multiple_groups_are_paged_as_memberships_without_duplicating_the_unmapped_account_count(self):
+        other = next(chat for chat in GROUPS if chat != CHAT)
+        data = self.data();data['accounts'][0]['telegram_groups'] = [{'chat_id': CHAT}, {'chat_id': other}, {'chat_id': CHAT}]
+        with patch.object(workforce, 'workspace_directory', return_value=data), patch.object(workforce, 'teams', return_value={CHAT, other}), patch.object(workforce, 'request', return_value=[]), patch.object(workforce, 'inspect', side_effect=lambda p, *args: {'user_id': p['user_id'], 'chat_id': p['telegram_chat_id']}):
+            first = workforce.snapshot(TENANT, limit=1); second = workforce.snapshot(TENANT, offset=first['next_offset'], limit=1)
+        self.assertEqual(first['mapped_total'], 2);self.assertEqual(first['unmapped'], 1)
+        self.assertEqual({first['workers'][0]['chat_id'], second['workers'][0]['chat_id']}, {CHAT, other})
+        self.assertEqual(second['next_offset'], 0)
     def test_current_poll_metadata_distinguishes_unanswered_from_a_withdrawn_vote(self):
         tomorrow = str(dt.datetime.now(workforce.MANILA).date() + dt.timedelta(days=1))
         now = dt.datetime.now(dt.timezone.utc).isoformat()

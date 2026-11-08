@@ -19,6 +19,39 @@ def report():
 
 
 class ShiftTests(unittest.TestCase):
+    def test_same_team_in_two_groups_uses_distinct_manifests_and_current_destination(self):
+        import copy
+        other_chat = next(chat for chat in GROUPS if chat != CHAT)
+        data = report()
+        first = data['teams'][0]
+        first.update(delivery_key=f'team:{CHAT}', group_report=True)
+        second = copy.deepcopy(first)
+        second.update(chat_id=other_chat, delivery_key=f'team:{other_chat}', access_signature='other-scope', thread_id=777)
+        data['teams'].append(second)
+        with patch.object(shifts, 'request', return_value=[{'payload': {'parts': ['snapshot'], 'signature': 'allowed'}}]) as read:
+            for team in data['teams']:
+                shifts.manifest(data, team, NOW.date(), '16', NOW)
+        self.assertNotEqual(read.call_args_list[0].args[0], read.call_args_list[1].args[0])
+        action = {'chat_id': other_chat, 'payload': {'veo_report_date': '2026-11-06', 'veo_team_id': 'team', 'veo_report_signature': 'other-scope', 'veo_report_text': 'Page-scoped snapshot', 'veo_report_part': 0, 'veo_report_parts': 1}}
+        with patch.object(workspace, 'reporting', return_value=data), patch('telegram_sender.telegram_call', return_value={'message_id': 11}) as send:
+            shifts.send(action)
+        self.assertEqual(send.call_args.args[1]['message_thread_id'], 777)
+        self.assertEqual(send.call_args.args[1]['chat_id'], other_chat)
+        text = '\n'.join(shifts.lines(data, first, '16'))
+        self.assertIn("this group's routed Pages", text)
+        self.assertIn('Whole-team capacity across all Pages:', text)
+
+    def test_availability_accepts_secondary_current_group_but_rejects_removed_links(self):
+        tomorrow = str(dt.datetime.now(ZoneInfo('Asia/Manila')).date() + dt.timedelta(days=1))
+        action = {'chat_id': CHAT, 'payload': {'veo_tenant_id': TENANT, 'veo_availability_date': tomorrow}}
+        data = {'teams': [{'telegram_groups_managed': True, 'telegram_chat_id': -999, 'telegram_groups': [{'chat_id': CHAT}]}]}
+        with patch('veo_directory.workspace_directory', return_value=data), patch('veo_directory.teams', return_value={CHAT}), patch('telegram_sender.telegram_call', return_value={'message_id': 1}) as send:
+            shifts.send_availability(action)
+            self.assertEqual(send.call_args.args[1]['message_thread_id'], GROUPS[CHAT]['active'])
+            data['teams'][0]['telegram_groups'] = []
+            with self.assertRaises(shifts.ReportScopeChanged): shifts.send_availability(action)
+            self.assertEqual(send.call_count, 1)
+
     def test_quota_reminders_show_team_and_personal_remaining_targets_and_authoritative_rate(self):
         data = report(); worker = data["teams"][0]["workers"][0]
         worker["salary"].update(closed=1, done=0, target=2, rate=35, provisional=True)
