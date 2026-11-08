@@ -159,6 +159,9 @@ def route(environ, start_response, respond):
         elif resource == "workforce":
             from veo_workforce import snapshot
             result = snapshot(tenant, offset=int(params.get("offset", ["0"])[0]), limit=int(params.get("limit", ["8"])[0]))
+        elif resource == "automatic":
+            from veo_automatic_teams import snapshot
+            result = snapshot(tenant, offset=int(params.get("offset", ["0"])[0]), limit=int(params.get("limit", ["4"])[0]))
         elif resource == "directory":
             result = directory(tenant)
         else:

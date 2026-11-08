@@ -1142,6 +1142,9 @@ def webhook_route(environ, start_response):
                 from veo_workforce import observe_vote
                 observe_vote(update, active.intersection(GROUPS))
             else:
+                import veo_automatic_teams
+                if veo_automatic_teams.handle(update, active.intersection(GROUPS), dt.datetime.now(dt.timezone.utc)) is not None:
+                    return response(start_response, 200, {"ok": True})
                 save_update(update, active.intersection(GROUPS))
                 import veo_intake
                 result = veo_intake.handle(update, active.intersection(GROUPS), dt.datetime.now(dt.timezone.utc))
