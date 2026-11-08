@@ -272,6 +272,22 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(workspace, "allowed_chat_ids", return_value=set(GROUPS)), patch.object(workspace, "chat_enabled", return_value=True):
             with self.assertRaises(ValueError): workspace.validate(row)
 
+    def test_receipt_details_are_sent_after_photo_checkpoint_and_include_source_and_notes(self):
+        row = {**fixture(), "receipt_kind": "done", "receipt_id": "receipt-id", "page_name": "VEO One", "lead_stage": "qualified",
+               "invoice_id": "123456", "receipt_notes": "Balance received through bank transfer", "source_evidence": {"source": "messenger_event", "stage_occurred_at": "2026-11-07T01:00:00Z"}}
+        action = {"id": 1, "chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"], "veo_order_id": row["order_id"],
+                  "veo_tenant_id": row["tenant_id"], "veo_receipt_details": True, "_veo_message_id": 8}}
+        with patch("cloud_store.claim_scheduled_actions", return_value=[action]), patch("cloud_store.finish_scheduled_action", return_value=True) as finish, \
+                patch("cloud_store._update_claim", return_value=True) as checkpoint, patch.object(workspace, "authoritative", return_value=row), \
+                patch("veo_directory.verify_identity", return_value={"verified": True}), patch("telegram_sender.telegram_call", return_value={"message_id": 9}) as send:
+            self.assertEqual(workspace.deliver({row["telegram_chat_id"]}), (1, 1, 0))
+        self.assertEqual(send.call_args.args[0], "sendMessage")
+        text = send.call_args.args[1]["text"]
+        for detail in ("VEO One", "123456", "Balance received through bank transfer", "messenger_event"):
+            self.assertIn(detail, text)
+        self.assertTrue(any(call.args[1].get("payload", {}).get("_veo_details_message_id") == 9 for call in checkpoint.call_args_list))
+        finish.assert_called_once()
+
     def test_worker_leaving_or_team_remapping_blocks_a_queued_photo_before_telegram_send(self):
         row = fixture()
         action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"],

@@ -109,7 +109,7 @@ def receive(environ, start_response, respond):
             enqueue_scheduled_action(chat_id=int(current["telegram_chat_id"]), action_type="message",
                 scheduled_for=dt.datetime.now(dt.timezone.utc), dedupe_key=key,
                 payload={"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"],
-                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "text": "VEO receipt; authoritative eligibility requested at delivery"})
+                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "veo_receipt_details": True, "text": "VEO receipt; authoritative eligibility requested at delivery"})
             rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             raise RuntimeError("Handoff persistence failed")
@@ -135,7 +135,7 @@ def receive(environ, start_response, respond):
                 {"chat_id": current["telegram_chat_id"], "status": "pending", "attempts": 0, "last_error": None,
                     "scheduled_for": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "payload": {"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"], "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind,
-                    "veo_closed_deal_id": current.get("closed_deal_id"),
+                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_receipt_details": True,
                     "text": "Verified VEO order; delivery eligibility refreshed"}}, method="PATCH")
             saved["status"] = "pending"
         return respond(start_response, 200, {"ok": True, "status": saved["status"], "order_id": current["order_id"]})
@@ -180,6 +180,34 @@ def send(action: dict) -> dict:
     return telegram_call("sendPhoto", payload)
 
 
+def send_receipt_details(action: dict) -> dict:
+    """Send the complete receipt context after the photo's durable checkpoint."""
+    data = authoritative(action["payload"]["veo_submission_id"])
+    if data["order_id"] != action["payload"]["veo_order_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
+        raise ValueError("Sale or destination changed; review required")
+    from telegram_sender import telegram_call
+    from veo_directory import verify_identity
+    verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
+    lines = ["VEO · RECEIPT DETAILS", f"Milestone: {str(data.get('receipt_kind', 'done')).upper()}",
+        f"Client: {data.get('contact_name') or 'Unknown'} · Page: {data.get('page_name') or 'Unknown'}",
+        f"Lead stage: {data.get('lead_stage') or 'Unavailable'} · Seller: {data.get('seller_name') or 'Unknown'}",
+        f"Order: {data['order_id']} · Facebook invoice: {data.get('invoice_id') or 'Not linked'}",
+        f"Reported Closed Deal: {int(data.get('closed_amount_minor') or 0) / 100:.2f} {data.get('closed_currency') or data['currency']} · received {int(data['paid_minor']) / 100:.2f} / {int(data['total_minor']) / 100:.2f} {data['currency']}",
+        f"Closed: {data.get('closed_at') or 'Not recorded'} · Done: {data.get('done_at') or 'Not completed'}",
+        f"Source: {((data.get('source_evidence') or {}).get('source') or 'unavailable')} · {((data.get('source_evidence') or {}).get('stage_occurred_at') or 'stage time unavailable')}"]
+    notes = str(data.get("receipt_notes") or "").strip()
+    if notes:
+        lines.extend(["Receipt notes:", notes[:2000]])
+    text = "\n".join(lines)
+    if len(text) > 4096:
+        raise ValueError("Receipt detail message exceeds Telegram's message limit")
+    payload = {"chat_id": int(data["telegram_chat_id"]), "text": text}
+    topic = data.get("telegram_thread_id")
+    if topic:
+        payload["message_thread_id"] = int(topic)
+    return telegram_call("sendMessage", payload)
+
+
 def report_rows(tenant_id: str, work_date: str) -> dict:
     """Read-only report reconciliation; Telegram receipts are excluded after launch."""
     import crm_store
@@ -210,9 +238,13 @@ def reporting(work_date: str) -> dict:
 
 def review_required() -> bool:
     """Read-only health check for held, unacknowledged Telegram attempts."""
-    return bool(request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1,
+    photo = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1,
         "dedupe_key": "like.veo-*", "status": "eq.cancelled", "payload->>_veo_sending": "eq.true",
-        "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null"})))
+        "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null"}))
+    details = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1,
+        "dedupe_key": "like.veo-*", "status": "eq.cancelled", "payload->>_veo_details_sending": "eq.true",
+        "payload->>_veo_details_message_id": "is.null"}))
+    return bool(photo or details)
 
 
 def queue_reports(now: dt.datetime, allowed: set[int]) -> int:
@@ -309,6 +341,19 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 payload["_veo_sent_at"] = dt.datetime.fromtimestamp(int(result.get("date") or dt.datetime.now(dt.timezone.utc).timestamp()), dt.timezone.utc).isoformat()
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Telegram acknowledgment checkpoint failed")
+            if payload.get("veo_submission_id") and payload.get("veo_receipt_details") and not payload.get("_veo_details_message_id"):
+                if payload.get("_veo_details_sending"):
+                    payload["veo_delivery_unknown"] = True
+                    _update_claim(action, {"status": "cancelled", "payload": payload, "last_error": "Receipt details Telegram attempt requires reconciliation; duplicate resend suppressed"})
+                    failed += 1
+                    continue
+                payload["_veo_details_sending"] = True
+                if not _update_claim(action, {"payload": payload}):
+                    raise RuntimeError("Could not reserve receipt detail delivery")
+                details = send_receipt_details(action)
+                payload["_veo_details_message_id"] = int(details["message_id"])
+                if not _update_claim(action, {"payload": payload}):
+                    raise RuntimeError("Receipt detail acknowledgment checkpoint failed")
             if payload.get("veo_availability_date"):
                 from veo_shift_reports import register_availability
                 register_availability(action)
@@ -366,17 +411,19 @@ def dispatch(environ, start_response, respond):
     except Exception:
         guard_error = True
     try:
-        queued = queue_reports(dt.datetime.now(dt.timezone.utc), allowed)
-    except Exception:
-        queued = 0
-        guard_error = True
-    try:
-        from veo_intake import queue as queue_intake
-        queued += queue_intake(dt.datetime.now(dt.timezone.utc), allowed)
-    except Exception:
-        guard_error = True
-    try:
         processed, sent, failed = deliver(allowed)
+        # Protect already scheduled client, receipt and warning messages from
+        # slow report snapshots. Newly due reports enter the next normal tick.
+        try:
+            queued = queue_reports(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception:
+            queued = 0
+            guard_error = True
+        try:
+            from veo_intake import queue as queue_intake
+            queued += queue_intake(dt.datetime.now(dt.timezone.utc), allowed)
+        except Exception:
+            guard_error = True
         return respond(start_response, 503 if guard_error else 502 if failed else 200,
             {"ok": not guard_error and not failed, "queued": queued, "processed": processed, "sent": sent, "failed": failed,
                 "source": "VEO workspace", "scheduler_guard_failed": guard_error})
