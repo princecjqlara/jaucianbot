@@ -62,6 +62,8 @@ class IntakeTests(unittest.TestCase):
         with patch.object(intake, 'call', side_effect=intake.IntakeScopeChanged('Verify your identity')), patch.object(intake, 'enqueue_scheduled_action', return_value=True) as enqueue:
             intake.handle(self.update(), {CHAT}, self.now)
             self.assertTrue(enqueue.call_args.kwargs['payload']['veo_intake_help'])
+            self.assertIn('team leader', enqueue.call_args.kwargs['payload']['text'])
+            self.assertIn('A manager is optional', enqueue.call_args.kwargs['payload']['text'])
             self.assertNotIn('veo_intake_request_id', enqueue.call_args.kwargs['payload'])
             enqueue.reset_mock(); intake.handle(self.update(callback='vi:' + REFERENCE), {CHAT}, self.now); enqueue.assert_not_called()
         with patch.object(intake, 'call', side_effect=RuntimeError('network')), patch.object(intake, 'enqueue_scheduled_action') as enqueue:
