@@ -70,9 +70,10 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | dict | No
     text = str(message.get("text") or "").strip()
     # New, simpler flow: staff ask Jaucian privately for a short-lived code,
     # then enter it in their signed-in VEO profile.
-    if chat == user["id"] and re.fullmatch(r"/(?:start|veolink|link)(?:@[A-Za-z0-9_]+)?", text, re.I):
+    if (chat == user["id"] or chat in approved) and re.fullmatch(r"/(?:start|veolink|link)(?:@[A-Za-z0-9_]+)?", text, re.I):
         verify_identity_for = None
-        for group in sorted(approved):
+        candidate_groups = [chat] if chat in approved else sorted(approved)
+        for group in candidate_groups:
             try:
                 verify_identity(group, user["id"])
                 verify_identity_for = group
@@ -80,7 +81,8 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | dict | No
             except Exception:
                 continue
         if verify_identity_for is None:
-            return {"method": "sendMessage", "chat_id": user["id"], "text": "I could not find you in an approved VEO team group. Join your team group, then message /link again."}
+            return {"method": "sendMessage", "chat_id": user["id"] if chat == user["id"] else chat,
+                    "text": "I could not verify you as a current member of this approved VEO team group. Check your membership, then send /link again."}
         code = os.urandom(24).hex()
         tenant = os.environ["VEO_WORKSPACE_TENANT_ID"]
         from veo_intake import open_request
@@ -98,11 +100,23 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | dict | No
                 result = json.load(response)
         except urllib.error.HTTPError as error:
             if error.code in {400, 403, 409}:
-                return {"method": "sendMessage", "chat_id": user["id"], "text": "Could not issue a link code. If your Telegram account is already linked, contact your supervisor."}
+                return {"method": "sendMessage", "chat_id": user["id"] if chat == user["id"] else chat,
+                        "text": "Could not issue a link code. If your Telegram account is already linked, contact your supervisor."}
             raise RuntimeError("VEO Telegram link temporarily unavailable") from error
         if result.get("ok") is not True or result.get("tenant_id") != tenant:
             raise RuntimeError("VEO Telegram link response did not match")
-        return {"method": "sendMessage", "chat_id": user["id"], "text": f"Your VEO link code is {code}. Enter it in your signed-in VEO Telegram profile within 10 minutes. Do not share it."}
+        private_message = f"Your VEO link code is {code}. Enter it in your signed-in VEO Telegram profile within 10 minutes. Do not share it."
+        if chat == user["id"]:
+            return {"method": "sendMessage", "chat_id": user["id"], "text": private_message}
+        # Telegram only lets a bot initiate a DM after the worker has started
+        # the bot. Never post the code in the group; provide a private fallback.
+        from telegram_sender import telegram_call
+        try:
+            telegram_call("sendMessage", {"chat_id": user["id"], "text": private_message}, timeout=8)
+            return "VEO pairing code sent privately."
+        except Exception:
+            return {"method": "sendMessage", "chat_id": chat,
+                    "text": "To receive your VEO code privately, open a direct chat with Jaucian, send /start, then send /link here or in this group again."}
     if chat not in approved:
         # Retain the existing group command for codes already created in VEO.
         return None

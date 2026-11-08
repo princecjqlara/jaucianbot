@@ -87,3 +87,18 @@ class AutomaticTeamsTests(unittest.TestCase):
             with patch.dict(os.environ, {'VEO_WORKSPACE_ENABLED': 'false'}):
                 self.assertIsNone(automatic.handle(self.update(), {CHAT}, self.now))
             verify.assert_not_called(); http.assert_not_called()
+
+    def test_group_link_sends_code_privately_after_verifying_that_group(self):
+        update = self.update(); update['message']['text'] = '/link'
+        with patch.dict(os.environ, ENV), patch('veo_directory.teams', return_value={CHAT}), \
+                patch('veo_directory.verify_identity', return_value={'verified': True}) as verify, \
+                patch('telegram_sender.telegram_call', return_value={'message_id': 9}) as send, \
+                patch('veo_intake.open_request') as http:
+            http.return_value.__enter__.return_value = io.BytesIO(json.dumps({'ok': True, 'tenant_id': TENANT}).encode())
+            self.assertIn('sent privately', automatic.handle(update, {CHAT}, self.now))
+            verify.assert_called_once_with(CHAT, 42)
+            self.assertEqual(send.call_args.args[0], 'sendMessage')
+            self.assertEqual(send.call_args.args[1]['chat_id'], 42)
+            self.assertIn('code is ', send.call_args.args[1]['text'])
+            body = json.loads(http.call_args.args[0].data)
+            self.assertEqual(body['resource'], 'telegram_pairing_issue')
