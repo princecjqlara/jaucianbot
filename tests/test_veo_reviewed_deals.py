@@ -30,10 +30,11 @@ def action(row):
 class ReviewedDealTests(unittest.TestCase):
     def test_active_workflow_holds_still_fail_health_and_archived_work_is_excluded(self):
         from postgres_archive import compile_request
-        with patch.dict(os.environ, ENV), patch.object(workspace, "request", return_value=[action(reviewed())]) as db:
+        with patch.dict(os.environ, {**ENV,"VEO_WORKSPACE_TENANT_ID":reviewed()["tenant_id"]}), patch.object(workspace, "request", return_value=[action(reviewed())]) as db:
             self.assertTrue(workspace.review_required())
             for call in db.call_args_list:
                 compile_request(call.args[0])
+                self.assertIn("payload->>veo_tenant_id",urllib.parse.unquote(call.args[0]))
         with patch.dict(os.environ, ENV), patch.object(workspace, "request", return_value=[{"id": 9, "payload": {"veo_report_date": "2026-11-01"}}]) as db:
             self.assertFalse(workspace.review_required())
             self.assertEqual(db.call_count, 2)

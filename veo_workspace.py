@@ -301,6 +301,10 @@ def review_required() -> bool:
                {"payload->>_veo_details_sending": "eq.true", "payload->>_veo_details_message_id": "is.null"}]
     for condition in filters:
         base = {"dedupe_key": "like.veo-*", "status": "eq.cancelled", **condition}
+        tenant = os.environ.get("VEO_WORKSPACE_TENANT_ID")
+        if new_clients_only() and tenant:
+            uuid.UUID(tenant)
+            base["payload->>veo_tenant_id"] = "eq." + tenant
         if not new_clients_only():
             if request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1, **base})):
                 return True
@@ -316,6 +320,19 @@ def review_required() -> bool:
         else:
             raise RuntimeError("Delivery hold review exceeds the health scan limit")
     return False
+
+
+def delivery_hold_summary(tenant: str) -> dict:
+    """Read-only identifiers for investigating suppressed sends, without photos or text."""
+    uuid.UUID(tenant)
+    rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,payload,updated_at,scheduled_for,telegram_message_id",
+        "payload->>veo_tenant_id": "eq." + tenant, "status": "eq.cancelled", "payload->>_veo_sending": "eq.true",
+        "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null", "order": "id.asc", "limit": 100})) or []
+    return {"ok": True, "tenant_id": tenant, "read_only": True, "limit": 100,
+            "holds": [{"id": row["id"], "chat_id": row["chat_id"], "scheduled_for": row.get("scheduled_for"), "updated_at": row.get("updated_at"),
+                       "active_workflow": intake_action(row) or reviewed_action(row),
+                       **{key: (row.get("payload") or {}).get(key) for key in ("veo_submission_id", "veo_deal_review_id", "veo_report_date", "veo_availability_date", "veo_intake_request_id", "veo_intake_offer_id", "veo_intake_notice_id", "veo_intake_help")}}
+                      for row in rows]}
 
 
 def queue_reports(now: dt.datetime, allowed: set[int]) -> int:
