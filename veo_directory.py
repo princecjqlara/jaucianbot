@@ -91,6 +91,7 @@ def directory(tenant: str) -> dict:
     from veo_intake import enabled as intake_enabled
     from veo_mode import mode_name, delivery_cutoff
     return {"ok": True, "tenant_id": tenant, "source": "Jaucian database", "read_only": True, "mode": mode_name(),
+            "receipt_submissions": {"supervisor_direct_submission": True, "staff_review_required": True},
             "client_assignments": {"enabled": intake_enabled(), "new_clients_since": delivery_cutoff(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/handover", "/reassign"]},
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(), "groups": groups,
             "veo_connection": connection,

@@ -28,6 +28,23 @@ def action(row):
 
 
 class ReviewedDealTests(unittest.TestCase):
+    def test_manager_self_submission_sends_without_claiming_an_independent_review(self):
+        row=reviewed()
+        row.update(approval_mode="supervisor_submission",submitted_by=row["seller_id"],reviewed_by=row["seller_id"],submitted_by_role="manager",direct_submission_authorized=True,reviewer_name="Manager")
+        with patch.dict(os.environ,ENV), patch.object(workspace,"authoritative",return_value=row), patch("veo_directory.verify_identity"), patch.object(telegram_sender,"telegram_call",return_value={"message_id":1}) as sender:
+            workspace.send(action(row))
+        caption=sender.call_args.args[1]["media"][0]["caption"]
+        self.assertIn("Submitted by: Manager (manager)",caption)
+        self.assertNotIn("Approved by:",caption)
+        self.assertEqual(len(sender.call_args.args[1]["media"]),3)
+
+    def test_direct_submission_requires_authoritative_role_and_submitter_attestation(self):
+        row=reviewed()
+        row.update(approval_mode="supervisor_submission",submitted_by=row["seller_id"],reviewed_by=row["seller_id"],submitted_by_role="manager",direct_submission_authorized=True)
+        for change in ({"submitted_by_role":"member"},{"direct_submission_authorized":False},{"direct_submission_authorized":"true"},{"submitted_by":reviewed()["reviewed_by"]},{"review_status":"pending"},{"approval_mode":"client_supplied"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                workspace.validate_review({**row,**change})
+
     def test_pre_cutoff_notifications_stay_archived_without_resending(self):
         old={"id":1,"chat_id":-123,"scheduled_for":"2026-11-11T13:08:00Z","payload":{"veo_intake_notice_id":"old","_veo_sending":True}}
         with patch.dict(os.environ,{**ENV,"VEO_NEW_CLIENTS_SINCE":"2026-11-11T15:13:50Z"}), patch("cloud_store.claim_scheduled_actions",return_value=[old]), patch("cloud_store._update_claim",return_value=True) as cancel, patch("veo_intake.send") as send:

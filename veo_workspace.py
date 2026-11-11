@@ -88,7 +88,18 @@ def validate(data: dict) -> None:
 def validate_review(data: dict, *, require_urls: bool = False) -> None:
     uuid.UUID(data["deal_review_id"])
     uuid.UUID(data["reviewed_by"])
-    if data.get("review_status") != "approved" or data["reviewed_by"] == data["seller_id"] or not data.get("reviewed_at"):
+    mode = data.get("approval_mode", "supervisor_review")
+    direct = False
+    if mode == "supervisor_submission":
+        uuid.UUID(data["submitted_by"])
+        direct = (data.get("direct_submission_authorized") is True
+                  and data.get("submitted_by_role") in {"owner", "team_leader", "manager"}
+                  and data["reviewed_by"] == data["submitted_by"])
+        if not direct:
+            raise ValueError("Authorized supervisor submission required")
+    elif mode != "supervisor_review":
+        raise ValueError("Unknown receipt authorization method")
+    if data.get("review_status") != "approved" or not data.get("reviewed_at") or (not direct and data["reviewed_by"] in {data["seller_id"], data.get("submitted_by")}):
         raise ValueError("Independent supervisor approval required")
     photos = data.get("evidence_photos")
     if not isinstance(photos, list) or len(photos) != 3 or {p.get("slot") for p in photos} != {"stage", "payment", "order"}:
@@ -207,9 +218,11 @@ def send(action: dict) -> dict:
             minor = int(data.get(key) or 0)
             return f"{minor // 100:,}.{minor % 100:02d} {currency}"
         name = lambda key: str(data.get(key) or "Unknown").replace("\n", " ")[:70]
-        caption = "\n".join(["VEO · APPROVED " + ("CLOSE DEAL" if kind == "closed" else "DONE DEAL"),
+        direct = data.get("approval_mode") == "supervisor_submission"
+        authorization = ("Submitted by: " + name("reviewer_name") + " (" + str(data["submitted_by_role"]).replace("_", " ") + ")") if direct else "Approved by: " + name("reviewer_name")
+        caption = "\n".join([("VEO · " if direct else "VEO · APPROVED ") + ("CLOSE DEAL" if kind == "closed" else "DONE DEAL"),
             "Client: " + name("contact_name"), "Page: " + name("page_name"), "Seller: " + name("seller_name"),
-            "Approved by: " + name("reviewer_name"), "Deal price: " + amount("total_minor"),
+            authorization, "Deal price: " + amount("total_minor"),
             "Close Deal amount: " + amount("closed_amount_minor"), "Done Deal received now: " + amount("done_amount_minor"),
             "Tip received now: " + amount("tip_minor"), "Total received incl. tips: " + amount("total_received_minor"),
             "Order: " + data["order_id"], "Photos: 1 Lead stage · 2 Receipt · 3 Order status",
