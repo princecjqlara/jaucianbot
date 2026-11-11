@@ -54,6 +54,15 @@ def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
         raise failure from error
     if method == "deleteMessage" and isinstance(result, dict) and result.get("ok") and result.get("result") is True:
         return {"deleted": True}
+    if method == "sendMediaGroup" and isinstance(result, dict) and result.get("ok"):
+        messages = result.get("result")
+        if (not isinstance(messages, list) or len(messages) != len(payload.get("media") or []) or not messages
+                or any(not isinstance(m, dict) or isinstance(m.get("message_id"), bool) or not isinstance(m.get("message_id"), int) or m["message_id"] <= 0 for m in messages)
+                or len({m["message_id"] for m in messages}) != len(messages)):
+            failure = TelegramError("Telegram album acknowledgment is incomplete")
+            failure.delivery_uncertain = True
+            raise failure
+        return {**messages[0], "message_ids": [m["message_id"] for m in messages]}
     if not isinstance(result, dict) or not result.get("ok") or not isinstance(result.get("result"), dict):
         description = result.get("description", "request failed") if isinstance(result, dict) else "invalid response"
         failure = TelegramError(f"Telegram API error: {description}")
@@ -71,6 +80,9 @@ def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
 
 
 def send_scheduled_action(action: dict) -> dict:
+    from veo_mode import new_clients_only, intake_action, reviewed_action
+    if new_clients_only() and not (intake_action(action) or reviewed_action(action)):
+        raise TelegramError("Jaucian is in new-clients-only mode")
     if action.get("payload", {}).get("veo_submission_id"):
         from veo_workspace import send
         return send(action)

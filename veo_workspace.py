@@ -16,6 +16,7 @@ import uuid
 from cloud_http import authorized
 from cloud_store import allowed_chat_ids, enqueue_scheduled_action, request
 from automation_controls import chat_enabled
+from veo_mode import new_clients_only, intake_action, require_non_intake_enabled, approved_deals_enabled, reviewed_action, mode_name
 
 
 def enabled() -> bool:
@@ -51,6 +52,8 @@ def authoritative(submission_id: str) -> dict:
 
 
 def validate(data: dict) -> None:
+    if data.get("deal_review_id"):
+        validate_review(data)
     for key in ("submission_id", "tenant_id", "team_id", "seller_id", "page_id", "contact_id"):
         uuid.UUID(data[key])
     expected_tenant = os.environ.get("VEO_WORKSPACE_TENANT_ID")
@@ -82,9 +85,27 @@ def validate(data: dict) -> None:
         raise ValueError("Expired or incomplete sale")
 
 
+def validate_review(data: dict, *, require_urls: bool = False) -> None:
+    uuid.UUID(data["deal_review_id"])
+    uuid.UUID(data["reviewed_by"])
+    if data.get("review_status") != "approved" or data["reviewed_by"] == data["seller_id"] or not data.get("reviewed_at"):
+        raise ValueError("Independent supervisor approval required")
+    photos = data.get("evidence_photos")
+    if not isinstance(photos, list) or len(photos) != 3 or {p.get("slot") for p in photos} != {"stage", "payment", "order"}:
+        raise ValueError("Three reviewed evidence photos required")
+    if require_urls and any(not str(p.get("photo_url", "")).startswith("https://") for p in photos):
+        raise ValueError("Current signed evidence URLs required")
+    for key in ("done_amount_minor", "tip_minor", "closed_amount_minor", "total_received_minor"):
+        v = data.get(key)
+        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 27_000_000_000_000:
+            raise ValueError("Reviewed financial amounts required")
+
+
 def receive(environ, start_response, respond):
     if not enabled() or not authorized(environ.get("HTTP_AUTHORIZATION"), "VEO_JAUCIAN_SECRET"):
         return respond(start_response, 401, {"ok": False})
+    if new_clients_only() and not approved_deals_enabled():
+        return respond(start_response, 410, {"ok": False, "error": "Jaucian handles new clients only; deals stay in VEO", "mode": "new_clients_only"})
     try:
         length = int(environ.get("CONTENT_LENGTH") or 0)
         if not 0 < length <= 100_000:
@@ -93,6 +114,8 @@ def receive(environ, start_response, respond):
         validate(data)
         # Re-read the authenticated application rather than trusting even a signed snapshot.
         current = authoritative(data["submission_id"])
+        if new_clients_only() and not current.get("deal_review_id"):
+            raise ValueError("Independent supervisor approval required")
         for key in ("tenant_id", "team_id", "seller_id", "page_id", "contact_id", "order_id", "telegram_chat_id", "telegram_user_id"):
             if current[key] != data[key]:
                 raise ValueError("Sale attribution or destination changed")
@@ -109,7 +132,7 @@ def receive(environ, start_response, respond):
             enqueue_scheduled_action(chat_id=int(current["telegram_chat_id"]), action_type="message",
                 scheduled_for=dt.datetime.now(dt.timezone.utc), dedupe_key=key,
                 payload={"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"],
-                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "veo_receipt_details": True, "text": "VEO receipt; authoritative eligibility requested at delivery"})
+                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind, "veo_deal_review_id": current.get("deal_review_id"), "veo_receipt_details": not bool(current.get("deal_review_id")), "text": "VEO receipt; authoritative eligibility requested at delivery"})
             rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,chat_id,status,payload,telegram_message_id", "dedupe_key": "eq." + key, "limit": 1})) or []
         if not rows:
             raise RuntimeError("Handoff persistence failed")
@@ -135,7 +158,7 @@ def receive(environ, start_response, respond):
                 {"chat_id": current["telegram_chat_id"], "status": "pending", "attempts": 0, "last_error": None,
                     "scheduled_for": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "payload": {"veo_submission_id": current["submission_id"], "veo_order_id": current["order_id"], "veo_tenant_id": current["tenant_id"], "veo_receipt_kind": kind,
-                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_receipt_details": True,
+                    "veo_closed_deal_id": current.get("closed_deal_id"), "veo_deal_review_id": current.get("deal_review_id"), "veo_receipt_details": not bool(current.get("deal_review_id")),
                     "text": "Verified VEO order; delivery eligibility refreshed"}}, method="PATCH")
             saved["status"] = "pending"
         return respond(start_response, 200, {"ok": True, "status": saved["status"], "order_id": current["order_id"]})
@@ -156,6 +179,8 @@ def current_submission(action: dict) -> dict:
         raise ValueError("Closed Deal reference changed; review required")
     if kind != action["payload"].get("veo_receipt_kind", "done"):
         raise ValueError("Receipt milestone changed; review required")
+    if data.get("deal_review_id") != action["payload"].get("veo_deal_review_id"):
+        raise ValueError("Supervisor review reference changed")
     return data
 
 
@@ -166,6 +191,8 @@ def receipt_topic(data: dict) -> int | None:
 
 
 def send(action: dict) -> dict:
+    if new_clients_only() and not reviewed_action(action):
+        require_non_intake_enabled()
     if not enabled():
         raise RuntimeError("VEO workspace delivery is disabled")
     data = current_submission(action)
@@ -173,6 +200,27 @@ def send(action: dict) -> dict:
     from veo_directory import verify_identity
     verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
     from telegram_sender import telegram_call
+    if data.get("deal_review_id"):
+        validate_review(data, require_urls=True)
+        currency = data["currency"]
+        def amount(key):
+            minor = int(data.get(key) or 0)
+            return f"{minor // 100:,}.{minor % 100:02d} {currency}"
+        name = lambda key: str(data.get(key) or "Unknown").replace("\n", " ")[:70]
+        caption = "\n".join(["VEO · APPROVED " + ("CLOSE DEAL" if kind == "closed" else "DONE DEAL"),
+            "Client: " + name("contact_name"), "Page: " + name("page_name"), "Seller: " + name("seller_name"),
+            "Approved by: " + name("reviewer_name"), "Deal price: " + amount("total_minor"),
+            "Close Deal amount: " + amount("closed_amount_minor"), "Done Deal received now: " + amount("done_amount_minor"),
+            "Tip received now: " + amount("tip_minor"), "Total received incl. tips: " + amount("total_received_minor"),
+            "Order: " + data["order_id"], "Photos: 1 Lead stage · 2 Receipt · 3 Order status",
+            "Close Deal awaits Done Deal reconciliation." if kind == "closed" else "Order paid. Earlier Close Deal counted once; tip separate."])
+        media = [{"type": "photo", "media": p["photo_url"], **({"caption": caption} if i == 0 else {})}
+                 for i, p in enumerate(sorted(data["evidence_photos"], key=lambda p: {"stage": 0, "payment": 1, "order": 2}[p["slot"]]))]
+        payload = {"chat_id": int(data["telegram_chat_id"]), "media": media}
+        topic = receipt_topic(data)
+        if topic:
+            payload["message_thread_id"] = int(topic)
+        return telegram_call("sendMediaGroup", payload)
     caption = "\n".join(["VEO · VERIFIED CLOSED DEAL" if kind == "closed" else "VEO · VERIFIED DONE DEAL", f"Seller: {data.get('seller_name') or 'Unknown'} ({data['telegram_user_id']})",
         f"Client: {data.get('contact_name') or 'Unknown'}", str(data.get("description") or "Order")[:250],
         f"Verified received: {int(data['paid_minor']) / 100:.2f} / {int(data['total_minor']) / 100:.2f} {data['currency']}",
@@ -193,6 +241,7 @@ def send(action: dict) -> dict:
 
 
 def send_receipt_details(action: dict) -> dict:
+    require_non_intake_enabled()
     """Send the complete receipt context after the photo's durable checkpoint."""
     data = current_submission(action)
     from telegram_sender import telegram_call
@@ -258,11 +307,14 @@ def review_required() -> bool:
 
 
 def queue_reports(now: dt.datetime, allowed: set[int]) -> int:
+    if new_clients_only():
+        return 0
     from veo_shift_reports import queue
     return queue(now, allowed)
 
 
 def send_report(action: dict) -> dict:
+    require_non_intake_enabled()
     if action["payload"].get("veo_report_slot"):
         from veo_shift_reports import send as send_shift
         return send_shift(action)
@@ -322,6 +374,10 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
+        if new_clients_only() and not (intake_action(action) or reviewed_action(action)):
+            if not _update_claim(action, {"status": "cancelled", "last_error": "Jaucian is new-clients-only; non-intake delivery stopped", "repeat_interval_minutes": None}):
+                failed += 1
+            continue
         if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help")):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Archived at VEO workspace launch"}):
                 failed += 1
@@ -348,6 +404,8 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 message_id = int(result["message_id"])
                 # Checkpoint the acknowledged message before completing the outbox lease.
                 payload["_veo_message_id"] = message_id
+                if result.get("message_ids"):
+                    payload["_veo_album_message_ids"] = result["message_ids"]
                 payload["_veo_sent_at"] = dt.datetime.fromtimestamp(int(result.get("date") or dt.datetime.now(dt.timezone.utc).timestamp()), dt.timezone.utc).isoformat()
                 if not _update_claim(action, {"payload": payload}):
                     raise RuntimeError("Telegram acknowledgment checkpoint failed")
@@ -405,10 +463,15 @@ def dispatch(environ, start_response, respond):
         # including Suno actions which are no longer in the active dispatcher scope.
         approved = allowed_chat_ids()
         if approved:
-            request("scheduled_actions?" + urllib.parse.urlencode({
+            archived = {
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
-            }), {"status": "cancelled", "last_error": "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
+                "status": "in.(pending,failed)", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
+            }
+            if not new_clients_only():
+                archived.update({"payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null"})
+            elif approved_deals_enabled():
+                archived["payload->>veo_deal_review_id"] = "is.null"
+            request("scheduled_actions?" + urllib.parse.urlencode(archived), {"status": "cancelled", "last_error": "Jaucian new-clients-only mode" if new_clients_only() else "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
     except Exception:
         guard_error = True
     try:
@@ -435,7 +498,7 @@ def dispatch(environ, start_response, respond):
         except Exception:
             guard_error = True
         return respond(start_response, 503 if guard_error else 502 if failed else 200,
-            {"ok": not guard_error and not failed, "queued": queued, "processed": processed, "sent": sent, "failed": failed,
+            {"ok": not guard_error and not failed, "queued": queued, "processed": processed, "sent": sent, "failed": failed, "mode": mode_name(),
                 "source": "VEO workspace", "scheduler_guard_failed": guard_error})
     except Exception:
         return respond(start_response, 503, {"ok": False, "error": "Workspace scheduler unavailable"})
