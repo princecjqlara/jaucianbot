@@ -28,6 +28,25 @@ def action(row):
 
 
 class ReviewedDealTests(unittest.TestCase):
+    def test_pre_cutoff_notifications_stay_archived_without_resending(self):
+        old={"id":1,"chat_id":-123,"scheduled_for":"2026-11-11T13:08:00Z","payload":{"veo_intake_notice_id":"old","_veo_sending":True}}
+        with patch.dict(os.environ,{**ENV,"VEO_NEW_CLIENTS_SINCE":"2026-11-11T15:13:50Z"}), patch("cloud_store.claim_scheduled_actions",return_value=[old]), patch("cloud_store._update_claim",return_value=True) as cancel, patch("veo_intake.send") as send:
+            self.assertFalse(veo_mode.delivery_in_window(old))
+            self.assertTrue(veo_mode.delivery_in_window({**old,"scheduled_for":"2026-11-11T16:00:00Z"}))
+            self.assertEqual(workspace.deliver({-123}),(1,0,0))
+            self.assertEqual(cancel.call_args.args[1]["status"],"cancelled")
+            self.assertTrue(old["payload"]["_veo_sending"])
+            send.assert_not_called()
+
+    def test_health_uses_the_same_cutoff_with_both_archive_transports(self):
+        from postgres_archive import compile_request
+        with patch.dict(os.environ,{**ENV,"VEO_NEW_CLIENTS_SINCE":"2026-11-11T15:13:50Z"}), patch.object(workspace,"request",return_value=[]) as db:
+            self.assertFalse(workspace.review_required())
+            for call in db.call_args_list:
+                compile_request(call.args[0])
+                filters=urllib.parse.parse_qs(call.args[0].split("?",1)[1])
+                self.assertEqual(filters["scheduled_for"],["gte.2026-11-11T15:13:50+00:00"])
+
     def test_active_workflow_holds_still_fail_health_and_archived_work_is_excluded(self):
         from postgres_archive import compile_request
         with patch.dict(os.environ, {**ENV,"VEO_WORKSPACE_TENANT_ID":reviewed()["tenant_id"]}), patch.object(workspace, "request", return_value=[action(reviewed())]) as db:

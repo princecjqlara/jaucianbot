@@ -1,5 +1,6 @@
 """Explicit VEO new-client-only mode; keep membership and linking available."""
 import os
+import datetime as dt
 
 
 def new_clients_only() -> bool:
@@ -32,3 +33,21 @@ def reviewed_action(action: dict) -> bool:
 
 def mode_name() -> str:
     return ("new_clients_and_reviewed_deals" if approved_deals_enabled() else "new_clients_only") if new_clients_only() else "workspace"
+
+
+def delivery_cutoff() -> str | None:
+    raw = os.environ.get("VEO_NEW_CLIENTS_SINCE", "").strip()
+    if not new_clients_only() or not raw:
+        return None
+    value = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        raise ValueError("The new-client cutoff requires a timezone")
+    return value.astimezone(dt.timezone.utc).isoformat()
+
+
+def delivery_in_window(action: dict) -> bool:
+    cutoff = delivery_cutoff()
+    if not cutoff:
+        return True
+    value = dt.datetime.fromisoformat(str(action.get("scheduled_for") or "").replace("Z", "+00:00"))
+    return value.tzinfo is not None and value >= dt.datetime.fromisoformat(cutoff)

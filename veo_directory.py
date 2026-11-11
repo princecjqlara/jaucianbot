@@ -89,9 +89,9 @@ def directory(tenant: str) -> dict:
         print(f"VEO reverse directory unavailable: {type(error).__name__}")
         connection = {"ok": False, "error": "Jaucian cannot currently read the VEO directory"}
     from veo_intake import enabled as intake_enabled
-    from veo_mode import mode_name
+    from veo_mode import mode_name, delivery_cutoff
     return {"ok": True, "tenant_id": tenant, "source": "Jaucian database", "read_only": True, "mode": mode_name(),
-            "client_assignments": {"enabled": intake_enabled(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/handover", "/reassign"]},
+            "client_assignments": {"enabled": intake_enabled(), "new_clients_since": delivery_cutoff(), "source": "Tokko current assignment records", "commands": ["/ready", "/busy", "/clients", "/offers", "/myclients", "/handover", "/reassign"]},
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(), "groups": groups,
             "veo_connection": connection,
             "recent_deliveries": safe, "delivery_limit": 50,

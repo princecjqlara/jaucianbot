@@ -80,8 +80,8 @@ def telegram_call(method: str, payload: dict, *, timeout: float = 30) -> dict:
 
 
 def send_scheduled_action(action: dict) -> dict:
-    from veo_mode import new_clients_only, intake_action, reviewed_action
-    if new_clients_only() and not (intake_action(action) or reviewed_action(action)):
+    from veo_mode import new_clients_only, intake_action, reviewed_action, delivery_in_window
+    if new_clients_only() and (not (intake_action(action) or reviewed_action(action)) or not delivery_in_window(action)):
         raise TelegramError("Jaucian is in new-clients-only mode")
     if action.get("payload", {}).get("veo_submission_id"):
         from veo_workspace import send

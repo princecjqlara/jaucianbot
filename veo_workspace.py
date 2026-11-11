@@ -16,7 +16,7 @@ import uuid
 from cloud_http import authorized
 from cloud_store import allowed_chat_ids, enqueue_scheduled_action, request
 from automation_controls import chat_enabled
-from veo_mode import new_clients_only, intake_action, require_non_intake_enabled, approved_deals_enabled, reviewed_action, mode_name
+from veo_mode import new_clients_only, intake_action, require_non_intake_enabled, approved_deals_enabled, reviewed_action, mode_name, delivery_cutoff, delivery_in_window
 
 
 def enabled() -> bool:
@@ -305,6 +305,8 @@ def review_required() -> bool:
         if new_clients_only() and tenant:
             uuid.UUID(tenant)
             base["payload->>veo_tenant_id"] = "eq." + tenant
+        if delivery_cutoff():
+            base["scheduled_for"] = "gte." + delivery_cutoff()
         if not new_clients_only():
             if request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1, **base})):
                 return True
@@ -330,7 +332,7 @@ def delivery_hold_summary(tenant: str) -> dict:
         "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null", "order": "id.asc", "limit": 100})) or []
     return {"ok": True, "tenant_id": tenant, "read_only": True, "limit": 100,
             "holds": [{"id": row["id"], "chat_id": row["chat_id"], "scheduled_for": row.get("scheduled_for"), "updated_at": row.get("updated_at"),
-                       "active_workflow": intake_action(row) or reviewed_action(row),
+                       "active_workflow": (intake_action(row) or reviewed_action(row)) and delivery_in_window(row),
                        **{key: (row.get("payload") or {}).get(key) for key in ("veo_submission_id", "veo_deal_review_id", "veo_report_date", "veo_availability_date", "veo_intake_request_id", "veo_intake_offer_id", "veo_intake_notice_id", "veo_intake_help")}}
                       for row in rows]}
 
@@ -403,7 +405,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
-        if new_clients_only() and not (intake_action(action) or reviewed_action(action)):
+        if new_clients_only() and (not (intake_action(action) or reviewed_action(action)) or not delivery_in_window(action)):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Jaucian is new-clients-only; non-intake delivery stopped", "repeat_interval_minutes": None}):
                 failed += 1
             continue
