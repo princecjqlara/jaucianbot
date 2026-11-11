@@ -83,7 +83,7 @@ def _snapshot(conn, allowed: set[int] | None = None) -> dict:
             body = {}
         if isinstance(body, dict):
             delivery["result"] = {key: body[key] for key in
-                                  ("ok", "queued", "processed", "sent", "failed", "queue_errors") if key in body}
+                                  ("ok", "queued", "processed", "sent", "failed", "queue_errors", "mode", "scheduler_guard_failed", "guard_errors") if key in body}
         result["last_delivery"] = delivery
     if allowed is not None:
         queue = conn.execute(

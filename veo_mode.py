@@ -3,8 +3,8 @@ import os
 
 
 def new_clients_only() -> bool:
-    return (os.environ.get("VEO_WORKSPACE_ENABLED", "").lower() == "true"
-            and os.environ.get("VEO_NEW_CLIENTS_ONLY", "").lower() == "true")
+    return (os.environ.get("VEO_WORKSPACE_ENABLED", "").strip().lower() == "true"
+            and os.environ.get("VEO_NEW_CLIENTS_ONLY", "").strip().lower() == "true")
 
 
 def intake_action(action: dict) -> bool:
@@ -20,7 +20,7 @@ def require_non_intake_enabled() -> None:
 
 
 def approved_deals_enabled() -> bool:
-    return os.environ.get("VEO_APPROVED_DEALS_ENABLED", "").lower() == "true"
+    return os.environ.get("VEO_APPROVED_DEALS_ENABLED", "").strip().lower() == "true"
 
 
 def reviewed_action(action: dict) -> bool:

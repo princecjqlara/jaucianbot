@@ -458,6 +458,7 @@ def dispatch(environ, start_response, respond):
     import database_scheduler
     allowed = enabled_chat_ids(allowed_chat_ids())
     guard_error = False
+    guard_errors = []
     try:
         # Retain payloads while retiring old failures and future recurring actions,
         # including Suno actions which are no longer in the active dispatcher scope.
@@ -474,15 +475,18 @@ def dispatch(environ, start_response, respond):
             request("scheduled_actions?" + urllib.parse.urlencode(archived), {"status": "cancelled", "last_error": "Jaucian new-clients-only mode" if new_clients_only() else "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
     except Exception:
         guard_error = True
+        guard_errors.append("archive_legacy_actions")
     try:
         request("scheduled_actions?" + urllib.parse.urlencode({"dedupe_key": "like.veo-ledger-report:*", "status": "in.(pending,failed)"}),
             {"status": "cancelled", "last_error": "Superseded by three scheduled VEO performance snapshots"}, method="PATCH")
     except Exception:
         guard_error = True
+        guard_errors.append("archive_legacy_reports")
     try:
         database_scheduler.ensure_scheduler(allowed)
     except Exception:
         guard_error = True
+        guard_errors.append("scheduler_configuration")
     try:
         processed, sent, failed = deliver(allowed)
         # Protect already scheduled client, receipt and warning messages from
@@ -492,13 +496,15 @@ def dispatch(environ, start_response, respond):
         except Exception:
             queued = 0
             guard_error = True
+            guard_errors.append("report_queue")
         try:
             from veo_intake import queue as queue_intake
             queued += queue_intake(dt.datetime.now(dt.timezone.utc), allowed)
         except Exception:
             guard_error = True
+            guard_errors.append("new_client_queue")
         return respond(start_response, 503 if guard_error else 502 if failed else 200,
             {"ok": not guard_error and not failed, "queued": queued, "processed": processed, "sent": sent, "failed": failed, "mode": mode_name(),
-                "source": "VEO workspace", "scheduler_guard_failed": guard_error})
+                "source": "VEO workspace", "scheduler_guard_failed": guard_error, "guard_errors": guard_errors})
     except Exception:
         return respond(start_response, 503, {"ok": False, "error": "Workspace scheduler unavailable"})
