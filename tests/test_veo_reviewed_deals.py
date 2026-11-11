@@ -29,13 +29,16 @@ def action(row):
 
 class ReviewedDealTests(unittest.TestCase):
     def test_active_workflow_holds_still_fail_health_and_archived_work_is_excluded(self):
-        with patch.dict(os.environ, ENV), patch.object(workspace, "request", side_effect=[[{"id": 1}], []]) as db:
+        from postgres_archive import compile_request
+        with patch.dict(os.environ, ENV), patch.object(workspace, "request", return_value=[action(reviewed())]) as db:
             self.assertTrue(workspace.review_required())
             for call in db.call_args_list:
-                filters = urllib.parse.parse_qs(call.args[0].split("?", 1)[1])
-                self.assertIn("veo_deal_review_id.not.is.null", filters["or"][0])
-                self.assertIn("veo_intake_request_id.not.is.null", filters["or"][0])
-                self.assertNotIn("veo_report_date", filters["or"][0])
+                compile_request(call.args[0])
+        with patch.dict(os.environ, ENV), patch.object(workspace, "request", return_value=[{"id": 9, "payload": {"veo_report_date": "2026-11-01"}}]) as db:
+            self.assertFalse(workspace.review_required())
+            self.assertEqual(db.call_count, 2)
+            for call in db.call_args_list:
+                compile_request(call.args[0])
         with patch.dict(os.environ, {**ENV, "VEO_NEW_CLIENTS_ONLY": "false"}), patch.object(workspace, "request", return_value=[]) as db:
             self.assertFalse(workspace.review_required())
             self.assertTrue(all("or=" not in c.args[0] for c in db.call_args_list))
