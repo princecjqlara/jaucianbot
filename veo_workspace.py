@@ -297,12 +297,20 @@ def reporting(work_date: str) -> dict:
 
 def review_required() -> bool:
     """Read-only health check for held, unacknowledged Telegram attempts."""
+    scope = {}
+    if new_clients_only():
+        fields = ["veo_intake_request_id", "veo_intake_offer_id", "veo_intake_notice_id", "veo_intake_help"]
+        if approved_deals_enabled():
+            fields.append("veo_deal_review_id")
+        # Retired report/legacy receipt holds stay archived and cannot resend.
+        # Only currently supported workflows can make automation unhealthy.
+        scope["or"] = "(" + ",".join("payload->>" + key + ".not.is.null" for key in fields) + ")"
     photo = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1,
         "dedupe_key": "like.veo-*", "status": "eq.cancelled", "payload->>_veo_sending": "eq.true",
-        "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null"}))
+        "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null", **scope}))
     details = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id", "limit": 1,
         "dedupe_key": "like.veo-*", "status": "eq.cancelled", "payload->>_veo_details_sending": "eq.true",
-        "payload->>_veo_details_message_id": "is.null"}))
+        "payload->>_veo_details_message_id": "is.null", **scope}))
     return bool(photo or details)
 
 

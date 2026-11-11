@@ -2,6 +2,7 @@ import io
 import json
 import os
 import unittest
+import urllib.parse
 from unittest.mock import patch, MagicMock
 import veo_workspace as workspace
 import telegram_sender
@@ -27,6 +28,18 @@ def action(row):
 
 
 class ReviewedDealTests(unittest.TestCase):
+    def test_active_workflow_holds_still_fail_health_and_archived_work_is_excluded(self):
+        with patch.dict(os.environ, ENV), patch.object(workspace, "request", side_effect=[[{"id": 1}], []]) as db:
+            self.assertTrue(workspace.review_required())
+            for call in db.call_args_list:
+                filters = urllib.parse.parse_qs(call.args[0].split("?", 1)[1])
+                self.assertIn("veo_deal_review_id.not.is.null", filters["or"][0])
+                self.assertIn("veo_intake_request_id.not.is.null", filters["or"][0])
+                self.assertNotIn("veo_report_date", filters["or"][0])
+        with patch.dict(os.environ, {**ENV, "VEO_NEW_CLIENTS_ONLY": "false"}), patch.object(workspace, "request", return_value=[]) as db:
+            self.assertFalse(workspace.review_required())
+            self.assertTrue(all("or=" not in c.args[0] for c in db.call_args_list))
+
     def test_mode_accepts_only_pure_intake_or_reviewed_receipts(self):
         with patch.dict(os.environ, ENV):
             self.assertEqual(veo_mode.mode_name(), "new_clients_and_reviewed_deals")
