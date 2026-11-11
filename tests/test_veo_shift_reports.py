@@ -107,6 +107,9 @@ class ShiftTests(unittest.TestCase):
         data["teams"][0]["workers"][0]["receipt_holds"] = [{"contact_name": "Held client", "reasons": ["converted_lead_required", "create_and_link_order", "verify_full_payment"]}]
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
         self.assertIn("SALARY ON HOLD", text)
+        self.assertIn("Closed Deal: Qualified/Converted lead + create/link the Facebook order", text)
+        self.assertIn("Done Deal: separately verify payment and mark paid", text)
+        self.assertNotIn("Closed Deals do not require an order", text)
         self.assertIn("Held client: set lead to Converted, create/link the order, verify the full payment", text)
         self.assertIn("Recheck", text)
         self.assertNotIn("400.00", text)

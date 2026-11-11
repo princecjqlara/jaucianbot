@@ -111,7 +111,7 @@ def lines(data: dict, team: dict, slot: str) -> list[str]:
                         result.append("  " + clean(url, 240))
         holds = worker.get("receipt_holds") or []
         if holds:
-            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Complete Qualified/Converted lead + saved order + verified settlement (PHP difference at most 2), then use Recheck in VEO Receipts. Closed Deals do not require an order.")
+            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Closed Deal: Qualified/Converted lead + create/link the Facebook order + receipt evidence. Done Deal: separately verify payment and mark paid (PHP difference at most 2), then use Recheck in VEO Receipts.")
             reasons = {
                 "converted_lead_required": "set lead to Converted",
                 "eligible_lead_required": "set lead to Qualified or Converted",

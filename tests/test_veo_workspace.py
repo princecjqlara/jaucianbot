@@ -83,7 +83,8 @@ class WorkspaceTests(unittest.TestCase):
             workspace.send(action)
         caption = sender.call_args.args[1]["caption"]
         self.assertIn("no salary yet", caption)
-        self.assertIn("Not created / not required", caption)
+        self.assertIn("review VEO order link", caption)
+        self.assertNotIn("not required", caption)
         self.assertNotIn("VERIFIED CLOSED DEAL", caption)
         self.assertEqual(sender.call_args.args[1]["message_thread_id"], GROUPS[row["telegram_chat_id"]]["close"])
 
@@ -94,6 +95,39 @@ class WorkspaceTests(unittest.TestCase):
             with patch.object(workspace, "enabled", return_value=True), patch.object(workspace, "authoritative", return_value=row), patch("veo_directory.verify_identity"), patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as sender:
                 workspace.send(action)
             self.assertEqual(sender.call_args.args[1]["message_thread_id"], explicit or GROUPS[row["telegram_chat_id"]]["done"])
+
+    def test_receipt_details_use_the_same_closed_done_topic_or_override_as_the_photo(self):
+        linked = "00000000-0000-4000-8000-000000000099"
+        for kind in ("closed", "done"):
+            for explicit in (None, 777):
+                row = {**fixture(), "receipt_kind": kind, "telegram_thread_id": explicit, "lead_stage": "qualified", "closed_amount_minor": 4000,
+                       "linked_order_id": linked, "closed_deal_id": linked if kind == "closed" else None}
+                action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"],
+                          "veo_order_id": row["order_id"], "veo_tenant_id": row["tenant_id"], "veo_receipt_kind": kind,
+                          "veo_closed_deal_id": row["closed_deal_id"]}}
+                with patch.object(workspace, "enabled", return_value=True), patch.object(workspace, "authoritative", return_value=row), \
+                        patch("veo_directory.verify_identity"), patch("telegram_sender.telegram_call", return_value={"message_id": 1}) as sender:
+                    workspace.send(action)
+                    photo = sender.call_args.args[1]
+                    workspace.send_receipt_details(action)
+                    details = sender.call_args.args[1]
+                expected = explicit or GROUPS[row["telegram_chat_id"]]["close" if kind == "closed" else "done"]
+                self.assertEqual(photo["message_thread_id"], expected)
+                self.assertEqual(details["message_thread_id"], expected)
+                self.assertIn(linked, details["text"])
+                if kind == "closed":
+                    self.assertIn(linked, photo["caption"])
+
+    def test_receipt_details_reject_changed_tenant_milestone_or_closed_deal_before_sending(self):
+        row = fixture()
+        action = {"chat_id": row["telegram_chat_id"], "payload": {"veo_submission_id": row["submission_id"],
+                  "veo_order_id": row["order_id"], "veo_tenant_id": row["tenant_id"]}}
+        for changed in ({"tenant_id": "another"}, {"receipt_kind": "closed"}, {"closed_deal_id": "another"}):
+            with patch.object(workspace, "authoritative", return_value={**row, **changed}), \
+                    patch("veo_directory.verify_identity"), patch("telegram_sender.telegram_call") as sender:
+                with self.assertRaises(ValueError):
+                    workspace.send_receipt_details(action)
+                sender.assert_not_called()
 
     def test_closed_receipt_accepts_verified_deposit_but_done_requires_full_settlement(self):
         row = fixture()

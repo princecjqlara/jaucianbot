@@ -114,7 +114,7 @@ def workspace_directory(tenant: str) -> dict:
 def workspace_connection(tenant: str) -> dict:
     data = workspace_directory(tenant)
     groups = teams()
-    workers = [a for a in data["accounts"] if a["role"] in {"member", "manager"}]
+    workers = [a for a in data["accounts"] if a["role"] in {"member", "manager", "team_leader"}]
     return {"ok": True, "source": data["source"], "checked_at": data["checked_at"],
             "accounts": len(data["accounts"]), "teams": len(data["teams"]),
             "unmapped_teams": sum(not any(int(g.get("chat_id") or 0) in groups for g in

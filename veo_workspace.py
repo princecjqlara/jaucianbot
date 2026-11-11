@@ -146,9 +146,8 @@ def receive(environ, start_response, respond):
         return respond(start_response, 503, {"ok": False, "error": "Handoff unavailable; retry later"})
 
 
-def send(action: dict) -> dict:
-    if not enabled():
-        raise RuntimeError("VEO workspace delivery is disabled")
+def current_submission(action: dict) -> dict:
+    """Keep the photo and follow-on details bound to the same receipt context."""
     data = authoritative(action["payload"]["veo_submission_id"])
     if data["order_id"] != action["payload"]["veo_order_id"] or data["tenant_id"] != action["payload"]["veo_tenant_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
         raise ValueError("Sale or destination changed; review required")
@@ -157,6 +156,20 @@ def send(action: dict) -> dict:
         raise ValueError("Closed Deal reference changed; review required")
     if kind != action["payload"].get("veo_receipt_kind", "done"):
         raise ValueError("Receipt milestone changed; review required")
+    return data
+
+
+def receipt_topic(data: dict) -> int | None:
+    from daily_automation import GROUPS
+    return data.get("telegram_thread_id") or GROUPS.get(int(data["telegram_chat_id"]), {}).get(
+        "close" if data.get("receipt_kind", "done") == "closed" else "done")
+
+
+def send(action: dict) -> dict:
+    if not enabled():
+        raise RuntimeError("VEO workspace delivery is disabled")
+    data = current_submission(action)
+    kind = data.get("receipt_kind", "done")
     from veo_directory import verify_identity
     verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
     from telegram_sender import telegram_call
@@ -170,11 +183,10 @@ def send(action: dict) -> dict:
             f"Client: {data.get('contact_name') or 'Unknown'}", f"Lead stage: {data['lead_stage']}",
             f"Reported Closed Deal payment: {int(data['closed_amount_minor']) / 100:.2f} {data['currency']}",
             "Payment matched to the verified ledger." if data.get("payment_verified") else "Payment verification pending Done Deal reconciliation; no salary yet.",
-            f"Closed: {data['closed_at']}", f"Order: {data.get('linked_order_id') or 'Not created / not required for Closed Deal'}",
+            f"Closed: {data['closed_at']}", f"Order: {data.get('linked_order_id') or data.get('order_id') or 'Unavailable; review VEO order link'}",
             f"Closed Deal: {data['closed_deal_id']}", "Source: VEO stage-qualified receipt. Count this deal once; this summary does not create a payment."])
     payload = {"chat_id": int(data["telegram_chat_id"]), "photo": data["photo_url"], "caption": caption[:1024]}
-    from daily_automation import GROUPS
-    topic = data.get("telegram_thread_id") or GROUPS.get(int(data["telegram_chat_id"]), {}).get("close" if kind == "closed" else "done")
+    topic = receipt_topic(data)
     if topic:
         payload["message_thread_id"] = int(topic)
     return telegram_call("sendPhoto", payload)
@@ -182,16 +194,14 @@ def send(action: dict) -> dict:
 
 def send_receipt_details(action: dict) -> dict:
     """Send the complete receipt context after the photo's durable checkpoint."""
-    data = authoritative(action["payload"]["veo_submission_id"])
-    if data["order_id"] != action["payload"]["veo_order_id"] or int(data["telegram_chat_id"]) != int(action["chat_id"]):
-        raise ValueError("Sale or destination changed; review required")
+    data = current_submission(action)
     from telegram_sender import telegram_call
     from veo_directory import verify_identity
     verify_identity(int(data["telegram_chat_id"]), int(data["telegram_user_id"]))
     lines = ["VEO · RECEIPT DETAILS", f"Milestone: {str(data.get('receipt_kind', 'done')).upper()}",
         f"Client: {data.get('contact_name') or 'Unknown'} · Page: {data.get('page_name') or 'Unknown'}",
         f"Lead stage: {data.get('lead_stage') or 'Unavailable'} · Seller: {data.get('seller_name') or 'Unknown'}",
-        f"Order: {data['order_id']} · Facebook invoice: {data.get('invoice_id') or 'Not linked'}",
+        f"Order: {data.get('linked_order_id') or data.get('order_id') or 'Unavailable; review VEO order link'} · Facebook invoice: {data.get('invoice_id') or 'Not linked'}",
         f"Reported Closed Deal: {int(data.get('closed_amount_minor') or 0) / 100:.2f} {data.get('closed_currency') or data['currency']} · received {int(data['paid_minor']) / 100:.2f} / {int(data['total_minor']) / 100:.2f} {data['currency']}",
         f"Closed: {data.get('closed_at') or 'Not recorded'} · Done: {data.get('done_at') or 'Not completed'}",
         f"Source: {((data.get('source_evidence') or {}).get('source') or 'unavailable')} · {((data.get('source_evidence') or {}).get('stage_occurred_at') or 'stage time unavailable')}"]
@@ -202,7 +212,7 @@ def send_receipt_details(action: dict) -> dict:
     if len(text) > 4096:
         raise ValueError("Receipt detail message exceeds Telegram's message limit")
     payload = {"chat_id": int(data["telegram_chat_id"]), "text": text}
-    topic = data.get("telegram_thread_id")
+    topic = receipt_topic(data)
     if topic:
         payload["message_thread_id"] = int(topic)
     return telegram_call("sendMessage", payload)

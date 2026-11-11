@@ -130,3 +130,11 @@ class DirectoryTests(unittest.TestCase):
             data = directory.directory(TENANT)
         self.assertFalse(data["veo_connection"]["ok"])
         self.assertEqual(len(data["groups"]), 1)
+
+    def test_reverse_readiness_counts_team_leaders_as_selling_staff(self):
+        data = {"source": "VEO database", "checked_at": "2026-11-11T00:00:00Z", "accounts": [
+            {"role": "owner"}, {"role": "team_leader", "telegram_user_id": None},
+            {"role": "team_leader", "telegram_user_id": 42}, {"role": "member", "telegram_user_id": None}],
+            "teams": [], "commission_rule": {}}
+        with patch.object(directory, "workspace_directory", return_value=data), patch.object(directory, "teams", return_value={CHAT}):
+            self.assertEqual(directory.workspace_connection(TENANT)["unmapped_workers"], 2)
