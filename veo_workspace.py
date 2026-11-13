@@ -125,6 +125,9 @@ def receive(environ, start_response, respond):
         if data.get("action") == "delete_receipt":
             from veo_receipt_deletion import receive as delete_receipt
             return delete_receipt(data, start_response, respond)
+        if data.get("action") == "incentive":
+            from veo_incentives import receive as receive_incentive
+            return receive_incentive(data, start_response, respond)
         validate(data)
         # Re-read the authenticated application rather than trusting even a signed snapshot.
         current = authoritative(data["submission_id"])
@@ -439,7 +442,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
             if not _update_claim(action, {"status": "cancelled", "last_error": "Jaucian is new-clients-only; non-intake delivery stopped", "repeat_interval_minutes": None}):
                 failed += 1
             continue
-        if not (payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help")):
+        if not (payload.get("veo_incentive_notice") or payload.get("veo_submission_id") or payload.get("veo_report_date") or payload.get("veo_availability_date") or payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help")):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Archived at VEO workspace launch"}):
                 failed += 1
             continue
@@ -456,6 +459,9 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 if payload.get("veo_intake_request_id") or payload.get("veo_intake_offer_id") or payload.get("veo_intake_notice_id") or payload.get("veo_intake_help"):
                     from veo_intake import send as send_intake
                     result = send_intake(action)
+                elif payload.get("veo_incentive_notice"):
+                    from veo_incentives import send as send_incentive
+                    result = send_incentive(action)
                 elif payload.get("veo_availability_date"):
                     from veo_shift_reports import send_availability
                     result = send_availability(action)
@@ -527,7 +533,7 @@ def dispatch(environ, start_response, respond):
         if approved:
             archived = {
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_receipt_delete": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
+                "status": "in.(pending,failed)", "payload->>veo_receipt_delete": "is.null", "payload->>veo_incentive_notice": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
             }
             if not new_clients_only():
                 archived.update({"payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null"})
