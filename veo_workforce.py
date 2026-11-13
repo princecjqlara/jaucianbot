@@ -29,8 +29,8 @@ def timestamp(value: str | None) -> dt.datetime:
 
 
 def observe_vote(update: dict, approved: set[int]) -> None:
-    from veo_mode import new_clients_only
-    if new_clients_only():
+    from veo_mode import availability_enabled
+    if not availability_enabled():
         return
     answer = update.get("poll_answer") or {}
     person = answer.get("user") or {}

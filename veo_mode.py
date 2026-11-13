@@ -24,6 +24,16 @@ def approved_deals_enabled() -> bool:
     return os.environ.get("VEO_APPROVED_DEALS_ENABLED", "").strip().lower() == "true"
 
 
+def availability_enabled() -> bool:
+    return not new_clients_only() or os.environ.get("VEO_AVAILABILITY_ENABLED", "").strip().lower() == "true"
+
+
+def availability_action(action: dict) -> bool:
+    p = action.get("payload") or {}
+    return availability_enabled() and bool(p.get("veo_availability_date") and p.get("veo_tenant_id")) and not any(
+        p.get(k) for k in ("veo_submission_id", "veo_report_date", "veo_intake_request_id", "veo_intake_offer_id", "veo_intake_notice_id", "veo_intake_help"))
+
+
 def reviewed_action(action: dict) -> bool:
     p = action.get("payload") or {}
     return (approved_deals_enabled() and bool(p.get("veo_submission_id") and p.get("veo_deal_review_id"))

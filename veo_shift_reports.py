@@ -174,6 +174,38 @@ def manifest(data: dict, team: dict, day: dt.date, slot: str, now: dt.datetime) 
     return rows[0]["payload"]
 
 
+def queue_availability(now: dt.datetime, allowed: set[int]) -> int:
+    """Availability uses the current directory, independently of sales reports."""
+    from veo_directory import workspace_directory, teams as active_teams
+    from veo_mode import availability_enabled
+    if not availability_enabled():
+        return 0
+    local = now.astimezone(MANILA)
+    if local.hour < 16:
+        return 0
+    tenant = os.environ.get("VEO_WORKSPACE_TENANT_ID", "")
+    data = workspace_directory(tenant)
+    allowed = allowed.intersection(active_teams(), GROUPS)
+    mapped = set()
+    for team in data["teams"]:
+        groups = team.get("telegram_groups") or ([] if team.get("telegram_groups_managed") else [{"chat_id": team.get("telegram_chat_id")}])
+        mapped.update(int(g["chat_id"]) for g in groups if g.get("chat_id"))
+    workers = set()
+    for person in data["accounts"]:
+        if person.get("role") == "owner" or not person.get("telegram_user_id"):
+            continue
+        groups = person.get("telegram_groups") or ([{"chat_id": person["telegram_chat_id"]}] if person.get("telegram_chat_id") else [])
+        workers.update(int(g["chat_id"]) for g in groups if g.get("chat_id"))
+    tomorrow = str(local.date() + dt.timedelta(days=1))
+    queued = 0
+    for chat in sorted(allowed.intersection(mapped, workers)):
+        found = request("daily_polls?" + urllib.parse.urlencode({"select": "poll_id", "chat_id": f"eq.{chat}", "work_date": "eq." + tomorrow, "limit": 1})) or []
+        if not found:
+            queued += int(enqueue_scheduled_action(chat_id=chat, action_type="poll", scheduled_for=now,
+                dedupe_key=f"veo-active:{tenant}:{chat}:{tomorrow}", payload={"veo_availability_date": tomorrow, "veo_tenant_id": tenant, "text": "VEO tomorrow availability"}))
+    return queued
+
+
 def queue(now: dt.datetime, allowed: set[int]) -> int:
     from veo_workspace import reporting
     current = period(now)

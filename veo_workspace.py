@@ -16,7 +16,7 @@ import uuid
 from cloud_http import authorized
 from cloud_store import allowed_chat_ids, enqueue_scheduled_action, request
 from automation_controls import chat_enabled
-from veo_mode import new_clients_only, intake_action, require_non_intake_enabled, approved_deals_enabled, reviewed_action, mode_name, delivery_cutoff, delivery_in_window
+from veo_mode import new_clients_only, intake_action, require_non_intake_enabled, approved_deals_enabled, reviewed_action, availability_action, availability_enabled, mode_name, delivery_cutoff, delivery_in_window
 
 
 def enabled() -> bool:
@@ -331,7 +331,7 @@ def review_required() -> bool:
         # obsolete holds intact, and fail health for every supported workflow.
         for offset in range(0, 10000, 100):
             rows = request("scheduled_actions?" + urllib.parse.urlencode({"select": "id,payload", "order": "id.asc", "limit": 100, "offset": offset, **base})) or []
-            if any(intake_action(row) or reviewed_action(row) for row in rows):
+            if any(intake_action(row) or reviewed_action(row) or availability_action(row) for row in rows):
                 return True
             if len(rows) < 100:
                 break
@@ -348,14 +348,17 @@ def delivery_hold_summary(tenant: str) -> dict:
         "payload->>_veo_message_id": "is.null", "telegram_message_id": "is.null", "order": "id.asc", "limit": 100})) or []
     return {"ok": True, "tenant_id": tenant, "read_only": True, "limit": 100,
             "holds": [{"id": row["id"], "chat_id": row["chat_id"], "scheduled_for": row.get("scheduled_for"), "updated_at": row.get("updated_at"),
-                       "active_workflow": (intake_action(row) or reviewed_action(row)) and delivery_in_window(row),
+                       "active_workflow": (intake_action(row) or reviewed_action(row) or availability_action(row)) and delivery_in_window(row),
                        **{key: (row.get("payload") or {}).get(key) for key in ("veo_submission_id", "veo_deal_review_id", "veo_report_date", "veo_availability_date", "veo_intake_request_id", "veo_intake_offer_id", "veo_intake_notice_id", "veo_intake_help")}}
                       for row in rows]}
 
 
 def queue_reports(now: dt.datetime, allowed: set[int]) -> int:
     if new_clients_only():
-        return 0
+        if not availability_enabled():
+            return 0
+        from veo_shift_reports import queue_availability
+        return queue_availability(now, allowed)
     from veo_shift_reports import queue
     return queue(now, allowed)
 
@@ -432,7 +435,7 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
                 failed += 1
                 finish_scheduled_action(action["id"], success=False, error="Receipt removal pending: " + str(error)[:300], claim=action)
             continue
-        if new_clients_only() and (not (intake_action(action) or reviewed_action(action)) or not delivery_in_window(action)):
+        if new_clients_only() and (not (intake_action(action) or reviewed_action(action) or availability_action(action)) or not delivery_in_window(action)):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Jaucian is new-clients-only; non-intake delivery stopped", "repeat_interval_minutes": None}):
                 failed += 1
             continue
@@ -530,6 +533,8 @@ def dispatch(environ, start_response, respond):
                 archived.update({"payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null"})
             elif approved_deals_enabled():
                 archived["payload->>veo_deal_review_id"] = "is.null"
+            if availability_enabled():
+                archived["payload->>veo_availability_date"] = "is.null"
             request("scheduled_actions?" + urllib.parse.urlencode(archived), {"status": "cancelled", "last_error": "Jaucian new-clients-only mode" if new_clients_only() else "Archived at VEO workspace launch", "repeat_interval_minutes": None}, method="PATCH")
     except Exception:
         guard_error = True
