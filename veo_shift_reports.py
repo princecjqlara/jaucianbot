@@ -59,92 +59,66 @@ def split_lines(lines: list[str], limit=3500) -> list[str]:
 
 
 def lines(data: dict, team: dict, slot: str) -> list[str]:
-    label = {"08": "08:00 update", "16": "16:00 update", "24": "00:10 previous-day closeout"}[slot]
+    label = {"08": "Morning check-in", "16": "Afternoon check-in", "24": "Day wrap-up"}[slot]
     capacity = team.get("capacity") or {}
     quota = capacity.get("quota") or {}
-    waiting = overdue = 0
-    for worker in team["workers"]:
-        waiting += sum(c.get("waiting_payment") is True for c in worker.get("clients", []))
-        overdue += sum(c.get("overdue") is True for c in worker.get("clients", []))
-    result = [f"VEO · {clean(team['name'])} · {data['work_date']} PHT · {label}",
-        "Verified VEO ledger. Telegram receipts never create another sale.",
-        f"CLOSED: {capacity.get('closed', 0)}/{quota.get('closed', 0)} · DONE: {capacity.get('done', 0)}/{quota.get('done', 0)}",
-        f"Clients waiting payment: {waiting} · Staff projects overdue: {overdue}",
-        f"Team capacity: {capacity.get('capacity', 0)} · average per worker: {capacity.get('average_worker_capacity', 'unavailable')}",
-        "Financial milestones use the work date; open-client status is current as of " + clean(data.get("generated_at")),
-        "Finished work waiting only for the client's balance is not staff overdue."]
-    if team.get("group_report"):
-        result.insert(2, "Group results and client lists cover this group's routed Pages. Personal quota qualification and attendance remain once per worker across all Pages.")
-        result = [s.replace('Team capacity:', 'Whole-team capacity across all Pages:').replace('Active tomorrow (', 'Whole-team active tomorrow (') for s in result]
-    if quota.get("closed") is not None and quota.get("done") is not None:
-        result.append(f"Team quota reminder: {max(0, int(quota['closed']) - int(capacity.get('closed', 0)))} more Closed and {max(0, int(quota['done']) - int(capacity.get('done', 0)))} more Done to reach the team targets.")
-    for worker in team["workers"]:
-        salary = worker["salary"]
-        if worker.get("group_results") is not None:
-            result += ["", f"{clean(worker.get('name'))} — this group: Closed {worker['group_results']['closed']} · Done {worker['group_results']['done']}",
-                       "The personal daily totals below cover all assigned Pages."]
-        result += ["", f"{clean(worker.get('name'))}: Closed {salary['closed']}/{salary['target']} · Done {salary['done']}/{salary['target']}",
-                   "Assigned Pages: " + (", ".join(clean(p.get("name"), 80) for p in worker.get("pages", [])) or "Unavailable")]
-        remaining_closed = max(0, int(salary["target"]) - int(salary["closed"]))
-        remaining_done = max(0, int(salary["target"]) - int(salary["done"]))
-        result.append(f"Quota reminder: {remaining_closed} more Closed and {remaining_done} more Done to reach both personal targets."
-                      if remaining_closed or remaining_done else "Quota reached: both personal Closed and Done targets.")
-        if salary.get("rate") in (35, 40):
-            rate_status = "provisional until Philippine midnight" if salary.get("provisional") else "final for this work date"
-            result.append(f"Daily commission rate: {salary['rate']}% ({rate_status}). Both personal targets are required for 40%.")
-        if "operating_quota" in salary:
-            result.append(f"Operating quota: {salary['operating_quota']} CD and DD · proven capacity: {salary.get('production_capacity', 'unknown')}. No zero-quota salary; actual verified sales are required.")
-        warnings = worker.get("warnings") or []
-        if warnings:
-            result.append(f"WARNINGS / ATTENTION: {len(warnings)} current item(s)")
-            for warning in warnings:
-                kind = warning.get("kind")
-                if kind in {"salary_on_hold", "overdue_without_reason"}:
-                    continue  # Receipt and client details below explain these.
-                title = {"availability_unanswered": "Answer Jaucian's active-for-tomorrow Telegram poll",
-                         "telegram_mapping_missing": "Telegram identity or team mapping is incomplete; ask your supervisor"}.get(kind, warning.get("title") or "Check your VEO staff warnings")
-                result.append(f"• {clean(warning.get('severity'), 30).upper()}: {clean(title, 240)}")
-                if kind == "availability_unanswered":
-                    result.append("  Poll work date: " + clean(warning.get("work_date"), 20))
-                    url = warning.get("poll_url")
-                    if isinstance(url, str) and url.startswith("https://t.me/"):
-                        result.append("  " + clean(url, 240))
-        holds = worker.get("receipt_holds") or []
+    workers = team.get("workers", [])
+    clients = [c for w in workers for c in w.get("clients", [])]
+    waiting = sum(c.get("waiting_payment") is True for c in clients)
+    overdue = sum(c.get("overdue") is True for c in clients)
+    result = [f"{label} | {clean(team['name'])}", f"{data['work_date']} | Philippine time", "",
+        f"Closed {capacity.get('closed', 0)}/{quota.get('closed', 0)} | Done {capacity.get('done', 0)}/{quota.get('done', 0)}",
+        f"Waiting for payment: {waiting} | Work needing a follow-up: {overdue}"]
+    if team.get('group_report'):
+        result.append("Results below cover this group's routed Pages; personal targets cover all assigned Pages.")
+    result += ["", "Team progress"]
+    for worker in workers:
+        salary = worker.get('salary') or {}
+        target = int(salary.get('operating_quota', salary.get('target', 0)))
+        qualify = int(salary.get('target', max(1, target)))
+        cd, dd = int(salary.get('closed', 0)), int(salary.get('done', 0))
+        remaining_cd, remaining_dd = max(0, qualify-cd), max(0, qualify-dd)
+        progress = f"{clean(worker.get('name'), 60)} | Closed {cd}/{target}, Done {dd}/{target}"
+        if target == 0:
+            progress += " | no funded work right now"
+        elif remaining_cd or remaining_dd:
+            progress += f" | {remaining_cd} Closed + {remaining_dd} Done left"
+        else:
+            progress += " | both targets reached"
+        if salary.get('rate') in (35, 40):
+            progress += f" | {salary['rate']}%" + (" so far" if salary.get('provisional') else " final")
+        result.append(progress)
+        basis = salary.get('quota_basis') or {}
+        if basis.get('carry_applied') or basis.get('carry_deferred'):
+            result.append(f"  Carryover: {basis.get('carry_applied', 0)} added, {basis.get('carry_deferred', 0)} waiting for available work.")
+        warnings = [w for w in worker.get('warnings', []) if w.get('kind') not in {'salary_on_hold', 'overdue_without_reason'}]
+        for warning in warnings[:2]:
+            kind = warning.get('kind')
+            title = {"availability_unanswered": "Please answer the active-for-tomorrow poll.", "telegram_mapping_missing": "Please ask your supervisor to finish your Telegram account or team link."}.get(kind, clean(warning.get('title') or 'Please check your staff warnings.'))
+            result.append('  ' + title)
+            url = warning.get('poll_url')
+            if isinstance(url, str) and url.startswith('https://t.me/'):
+                result.append('  ' + url)
+        holds = worker.get('receipt_holds') or []
         if holds:
-            result.append(f"SALARY ON HOLD: {len(holds)} receipt(s). Closed Deal: Qualified/Converted lead + create/link the Facebook order + receipt evidence. Done Deal: separately verify payment and mark paid (PHP difference at most 2), then use Recheck in VEO Receipts.")
-            reasons = {
-                "converted_lead_required": "set lead to Converted",
-                "eligible_lead_required": "set lead to Qualified or Converted",
-                "create_and_link_order": "create/link the order",
-                "verify_full_payment": "verify the full payment / mark paid",
-                "seller_or_order_attribution_changed": "supervisor attribution review",
-            }
-            for held in holds[:20]:
-                steps = ", ".join(reasons.get(key, clean(key)) for key in held.get("reasons", []))
-                result.append(f"• {clean(held.get('contact_name'), 100)}: {steps}")
-            if len(holds) > 20:
-                result.append("More held receipts are listed in the role-protected VEO Receipts view.")
-        clients = worker.get("clients", [])
-        if not clients:
-            result.append("No open or work-date clients recorded.")
-        for client in clients:
-            state = "finished · client balance pending" if client.get("work_status") == "ready_waiting_payment" and client.get("waiting_payment") else "delivered" if client.get("work_status") == "delivered" else "work in progress"
-            if client.get("waiting_payment") and client.get("work_status") != "ready_waiting_payment":
-                state += " · balance pending"
-            if client.get("overdue"):
-                state += f" · OVERDUE {float(client.get('overdue_hours') or 0):.1f}h"
-                reason = str(client.get("work_reason") or "").strip()
-                if not reason or re.fullmatch(r"unknown|n/?a|none|not provided|[-?]+", reason, re.I):
-                    state += " · WARNING: add a truthful delay explanation"
-                else:
-                    state += " · Delay explanation: " + clean(reason, 180)
-            result.append(f"• {clean(client.get('name'), 100)} / {clean(client.get('page_name'), 80)}: {state}")
-    tomorrow = capacity.get("tomorrow") or {}
-    tomorrow_label = 'Whole-team active tomorrow' if team.get('group_report') else 'Active tomorrow'
-    result += ["", f"{tomorrow_label} ({tomorrow.get('work_date', 'PHT')}): {tomorrow.get('active', 0)} · Closed and Done team quota: {tomorrow.get('capacity', 0)} each · awaiting declarations: {tomorrow.get('unknown', 0)}"]
-    for plan in team.get("page_quotas", []):
-        result.append(f"Page quota — {clean(plan['page_name'])}: {plan['quota']} Closed and {plan['quota']} Done (same allocated targets as VEO ad planning)")
-    result.append("Salary and ad-budget amounts are available only in the role-protected VEO workspace.")
+            result.append(f"  {len(holds)} receipt(s) need checking in VEO Receipts. Complete the missing steps, then select Recheck.")
+            reasons = {'converted_lead_required': 'set lead to Converted', 'eligible_lead_required': 'set lead to Qualified or Converted', 'create_and_link_order': 'create/link the order', 'verify_full_payment': 'verify the full payment / mark paid', 'seller_or_order_attribution_changed': 'ask your supervisor to check attribution'}
+            for held in holds[:3]:
+                steps = ', '.join(reasons.get(key, clean(key).replace('_', ' ')) for key in held.get('reasons', []))
+                result.append('  ' + clean(held.get('contact_name'), 70) + ': ' + steps)
+            if len(holds) > 3:
+                result.append(f"  {len(holds)-3} more receipts are listed in VEO.")
+        for client in [c for c in worker.get('clients', []) if c.get('overdue')][:3]:
+            reason = str(client.get('work_reason') or '').strip()
+            missing = not reason or re.fullmatch(r"unknown|n/?a|none|not provided|[-?]+", reason, re.I)
+            result.append(f"  {clean(client.get('name'), 70)}: delayed {float(client.get('overdue_hours') or 0):.1f}h | " + ("please add a delay reason in VEO." if missing else clean(reason, 140)))
+    tomorrow = capacity.get('tomorrow') or {}
+    result += ["", f"Tomorrow: {tomorrow.get('active', 0)} active | {tomorrow.get('unknown', 0)} awaiting a reply | planned quota {tomorrow.get('capacity', 0)} each."]
+    result.append('Quotas follow ad spend and available work. Current figures can still change.' if slot != '24' else 'Thanks, team. Please check any outstanding items before your next shift.')
+    base = os.environ.get('VEO_WORKSPACE_URL', 'https://veochatbot.vercel.app').rstrip('/')
+    if not base.startswith('https://'):
+        base = 'https://veochatbot.vercel.app'
+    result.append('Details: ' + base + '/dashboard/workspace?view=capacity')
     return result
 
 

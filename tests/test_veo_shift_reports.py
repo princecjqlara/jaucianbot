@@ -39,7 +39,7 @@ class ShiftTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[1]['chat_id'], other_chat)
         text = '\n'.join(shifts.lines(data, first, '16'))
         self.assertIn("this group's routed Pages", text)
-        self.assertIn('Whole-team capacity across all Pages:', text)
+        self.assertIn('personal targets cover all assigned Pages', text)
 
     def test_availability_accepts_secondary_current_group_but_rejects_removed_links(self):
         tomorrow = str(dt.datetime.now(ZoneInfo('Asia/Manila')).date() + dt.timedelta(days=1))
@@ -56,19 +56,19 @@ class ShiftTests(unittest.TestCase):
         data = report(); worker = data["teams"][0]["workers"][0]
         worker["salary"].update(closed=1, done=0, target=2, rate=35, provisional=True)
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("Team quota reminder: 1 more Closed and 2 more Done", text)
-        self.assertIn("Quota reminder: 1 more Closed and 2 more Done", text)
-        self.assertIn("35% (provisional until Philippine midnight)", text)
+        self.assertIn("Closed 2/3 | Done 1/3", text)
+        self.assertIn("1 Closed + 2 Done left", text)
+        self.assertIn("35% so far", text)
         worker["salary"].update(closed=2, done=2, rate=40, provisional=False)
         text = "\n".join(shifts.lines(data, data["teams"][0], "24"))
-        self.assertIn("Quota reached: both personal", text)
-        self.assertIn("40% (final for this work date)", text)
+        self.assertIn("both targets reached", text)
+        self.assertIn("40% final", text)
 
     def test_no_ad_zero_operating_quota_does_not_invent_zero_target_commission(self):
         data = report(); worker = data["teams"][0]["workers"][0]
         worker["salary"].update(closed=0, done=0, target=1, operating_quota=0, production_capacity=1, rate=35, provisional=True)
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("Quota reminder: 1 more Closed and 1 more Done", text)
+        self.assertIn("no funded work right now", text)
         self.assertIn("35%", text); self.assertNotIn("Quota reached:", text)
 
     def test_report_includes_canonical_poll_and_mapping_warnings_without_publishing_salary(self):
@@ -77,10 +77,10 @@ class ShiftTests(unittest.TestCase):
             {"kind": "availability_unanswered", "severity": "attention", "work_date": "2026-11-07", "poll_url": "https://t.me/c/123/99"},
             {"kind": "telegram_mapping_missing", "severity": "attention"}]
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("WARNINGS / ATTENTION: 2", text)
+        self.assertIn("Please answer the active-for-tomorrow poll.", text)
         self.assertIn("active-for-tomorrow", text)
         self.assertIn("https://t.me/c/123/99", text)
-        self.assertIn("Telegram identity or team mapping is incomplete", text)
+        self.assertIn("finish your Telegram account or team link", text)
         self.assertNotIn("400.00", text)
 
     def test_overdue_reason_is_preserved_instead_of_claiming_it_was_not_recorded(self):
@@ -88,12 +88,12 @@ class ShiftTests(unittest.TestCase):
         client = data["teams"][0]["workers"][0]["clients"][0]
         client.update(overdue=True, overdue_hours=4, work_status="working", work_reason="Client requested a revised script")
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("OVERDUE 4.0h", text)
-        self.assertIn("Delay explanation: Client requested a revised script", text)
-        self.assertNotIn("WARNING: add", text)
+        self.assertIn("delayed 4.0h", text)
+        self.assertIn("Client requested a revised script", text)
+        self.assertNotIn("please add a delay reason", text)
         for placeholder in ("", "N/A", "unknown", "none"):
             client["work_reason"] = placeholder
-            self.assertIn("WARNING: add", "\n".join(shifts.lines(data, data["teams"][0], "16")))
+            self.assertIn("please add a delay reason", "\n".join(shifts.lines(data, data["teams"][0], "16")))
 
     def test_report_without_custom_topic_uses_the_existing_announcements_topic(self):
         data = report(); data["teams"][0]["thread_id"] = None
@@ -106,9 +106,9 @@ class ShiftTests(unittest.TestCase):
         data = report()
         data["teams"][0]["workers"][0]["receipt_holds"] = [{"contact_name": "Held client", "reasons": ["converted_lead_required", "create_and_link_order", "verify_full_payment"]}]
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("SALARY ON HOLD", text)
-        self.assertIn("Closed Deal: Qualified/Converted lead + create/link the Facebook order", text)
-        self.assertIn("Done Deal: separately verify payment and mark paid", text)
+        self.assertIn("receipt(s) need checking", text)
+        self.assertIn("Complete the missing steps", text)
+        self.assertIn("verify the full payment / mark paid", text)
         self.assertNotIn("Closed Deals do not require an order", text)
         self.assertIn("Held client: set lead to Converted, create/link the order, verify the full payment", text)
         self.assertIn("Recheck", text)
@@ -126,9 +126,9 @@ class ShiftTests(unittest.TestCase):
     def test_report_lists_clients_waiting_balances_and_shared_targets_without_salary_or_ads(self):
         data = report()
         text = "\n".join(shifts.lines(data, data["teams"][0], "16"))
-        self.assertIn("CLOSED: 2/3", text)
-        self.assertIn("Client / VEO Page: finished", text)
-        self.assertIn("Staff projects overdue: 0", text)
+        self.assertIn("Closed 2/3", text)
+        self.assertIn("Waiting for payment: 1", text)
+        self.assertIn("Work needing a follow-up: 0", text)
         self.assertNotIn("400.00", text)
         self.assertNotIn("commission_minor", text)
         self.assertNotIn("PHP", text)
@@ -177,3 +177,14 @@ class ShiftTests(unittest.TestCase):
             workspace.deliver({CHAT})
         self.assertTrue(any(c.args[1].get("status") == "cancelled" for c in update.call_args_list))
         finish.assert_not_called()
+
+class FriendlyReportTests(unittest.TestCase):
+    def test_normal_report_is_short_and_does_not_repeat_policy_or_list_every_client(self):
+        data=report(); worker=data['teams'][0]['workers'][0]
+        worker['clients']=[{'name': 'Client '+str(i), 'waiting_payment':False,'overdue':False} for i in range(100)]
+        worker['salary']['quota_basis']={'carry_applied':1,'carry_deferred':2}
+        text='\n'.join(shifts.lines(data,data['teams'][0],'16'))
+        self.assertLess(len(text),1200)
+        self.assertIn('Carryover: 1 added, 2 waiting',text)
+        self.assertNotIn('Client 99',text)
+        self.assertIn('/dashboard/workspace?view=capacity',text)

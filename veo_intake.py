@@ -108,7 +108,7 @@ def handle(update: dict, allowed: set[int], now: dt.datetime) -> str | None:
             enqueue_scheduled_action(chat_id=chat, action_type="message", scheduled_for=now,
                 dedupe_key=f"veo-intake-help:{tenant}:{request_id}", payload={"veo_intake_help": True, "veo_tenant_id": tenant,
                     "veo_intake_user_id": user["id"], "expires_at": (now + dt.timedelta(minutes=15)).isoformat(),
-                    "text": "Tokko assignment setup: link your Telegram account in your VEO profile, then ask your team leader (or manager, if your team has one) to assign the group and Pages in Tokko > Telegram Groups & Pages. A manager is optional. Use /clients after setup."})
+                    "text": "Let us get you set up. Link Telegram in your VEO profile, then ask your team leader or manager to connect your group and Pages. A manager is optional if you already have a team leader. When that is ready, use /clients to see available clients."})
         return str(error)[:200]
     if int(result.get("chat_id") or 0) != chat or int(result.get("telegram_user_id") or 0) != user["id"]:
         raise RuntimeError("Assignment response identity did not match")

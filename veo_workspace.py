@@ -226,13 +226,13 @@ def send(action: dict) -> dict:
         name = lambda key: str(data.get(key) or "Unknown").replace("\n", " ")[:70]
         direct = data.get("approval_mode") == "supervisor_submission"
         authorization = ("Submitted by: " + name("reviewer_name") + " (" + str(data["submitted_by_role"]).replace("_", " ") + ")") if direct else ("Auto-approved by team policy: " if data.get("auto_approved") is True else "Approved by: ") + name("reviewer_name")
-        caption = "\n".join([("VEO · " if direct else "VEO · APPROVED ") + ("CLOSE DEAL" if kind == "closed" else "DONE DEAL"),
+        caption = "\n".join(["Close Deal recorded" if kind == "closed" else "Done Deal recorded", "",
             "Client: " + name("contact_name"), "Page: " + name("page_name"), "Seller: " + name("seller_name"),
-            authorization, "Deal price: " + amount("total_minor"),
+            authorization, "", "Deal price: " + amount("total_minor"),
             "Close Deal amount: " + amount("closed_amount_minor"), "Done Deal received now: " + amount("done_amount_minor"),
             "Tip received now: " + amount("tip_minor"), "Total received incl. tips: " + amount("total_received_minor"),
-            "Order: " + data["order_id"], "Photos: 1 Lead stage · 2 Receipt · 3 Order status",
-            "Close Deal awaits Done Deal reconciliation." if kind == "closed" else "Order paid. Earlier Close Deal counted once; tip separate."])
+            "", "Order: " + data["order_id"], "Photos: lead stage / payment receipt / order status",
+            "The deposit is recorded. Please add the Done Deal when payment is complete." if kind == "closed" else "Payment complete. Thanks for taking care of this client."])
         media = [{"type": "photo", "media": p["photo_url"], **({"caption": caption} if i == 0 else {})}
                  for i, p in enumerate(sorted(data["evidence_photos"], key=lambda p: {"stage": 0, "payment": 1, "order": 2}[p["slot"]]))]
         payload = {"chat_id": int(data["telegram_chat_id"]), "media": media}
