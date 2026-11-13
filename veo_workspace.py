@@ -122,6 +122,9 @@ def receive(environ, start_response, respond):
         if not 0 < length <= 100_000:
             return respond(start_response, 400, {"ok": False, "error": "Invalid handoff size"})
         data = json.loads(environ["wsgi.input"].read(length))
+        if data.get("action") == "delete_receipt":
+            from veo_receipt_deletion import receive as delete_receipt
+            return delete_receipt(data, start_response, respond)
         validate(data)
         # Re-read the authenticated application rather than trusting even a signed snapshot.
         current = authoritative(data["submission_id"])
@@ -418,6 +421,17 @@ def deliver(allowed: set[int], limit: int = 25) -> tuple[int, int, int]:
     sent = failed = 0
     for action in actions:
         payload = action.get("payload") or {}
+        if payload.get("veo_receipt_delete"):
+            try:
+                from veo_receipt_deletion import deliver as delete_receipt
+                delete_receipt(action)
+                if not finish_scheduled_action(action["id"], success=True, claim=action):
+                    raise RuntimeError("Receipt removal completion checkpoint unavailable")
+                sent += 1
+            except Exception as error:
+                failed += 1
+                finish_scheduled_action(action["id"], success=False, error="Receipt removal pending: " + str(error)[:300], claim=action)
+            continue
         if new_clients_only() and (not (intake_action(action) or reviewed_action(action)) or not delivery_in_window(action)):
             if not _update_claim(action, {"status": "cancelled", "last_error": "Jaucian is new-clients-only; non-intake delivery stopped", "repeat_interval_minutes": None}):
                 failed += 1
@@ -510,7 +524,7 @@ def dispatch(environ, start_response, respond):
         if approved:
             archived = {
                 "chat_id": "in.(" + ",".join(map(str, sorted(approved))) + ")",
-                "status": "in.(pending,failed)", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
+                "status": "in.(pending,failed)", "payload->>veo_receipt_delete": "is.null", "payload->>veo_intake_request_id": "is.null", "payload->>veo_intake_offer_id": "is.null", "payload->>veo_intake_notice_id": "is.null", "payload->>veo_intake_help": "is.null",
             }
             if not new_clients_only():
                 archived.update({"payload->>veo_submission_id": "is.null", "payload->>veo_report_date": "is.null", "payload->>veo_availability_date": "is.null"})
