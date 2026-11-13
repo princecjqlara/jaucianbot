@@ -222,7 +222,7 @@ def send(action: dict) -> dict:
             return f"{minor // 100:,}.{minor % 100:02d} {currency}"
         name = lambda key: str(data.get(key) or "Unknown").replace("\n", " ")[:70]
         direct = data.get("approval_mode") == "supervisor_submission"
-        authorization = ("Submitted by: " + name("reviewer_name") + " (" + str(data["submitted_by_role"]).replace("_", " ") + ")") if direct else "Approved by: " + name("reviewer_name")
+        authorization = ("Submitted by: " + name("reviewer_name") + " (" + str(data["submitted_by_role"]).replace("_", " ") + ")") if direct else ("Auto-approved by team policy: " if data.get("auto_approved") is True else "Approved by: ") + name("reviewer_name")
         caption = "\n".join([("VEO · " if direct else "VEO · APPROVED ") + ("CLOSE DEAL" if kind == "closed" else "DONE DEAL"),
             "Client: " + name("contact_name"), "Page: " + name("page_name"), "Seller: " + name("seller_name"),
             authorization, "Deal price: " + amount("total_minor"),

@@ -28,6 +28,11 @@ def action(row):
 
 
 class ReviewedDealTests(unittest.TestCase):
+    def test_team_auto_approval_is_identified_in_the_receipt_caption(self):
+        row=reviewed();row.update(auto_approved=True)
+        with patch.dict(os.environ,ENV),patch.object(workspace,'authoritative',return_value=row),patch('veo_directory.verify_identity'),patch.object(telegram_sender,'telegram_call',return_value={'message_id':1}) as sender:
+            workspace.send(action(row))
+        self.assertIn('Auto-approved by team policy: Supervisor',sender.call_args.args[1]['media'][0]['caption'])
     def test_manager_self_submission_sends_without_claiming_an_independent_review(self):
         row=reviewed()
         row.update(approval_mode="supervisor_submission",submitted_by=row["seller_id"],reviewed_by=row["seller_id"],submitted_by_role="manager",direct_submission_authorized=True,reviewer_name="Manager")
